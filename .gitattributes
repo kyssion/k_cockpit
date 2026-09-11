@@ -1,0 +1,127 @@
+# Git 属性配置
+# 文档: https://git-scm.com/docs/gitattributes
+
+# 默认：自动检测文本文件并在提交时统一换行为 LF
+* text=auto eol=lf
+
+# ------------------------------------------------------------
+# 明确为文本（参与 diff、统一为 LF）
+# ------------------------------------------------------------
+*.md       text eol=lf
+*.txt      text eol=lf
+*.json     text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.toml     text eol=lf
+*.xml      text eol=lf
+*.sql      text eol=lf
+*.properties text eol=lf
+*.js       text eol=lf
+*.jsx      text eol=lf
+*.ts       text eol=lf
+*.tsx      text eol=lf
+*.css      text eol=lf
+*.scss     text eol=lf
+*.html     text eol=lf
+*.vue      text eol=lf
+*.py       text eol=lf
+*.java     text eol=lf
+*.kt       text eol=lf
+*.go       text eol=lf
+*.rs       text eol=lf
+*.c        text eol=lf
+*.h        text eol=lf
+*.cpp      text eol=lf
+*.hpp      text eol=lf
+*.cs       text eol=lf
+*.php      text eol=lf
+*.rb       text eol=lf
+*.sh       text eol=lf
+
+# Windows 脚本必须为 CRLF
+*.bat      text eol=crlf
+*.cmd      text eol=crlf
+*.ps1      text eol=crlf
+
+# ------------------------------------------------------------
+# 二进制文件（禁止 diff 与文本转换，Git 不做行尾处理）
+# ------------------------------------------------------------
+*.png      binary
+*.jpg      binary
+*.jpeg     binary
+*.gif      binary
+*.webp     binary
+*.ico      binary
+*.bmp      binary
+*.tiff     binary
+*.svg      text eol=lf
+
+*.pdf      binary
+*.zip      binary
+*.tar      binary
+*.gz       binary
+*.tgz      binary
+*.7z       binary
+*.rar      binary
+
+*.woff     binary
+*.woff2    binary
+*.ttf      binary
+*.otf      binary
+*.eot      binary
+
+*.mp3      binary
+*.mp4      binary
+*.mov      binary
+*.avi      binary
+*.wav      binary
+
+*.jar      binary
+*.war      binary
+*.class    binary
+*.so       binary
+*.dll      binary
+*.dylib    binary
+*.exe      binary
+*.bin      binary
+
+*.xlsx     binary
+*.xls      binary
+*.docx     binary
+*.pptx     binary
+
+*.sqlite   binary
+*.db       binary
+
+# ------------------------------------------------------------
+# 语言统计：文档不计入代码量
+# ------------------------------------------------------------
+docs/**    linguist-documentation
+*.md       linguist-documentation
+
+# 生成产物标记为不参与语言统计
+dist/**    linguist-generated
+build/**   linguist-generated
+*.min.js   linguist-generated
+*.min.css  linguist-generated
+
+# 锁文件在 diff 中折叠显示
+package-lock.json  -diff linguist-generated
+yarn.lock          -diff linguist-generated
+pnpm-lock.yaml     -diff linguist-generated
+Cargo.lock         -diff linguist-generated
+poetry.lock        -diff linguist-generated
+go.sum             -diff linguist-generated
+composer.lock      -diff linguist-generated
+
+# 合并策略：锁定文件不自动合并（避免错误合并结果）
+package-lock.json  merge=binary
+yarn.lock          merge=binary
+pnpm-lock.yaml     merge=binary
+
+# 导出归档（git archive）时排除开发文件
+/.github        export-ignore
+/.gitattributes export-ignore
+/.gitignore     export-ignore
+/.editorconfig  export-ignore
+/tests          export-ignore

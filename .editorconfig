@@ -1,0 +1,91 @@
+# EditorConfig - 跨编辑器统一编码风格
+# 文档: https://editorconfig.org
+# 说明: 这是给编辑器看的基础格式约定，AI 生成代码时同样必须遵守。
+
+# 顶层配置，向上不再查找
+root = true
+
+# ------------------------------------------------------------
+# 通用默认
+# ------------------------------------------------------------
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+max_line_length = 120
+
+# Markdown 保留行尾空格（换行语义）且不限制行宽
+[*.md]
+trim_trailing_whitespace = false
+max_line_length = off
+
+# 纯文本 / 日志不处理
+[*.txt]
+trim_trailing_whitespace = false
+insert_final_newline = false
+
+# ------------------------------------------------------------
+# 缩进为 4 空格的语言
+# ------------------------------------------------------------
+[*.{java,kt,kts,scala,groovy}]
+indent_size = 4
+
+[*.{py,pyi}]
+indent_size = 4
+max_line_length = 100
+
+[*.{c,h,cc,cpp,cxx,hpp,hxx}]
+indent_size = 4
+
+[*.{cs}]
+indent_size = 4
+
+[*.{go,rs}]
+indent_style = tab
+indent_size = 4
+
+[*.php]
+indent_size = 4
+
+[*.rb]
+indent_size = 2
+
+# ------------------------------------------------------------
+# 结构化数据 / 配置
+# ------------------------------------------------------------
+[*.{json,jsonc,json5}]
+indent_size = 2
+
+[*.{yml,yaml}]
+indent_size = 2
+
+[*.{toml}]
+indent_size = 2
+
+[*.{xml,html,htm,vue,svg}]
+indent_size = 2
+
+[*.{css,scss,sass,less}]
+indent_size = 2
+
+[*.{js,jsx,ts,tsx,mjs,cjs}]
+indent_size = 2
+quote_type = single
+
+# ------------------------------------------------------------
+# 特殊文件
+# ------------------------------------------------------------
+[Makefile]
+indent_style = tab
+
+[{*.bat,*.cmd}]
+end_of_line = crlf
+
+[*.{diff,patch}]
+trim_trailing_whitespace = false
+
+[*.lock]
+insert_final_newline = false
