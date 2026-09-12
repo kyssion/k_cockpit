@@ -22,7 +22,8 @@ docs/
 │   ├── CODING_STANDARDS.md        # 编码规范
 │   ├── DEVELOPMENT.md             # 本地开发指南
 │   ├── TESTING.md                 # 测试规范
-│   └── GIT_WORKFLOW.md            # 分支与提交流程
+│   ├── GIT_WORKFLOW.md            # 分支与提交流程
+│   └── REFERENCE_PROJECTS.md      # 参考项目与子模块同步
 ├── 05-ai/                         # AI 层：如何与 AI 协作
 │   ├── AI_DEVELOPMENT.md          # AI 驱动开发规范
 │   ├── PROMPTS.md                 # 提示词库
@@ -53,6 +54,7 @@ docs/
 2. 查阅 [`02-architecture/ARCHITECTURE.md`](02-architecture/ARCHITECTURE.md) 确认归属模块
 3. 查阅 [`04-engineering/CODING_STANDARDS.md`](04-engineering/CODING_STANDARDS.md) 与 [`TESTING.md`](04-engineering/TESTING.md)
 4. 涉及接口 → [`03-api/API.md`](03-api/API.md)
+5. 需要借鉴外部实现 → [`04-engineering/REFERENCE_PROJECTS.md`](04-engineering/REFERENCE_PROJECTS.md)
 
 ---
 
