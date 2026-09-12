@@ -1,0 +1,10 @@
+[submodule "reference/QVMConsole"]
+	path = reference/QVMConsole
+	url = https://github.com/kyssion/QVMConsole.git
+	branch = main
+	ignore = all
+[submodule "reference/kite"]
+	path = reference/kite
+	url = https://github.com/kyssion/kite.git
+	branch = main
+	ignore = all

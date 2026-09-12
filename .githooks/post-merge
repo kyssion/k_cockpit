@@ -1,0 +1,8 @@
+#!/bin/sh
+# post-merge：在 `git pull` / `git merge` 成功后，把 reference/ 下的参考仓库同步到上游最新提交。
+#
+# 背景：子模块默认「钉」在父仓库记录的某次提交上，普通 `git pull` 只会回到该提交，
+# 不会前进到上游最新；`--remote` 才会拉取 .gitmodules 中 branch 指定分支的最新提交。
+#
+# 启用：首次克隆后执行一次 `git config core.hooksPath .githooks`（见 reference/README.md）。
+git submodule update --init --remote --recursive
