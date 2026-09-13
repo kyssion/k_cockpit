@@ -102,6 +102,8 @@ DB_SSLMODE=disable
 
 ## 6. 常见问题排查
 
+> 排障原则、远端操作纪律、systemd 检查清单与案例复盘见 [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)。本节只保留**本地开发环境**的现象速查。
+
 | 现象 | 可能原因 | 解决方式 |
 |---|---|---|
 | <!-- TODO --> | | |

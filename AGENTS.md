@@ -88,6 +88,7 @@ k_cockpit/
 │   ├── model/             # GORM 数据模型
 │   ├── handler/           # HTTP 接口实现（测试同目录）
 │   └── router/            # 路由注册
+├── reference/             # 只读的外部参考项目（git 子模块，见 docs/08-reference/README.md）
 ├── docs/                  # 所有项目文档（见 docs/README.md）
 │   ├── 01-product/        # 产品：需求、路线图
 │   ├── 02-architecture/   # 架构：设计、技术栈、数据模型
@@ -95,7 +96,8 @@ k_cockpit/
 │   ├── 04-engineering/    # 工程规范：编码、测试、Git 流程
 │   ├── 05-ai/             # AI 协作规范与提示词
 │   ├── 06-decisions/      # ADR 架构决策记录（只增不改）
-│   └── 07-specs/          # 功能规格（一功能一文件）
+│   ├── 07-specs/          # 功能规格（一功能一文件）
+│   └── 08-reference/      # 外部参考项目资料：功能与实现结论、工程结构
 └── AGENTS.md              # 本文件
 ```
 
@@ -104,6 +106,7 @@ k_cockpit/
 - 新增架构决策 → 在 `docs/06-decisions/` 新建 ADR，**不要修改历史 ADR**。
 - **不要在仓库内创建绑定特定 AI 工具或平台的配置文件**（各产品专属的规则目录等）。AI 规范统一以本文件为准；工具接入方式见 `docs/05-ai/AI_DEVELOPMENT.md`。
 - 新增文档后，需在 `docs/README.md` 的对应索引中登记。
+- `reference/` 存放只读的外部参考项目（git 子模块），**仅作功能与实现参考**：借鉴其功能设计与实现机制，**不照搬其技术栈**，其架构限制不构成我们的设计约束。使用原则、各项目的功能/实现结论与工程结构资料、同步维护约定统一放 [`docs/08-reference/`](docs/08-reference/README.md)。
 
 ---
 
@@ -120,8 +123,13 @@ k_cockpit/
 - **命名**：Go 风格（导出 `PascalCase`、非导出 `camelCase`、缩写保持大小写一致如 `ID` / `URL`），详见 [`docs/04-engineering/CODING_STANDARDS.md`](docs/04-engineering/CODING_STANDARDS.md) 第 11 节。
 - **注释**：解释「为什么」，不复述「做了什么」。公共 API 必须有文档注释。
 - **依赖**：新增第三方依赖**必须先说明理由并获确认**，不得擅自引入。
+- **系统资源操作**：禁止硬编码系统账号、属主、设备路径与服务名，必须「探测 + 回退」（例如 QEMU 属主在不同发行版是 `libvirt-qemu:kvm` 或 `qemu:qemu`）。
+- **杀进程 / 删资源**：执行 `kill`、`pkill`、批量删除前必须校验归属（PID 文件、systemd unit、进程名 + 参数指纹），**禁止仅凭端口/IP 占用**判断「这是别人的进程」。
+- **自愈逻辑**：启动期与周期性的 `Restore*` / `Reconcile*` / `Ensure*` 必须**幂等**，且单步失败只降级告警、不阻断主流程。
+- **外部状态先检查**：不可变标记（`chattr +i`）、链式依赖、外部快照链等，必须先探测再操作，并给出可执行的修复提示。
+- **库表变更**：索引冲突、数据去重、枚举回填等必须写**显式迁移**，不能只依赖 ORM 的自动迁移。
 
-详细规范见 [`docs/04-engineering/CODING_STANDARDS.md`](docs/04-engineering/CODING_STANDARDS.md)。
+详细规范见 [`docs/04-engineering/CODING_STANDARDS.md`](docs/04-engineering/CODING_STANDARDS.md)；排障与运行环境操作见 [`docs/04-engineering/TROUBLESHOOTING.md`](docs/04-engineering/TROUBLESHOOTING.md)。
 
 ---
 
@@ -139,6 +147,8 @@ k_cockpit/
 
 **上下文边界**：不要读取或修改 `node_modules`、`dist`、`build`、`.git` 等目录；不要提交任何密钥、令牌或真实用户数据。
 
+**运行环境操作**：涉及宿主机 / 远端环境的排障与变更（服务、网络、防火墙、存储、数据库），必须遵循 [`docs/04-engineering/TROUBLESHOOTING.md`](docs/04-engineering/TROUBLESHOOTING.md)：只读诊断优先、变更最小且可回滚、变更后做业务侧真实验证并说明遗留影响。
+
 ---
 
 ## 7. 禁止事项（红线）
@@ -149,6 +159,9 @@ k_cockpit/
 - 禁止引入 GPL/AGPL 等**传染性协议**依赖而不说明。
 - 禁止把真实用户数据、生产数据写入测试用例或提交到仓库。
 - 禁止在无说明的情况下大幅重写他人已有代码。
+- **禁止修改 `reference/` 下参考项目的任何内容**（代码、文档、配置、子模块提交指针等）：参考项目仅作只读查阅，需要调整内容时到对应上游仓库修改后同步，不得在 `k_cockpit` 内改动。
+- **禁止在未完成只读诊断、未确认回滚方式的情况下修改运行环境**（宿主机服务、网络规则、防火墙、数据库结构）。
+- **禁止把真实 IP、账号、密码、密钥写入排障记录、文档或提交**。
 
 ---
 
@@ -164,3 +177,5 @@ AI 在完成以下改动时，**有义务同步更新对应文档**：
 | 重大技术选型 | 新建 `docs/06-decisions/ADR-xxxx-*.md` |
 | 影响用户的变更 | `CHANGELOG.md` |
 | 项目规则变化 | **本文件 `AGENTS.md`** |
+| 参考项目（`reference/`）更新 | `docs/08-reference/README.md` 及各参考项目资料（`docs/08-reference/<项目>/`） |
+| 排障与运行环境经验 | `docs/04-engineering/TROUBLESHOOTING.md` |

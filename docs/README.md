@@ -23,7 +23,8 @@ docs/
 │   ├── DEVELOPMENT.md             # 本地开发指南
 │   ├── TESTING.md                 # 测试规范
 │   ├── GIT_WORKFLOW.md            # 分支与提交流程
-│   └── REFERENCE_PROJECTS.md      # 参考项目与子模块同步
+│   ├── TROUBLESHOOTING.md         # 排障与运维规范
+│   └── REFERENCE_*.md             # 已迁移至 08-reference/（仅保留跳转存根）
 ├── 05-ai/                         # AI 层：如何与 AI 协作
 │   ├── AI_DEVELOPMENT.md          # AI 驱动开发规范
 │   ├── PROMPTS.md                 # 提示词库
@@ -31,9 +32,13 @@ docs/
 ├── 06-decisions/                  # 决策层：为什么这么选
 │   ├── README.md                  # ADR 说明
 │   └── 0001-record-architecture-decisions.md
-└── 07-specs/                      # 规格层：单个功能怎么做
-    ├── README.md                  # 规格说明
-    └── _TEMPLATE.md               # 规格模板
+├── 07-specs/                      # 规格层：单个功能怎么做
+│   ├── README.md                  # 规格说明
+│   └── _TEMPLATE.md               # 规格模板
+└── 08-reference/                  # 参考层：外部参考项目的功能与实现资料
+    ├── README.md                  # 参考项目总览：使用原则、只读与同步
+    ├── qvmconsole/                # QVMConsole：工程概览 / 工程架构 / 功能结论 / 踩坑清单
+    └── kite/                      # kite：功能与实现结论
 ```
 
 ---
@@ -54,7 +59,12 @@ docs/
 2. 查阅 [`02-architecture/ARCHITECTURE.md`](02-architecture/ARCHITECTURE.md) 确认归属模块
 3. 查阅 [`04-engineering/CODING_STANDARDS.md`](04-engineering/CODING_STANDARDS.md) 与 [`TESTING.md`](04-engineering/TESTING.md)
 4. 涉及接口 → [`03-api/API.md`](03-api/API.md)
-5. 需要借鉴外部实现 → [`04-engineering/REFERENCE_PROJECTS.md`](04-engineering/REFERENCE_PROJECTS.md)
+5. 需要借鉴外部实现 → [`08-reference/README.md`](08-reference/README.md) 及各参考项目资料（[QVMConsole](08-reference/qvmconsole/README.md) / [kite](08-reference/kite/README.md)）
+
+**排查问题 / 操作运行环境**：
+
+1. [`04-engineering/TROUBLESHOOTING.md`](04-engineering/TROUBLESHOOTING.md) — 排障纪律、定界方法、systemd 检查清单与案例复盘
+2. 参考项目对应条目 → [`08-reference/README.md`](08-reference/README.md) 下各项目的 `pitfalls.md`（已踩过的坑）
 
 ---
 
