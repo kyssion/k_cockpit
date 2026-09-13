@@ -92,6 +92,7 @@ NNNN-动词短语.md
 | [0001](0001-record-architecture-decisions.md) | 采用 ADR 记录架构决策 | Accepted | 2026-09-11 |
 | [0002](0002-use-hertz-and-gorm.md) | 采用 Hertz 与 GORM 作为 Web 与 ORM 框架 | Accepted | 2026-09-11 |
 | [0003](0003-pure-go-sqlite-driver.md) | SQLite 采用纯 Go 驱动而非 CGO 驱动 | Accepted | 2026-09-11 |
+| [0004](0004-adopt-openvswitch-as-network-backend.md) | 采用 Open vSwitch 作为虚拟网络后端 | Proposed | 2026-09-12 |
 
 > **新增 ADR 后必须在此表登记。**
 
