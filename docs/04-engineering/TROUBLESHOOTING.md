@@ -133,6 +133,75 @@
 5. **缓解手段要选不被覆盖的形式**：程序会重写的 unit 主文件不要手改，用 drop-in。
 6. **业务验证不可省**：服务 `active` 不等于功能可用，必须跑一次真实的资源创建链路。
 
+### 6.6 复现与补充证据（2026-09-14，另一台宿主机的全新安装）
+
+**现象**：全新安装时，兼容性实机测试在最后一步失败：
+
+```text
+失败阶段: 虚拟机创建与启动（虚拟机已启动，但绑定基础 OVS 网络失败:
+启动 OVS DHCP 服务失败: Job for kvm-console-ovs-dnsmasq.service failed.）
+```
+
+`systemctl status` 显示 `Active: failed (Result: start-limit-hit)`，`Duration: 1.961s`，
+`Process: ExecStart=/usr/sbin/dnsmasq … (code=exited, status=0/SUCCESS)`。
+
+> 与 §6 的差别只有一点：这次是**全新机器**，宿主机与 libvirt/OVS 版本同 §6，但 OVS 子网前缀配置成了非默认值。
+> 其余现象（dnsmasq 能正常起来、1~2 秒后被杀、`start-limit-hit`）完全一致。
+
+**关键证据（比 §6 更直接）**：
+
+1. `journalctl -u kvm-console-ovs-dnsmasq`：dnsmasq 每次都能正常启动（读 `dhcp-hosts`、绑 `br-ovs`、写租约），
+   1~2 秒后 `exiting on receipt of SIGTERM`，**没有 `Stopping ...` 记录** → 外部进程直接 kill（与 §6 结论一致）。
+2. **程序自己的命令日志直接坐实了凶手**。`/opt/kvm-console/logs/compatibility/compatibility-run-*.log` 会逐条记录
+   它执行的每条命令，可以看到成对出现：
+
+   ```text
+   cmd=bash args="-c ss -tlnp | grep '192.168.123.1:53' | grep -oP 'pid=\K[0-9]+' | head -1"
+   cmd=bash args="-c kill 15321 2>/dev/null || true"
+   ```
+
+   而 journal 里被 kill 的 `15321` 正是上一秒刚由 `systemctl start` 拉起的 OVS dnsmasq。
+   6 秒内共 5 次 `systemctl start` → 触发 systemd `DefaultStartLimitBurst=5/10s` → 第 5 次直接报 `Job for … failed`。
+   **"谁杀的"这个问题不用再推测，日志里有现成答案。**
+
+**这次新增的三个认识**：
+
+1. **定位到具体函数**：`service/ovs/network.go` 的 `DisableLibvirtDefaultNetworkIfNeeded()` 里有一段"释放 53 端口"循环，
+   用 `OvsGatewayIP()`（= OVS 子网网关）去 `ss` 找 PID 再 kill；
+   另有一处同类逻辑在 `writeOVSBridgePrepareScript()` 里，那处**硬编码**了 `192.168.122.1:53`（这处是对的）。
+2. **它在很多环境下"永远杀不到目标，只会杀自己"**：本次宿主机 `KVM_SUBNET_PREFIX=192.168.123`，
+   而 libvirt default 网络是 `192.168.122.0/24` 且本就 `inactive`。用 `192.168.123.1:53` 去匹配，
+   **唯一能匹配到的就是 OVS 自己的 dnsmasq**——即这段"释放端口"逻辑在此环境下不但有副作用，
+   而且没有任何正面作用（两个 dnsmasq 监听不同地址，本来就不冲突）。
+3. **触发次数被放大**：一次兼容性测试里 `EnsureOVSNetworkReady()` 会被调用约 5 次
+   （准备基础 OVS 网络、准备基础交换机、创建虚拟机、绑定基础网络…），
+   而每次调用都是"**先杀一次、再拉一次**"（`DisableLibvirtDefaultNetworkIfNeeded()` 在 `systemctl start` 之前执行），
+   所以固定几秒内就必然撞上启动限流。
+
+**处置（步骤同 §6.4，但补了持久性核对）**：
+
+1. 只读诊断：程序命令日志 + journal 互相对照，确认根因后再动手。
+2. 加 drop-in（不改会被程序重写的 unit 主文件）：
+   `/etc/systemd/system/kvm-console-ovs-dnsmasq.service.d/10-selfheal.conf`
+   → `StartLimitIntervalSec=0` + `Restart=always` + `RestartSec=2`。
+3. 补齐安装脚本在兼容性失败时**设计性回滚**掉的程序文件（二进制、前端产物、兼容性脚本），
+   再按 `install.sh` 的顺序 `setup_service` + `start_service` 完成部署。
+4. 端到端验证：
+   - 重跑官方入口 `scripts/check-system-compatibility.sh` → **8 个阶段全部 `passed`**（含"虚拟机创建与启动""虚拟机与 OVS 联合验证"）；
+   - 面板服务 `active`、`/` 返回 `HTTP 200`；
+   - OVS dnsmasq 在测试期间仍被 kill 4 次，但每次 2 秒内由 systemd 自动拉起，**不再出现 `start-limit-hit`**。
+
+**新结论（在 §6.5 六条之外补充）**：
+
+1. **"谁杀了我的进程"优先去翻程序自己的命令日志**。这类面板会把每条 `ExecCommand` 连同参数写进日志，
+   比临时上 `auditd` / `bpftrace` 更快、更省事，也更容易复现给别人看。
+2. **缓解是否"跟着重装走"必须单独核实**。本次核对过 `install.sh`：它只写/删 unit 主文件，
+   **不会碰 `.service.d/`**，所以 drop-in 能跨"更新/重装"保留；
+   但换一台全新宿主机不会自带它——**缓解必须进入部署清单**，否则每台新机都会原样复现。
+3. **OVS 子网前缀决定这段逻辑是"有害"还是"既有害又无用"**：
+   `OvsGatewayIP()` 与 libvirt 默认网关相同（默认 `192.168.122.1`）时是"自己杀自己"；
+   不同时是"只杀自己、且毫无正面作用"。**两种情况都指向同一个修法：删掉这段按监听地址找进程再 kill 的逻辑。**
+
 ---
 
 ## 7. 运行环境变更清单
@@ -159,3 +228,4 @@
 | 日期 | 变更内容 |
 |---|---|
 | 2026-09-13 | 创建文档：固化排障原则、定界方法、远端操作纪律、跨层工具陷阱、systemd 检查清单，以及 OVS dnsmasq 误杀案例复盘 |
+| 2026-09-14 | 新增 §6.6：同类问题在另一台全新宿主机复现，补充"程序命令日志直接坐实凶手"的证据、具体函数定位、`SubnetPrefix` 对结论的影响，以及"缓解需进入部署清单"的持久性结论 |

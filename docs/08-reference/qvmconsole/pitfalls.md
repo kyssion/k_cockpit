@@ -41,8 +41,16 @@
 - `2026-07-08` 首次记录：`failed to create listening socket for 192.168.122.1: Address already in use`，`Restart=on-failure` 导致频繁重启、端口释放不及时。
 - `2026-07-10` 提交"**精确杀死 libvirt dnsmasq，避免误杀 OVS dnsmasq**"，同一天还有"修复 dnsmasq systemd 服务崩溃循环"。
 - **2026-09-13 实测仍然复现**：`DisableLibvirtDefaultNetworkIfNeeded()` 用 `OvsGatewayIP()`（= `192.168.122.1`）去 `ss -tlnp | grep '<ip>:53'` 再 `kill`，而 OVS 的 dnsmasq 监听的正是这个地址 → **自己杀自己**；短时间多次"杀掉→拉起"撞上 systemd `DefaultStartLimitBurst=5/10s` → `start-limit-hit` → 服务 failed → 安装时的兼容性实机测试在"绑定基础 OVS 网络"阶段失败（详见 `README.md` §4.4 的已知问题）。
+- **2026-09-14 在另一台全新宿主机再次复现**（`KVM_SUBNET_PREFIX=192.168.123`）。这次拿到了直接证据：程序自身日志
+  `logs/compatibility/compatibility-run-*.log` 里逐条记录了 `ss -tlnp | grep '192.168.123.1:53'` 与紧随其后的
+  `kill <PID>`，被杀的 PID 正是刚拉起的 OVS dnsmasq，6 秒内 5 次"杀掉→拉起"→ `start-limit-hit`。
+  另有两点新认识：
+  1. **两处同类逻辑只对一处做了修正**：`writeOVSBridgePrepareScript()` 里已硬编码 `192.168.122.1:53`（对），
+     但 `DisableLibvirtDefaultNetworkIfNeeded()` 仍用 `OvsGatewayIP()`（错）。
+  2. **子网前缀非默认值时，这段逻辑连"释放端口"的初衷都达不到**：`192.168.123.1` 与 libvirt default 网关
+     `192.168.122.1` 不同，能匹配到的只有 OVS 自己的 dnsmasq —— 纯自伤、零收益。
 
-**给我们的结论**：任何"按 IP/端口找进程再 kill"的逻辑都必须做**归属校验**（PID 文件、systemd unit、进程名 + 参数指纹），绝不能只凭监听地址判断"这是别人的进程"。
+**给我们的结论**：任何"按 IP/端口找进程再 kill"的逻辑都必须做**归属校验**（PID 文件、systemd unit、进程名 + 参数指纹），绝不能只凭监听地址判断"这是别人的进程"。进一步说：**"释放端口"这类动作必须先证明冲突真实存在**（谁占用了、是不是自己要用的地址），否则正确的做法是直接删掉，而不是把匹配条件改得更"精确"——这正是它修了三次仍在复现的原因。
 
 ### 3.2 端口转发与 NAT
 
@@ -144,7 +152,7 @@
 > 本节结论已固化为项目规则：**编码红线**见 [`../../../AGENTS.md`](../../../AGENTS.md) 第 5 节，**排障与运行环境纪律**（含 OVS dnsmasq 误杀案例复盘）见 [`../../04-engineering/TROUBLESHOOTING.md`](../../04-engineering/TROUBLESHOOTING.md)。此处保留推导依据，便于追溯。
 
 1. **禁止硬编码系统账号**：qemu/libvirt 属主一律"探测 + 回退"，封装成单一工具函数，禁止各处手写（它因此修了 12 个文件）。
-2. **"按端口/IP 找进程再 kill"必须带归属校验**：用 PID 文件 / systemd unit / 进程名+参数指纹，绝不凭监听地址判断归属（它修了三次仍误杀）。
+2. **"按端口/IP 找进程再 kill"必须带归属校验**：用 PID 文件 / systemd unit / 进程名+参数指纹，绝不凭监听地址判断归属（它修了三次仍误杀）。另外，**"释放端口"必须先证明冲突真实存在**（谁占用、是不是自己要用的地址），否则正确做法是删掉这段逻辑，而不是把匹配条件改得更"精确"。
 3. **启动自愈（restore/reconcile）要幂等且可失败**：每个 restore 步骤失败只降级告警，不阻断主服务；否则一个子系统异常会拖垮整个面板（它把 OVS 配置包成子函数就是为此）。
 4. **不可变/链式依赖要先检查再动手**：`chattr +i`、链式克隆依赖、外部快照链——操作前必须先探测，并给出可执行的中文修复指引。
 5. **库表变更一律显式迁移**：索引冲突、数据去重、枚举回填都写迁移函数，别指望 `AutoMigrate`。
@@ -160,3 +168,4 @@
 |---|---|
 | 2026-09-13 | 创建文档：基于 88 条修复提交、专题修复文档与 2026-09-13 实测，按 9 个领域归纳已踩过的坑与结论 |
 | 2026-09-13 | 第 10 节结论已固化为项目规则，权威来源改指 `AGENTS.md` 第 5 节与 `docs/04-engineering/TROUBLESHOOTING.md` |
+| 2026-09-14 | §3.1 补充另一台全新宿主机的复现与程序命令日志级证据；第 10 节第 2 条补充"释放端口前必须先证明冲突真实存在" |
