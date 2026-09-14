@@ -37,7 +37,7 @@ docs/
 │   └── _TEMPLATE.md               # 规格模板
 └── 08-reference/                  # 参考层：外部参考项目的功能与实现资料
     ├── README.md                  # 参考项目总览：使用原则、只读与同步
-    ├── qvmconsole/                # QVMConsole：工程概览 / 工程架构 / 功能结论 / 踩坑清单
+    ├── qvmconsole/                # QVMConsole：工程概览 / 工程架构 / 功能清单 / 详细功能清单(接口·任务) / 功能结论 / 踩坑清单
     └── kite/                      # kite：功能与实现结论
 ```
 

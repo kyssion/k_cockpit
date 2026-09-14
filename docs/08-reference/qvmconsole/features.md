@@ -3,9 +3,11 @@
 > 状态：生效
 > 最后更新：2026-09-13
 > 结论基于提交：`52023d6`（`reference/QVMConsole`，分支 `main`）
-> 关联：[`../README.md`](../README.md) · [`README.md`](README.md)（工程概览）· [`architecture.md`](architecture.md)（工程架构）
+> 关联：[`../README.md`](../README.md) · [`README.md`](README.md)（工程概览）· [`architecture.md`](architecture.md)（工程架构）· [`capabilities.md`](capabilities.md)（功能清单）· [`pitfalls.md`](pitfalls.md)（踩坑清单）
 
 本文只记录 QVMConsole **有哪些功能、分别是怎么实现的**，作为我们实现类似能力时的参考。**不含** `k_cockpit` 自身的技术选型与方案（见 [`../README.md`](../README.md) §2）。文中路径均相对 `reference/QVMConsole/`。
+
+> **功能面清单**（按页面、操作、配置维度、运行态约束组织）见 [`capabilities.md`](capabilities.md)；本文侧重"功能 → 实现机制 → 关键文件"。
 
 > QVMConsole 是面向单机的 KVM/QEMU 虚拟机管理面板。它是我们的**功能参考**，其单机绑定等限制不构成我们的设计约束。
 
@@ -281,3 +283,4 @@
 |---|---|
 | 2026-09-12 | 创建文档：基于提交 `52023d6` 整理功能与实现结论 |
 | 2026-09-13 | 由 `docs/04-engineering/REFERENCE_QVMCONSOLE.md` 迁移至 `docs/08-reference/qvmconsole/features.md`，拆分出工程概览（`README.md`）与工程架构（`architecture.md`） |
+| 2026-09-14 | 头部关联补充 [`capabilities.md`](capabilities.md)（功能清单），并明确本文侧重实现机制 |

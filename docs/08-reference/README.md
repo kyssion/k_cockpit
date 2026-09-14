@@ -20,6 +20,8 @@
 ├── qvmconsole/          # QVMConsole（KVM/QEMU 虚拟机管理平台）
 │   ├── README.md        #   概览：定位、技术栈、目录结构、构建部署、配置、规模
 │   ├── architecture.md  #   工程架构：分层、中间件、并发与后台任务、数据模型、API、前端
+│   ├── capabilities.md  #   功能清单：信息架构、能力面、配置维度、运行态约束、对照维度
+│   ├── functional-inventory.md # 详细功能清单：模块 × 接口 / 异步任务 / 高风险操作
 │   ├── features.md      #   功能与实现机制结论
 │   └── pitfalls.md      #   踩坑与修复清单：已踩过的坑 → 根因 → 做法 → 证据
 └── kite/                # kite（多集群 Kubernetes 工作空间）
@@ -45,7 +47,7 @@
 
 | 目录 | 上游仓库 | 跟踪分支 | 用途 | 资料入口 | 结论基于提交 |
 |---|---|---|---|---|---|
-| `reference/QVMConsole/` | https://github.com/kyssion/QVMConsole | `main` | 虚拟机管理能力参考 | [`qvmconsole/README.md`](qvmconsole/README.md)（工程速查）· [`qvmconsole/features.md`](qvmconsole/features.md)（功能结论） | `52023d6` |
+| `reference/QVMConsole/` | https://github.com/kyssion/QVMConsole | `main` | 虚拟机管理能力参考 | [`qvmconsole/README.md`](qvmconsole/README.md)（工程速查）· [`qvmconsole/capabilities.md`](qvmconsole/capabilities.md)（功能清单）· [`qvmconsole/functional-inventory.md`](qvmconsole/functional-inventory.md)（接口·任务清单）· [`qvmconsole/features.md`](qvmconsole/features.md)（功能结论） | `52023d6` |
 | `reference/kite/` | https://github.com/kyssion/kite | `main` | Kubernetes 看板能力参考 | [`kite/README.md`](kite/README.md) | `546820c` |
 
 > **"结论基于提交"** 记录结论文档撰写（或最近复核）时参考仓库所处的提交，用于判断结论是否已过期（见 §6）。
@@ -58,14 +60,18 @@
 
 ## 4. 各项目的资料组织
 
-每个参考项目一个目录，按"**概览 → 架构 → 功能结论**"三层组织，职责如下：
+每个参考项目一个目录，按"**概览 → 架构 → 功能清单 → 功能结论 → 踩坑**"组织，职责如下：
 
 | 文件 | 记录内容 |
 |---|---|
 | `<项目>/README.md` | 定位与整体印象、技术栈与版本、顶层/二级目录结构、构建与部署方式、配置项、代码规模、测试与工程实践 |
 | `<项目>/architecture.md` | 分层与模块划分、启动装配流程、中间件、并发与后台任务、数据模型、HTTP API 分组、前端结构 |
+| `<项目>/capabilities.md` | **功能面清单**：信息架构（角色 × 页面）、各能力域的可见操作与入口、配置维度与默认值、运行态约束与状态语义、实现时需逐项对照的维度 |
+| `<项目>/functional-inventory.md` | **交付面清单**：按模块展开的 HTTP 接口、异步任务类型、需二次验证的高风险操作，以及从接口标记反推的权限模型 |
 | `<项目>/features.md` | 逐功能记录"**功能 → 实现机制 → 关键文件**"，含踩坑与兼容性处理 |
 | `<项目>/pitfalls.md` | 汇总**已被修复过的问题与兼容性坑**："现象 → 根因 → 做法 → 证据（提交/文档）"，用于后续实现提前避坑 |
+
+> `capabilities.md` 与 `features.md` 的分工：前者答"**有哪些能力、边界在哪**"（不写实现细节），后者答"**怎么实现的、落在哪个文件**"。二者不重复描述同一件事。
 
 **写作约束**：以上文档只记录参考项目的功能与实现机制，**不得**写入 `k_cockpit` 自己的技术选型或方案。文档中引用的路径均相对各参考仓库根目录。
 
@@ -162,3 +168,5 @@ git submodule update --init --remote --recursive
 | 2026-09-12 | 补充"使用原则（大方向）"、"结论文档"与"参考项目更新后同步结论"的维护约定 |
 | 2026-09-12 | 明确同步为"手动触发"，并补充触发方式与执行步骤（SOP） |
 | 2026-09-13 | 由 `docs/04-engineering/REFERENCE_PROJECTS.md` 迁移至 `docs/08-reference/README.md`，补充本分区目录结构、资料组织与 QVMConsole 工程速查入口 |
+| 2026-09-14 | 资料组织新增 `capabilities.md`（功能清单）一层，明确与 `features.md` 的分工；§1、§3 同步登记 |
+| 2026-09-14 | 资料组织新增 `functional-inventory.md`（模块 × 接口 / 异步任务 / 高风险操作），形成"概览 → 架构 → 功能面 → 交付面 → 实现机制 → 踩坑"六层结构 |

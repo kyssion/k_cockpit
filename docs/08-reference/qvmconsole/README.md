@@ -3,11 +3,11 @@
 > 状态：生效
 > 最后更新：2026-09-13
 > 结论基于提交：`52023d6`（`reference/QVMConsole`，分支 `main`）
-> 关联：[`../README.md`](../README.md) · [`architecture.md`](architecture.md) · [`features.md`](features.md)
+> 关联：[`../README.md`](../README.md) · [`architecture.md`](architecture.md) · [`capabilities.md`](capabilities.md) · [`functional-inventory.md`](functional-inventory.md) · [`features.md`](features.md) · [`pitfalls.md`](pitfalls.md)
 
 本文记录 QVMConsole 的**工程结构层面**事实：定位、技术栈与版本、目录组织、构建/部署/运行方式、配置项与代码规模。文中路径均相对 `reference/QVMConsole/`。
 
-**功能与实现机制**见 [`features.md`](features.md)；**分层、数据模型与 API** 见 [`architecture.md`](architecture.md)。
+**功能面（有哪些能力）**见 [`capabilities.md`](capabilities.md)；**交付面（模块 × 接口 / 任务 / 高风险操作）**见 [`functional-inventory.md`](functional-inventory.md)；**功能与实现机制**见 [`features.md`](features.md)；**分层、数据模型与 API** 见 [`architecture.md`](architecture.md)。
 
 ---
 
@@ -490,3 +490,5 @@ cd /srv/qvmconsole && ./kvm-console
 | 2026-09-13 | 补充"发行版支持与 RPM 系差异"：记录 RPM 系适配机制（包名映射、软性包、bundled RPM、qemu.conf 修复）与 SELinux/ufw/EPEL 等实际差异 |
 | 2026-09-13 | 记录"已知问题"：`EnsureOVSNetworkReady()` 按 OVS 网关 IP 误杀自身 dnsmasq，多次重启触发 systemd `start-limit-hit`，导致兼容性实机测试在 OVS 绑定阶段失败；含缓解方案（systemd drop-in） |
 | 2026-09-13 | 新增配套文档 [`pitfalls.md`](pitfalls.md)：汇总 88 条修复提交与专题修复文档得出的踩坑清单 |
+| 2026-09-14 | 新增配套文档 [`capabilities.md`](capabilities.md)：按功能面整理能力清单与对照维度；同步更新头部关联 |
+| 2026-09-14 | 新增配套文档 [`functional-inventory.md`](functional-inventory.md)：按模块展开接口 / 异步任务 / 高风险操作；同步更新头部关联与入口说明 |
