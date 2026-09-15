@@ -10,7 +10,8 @@
 docs/
 ├── README.md                      # 本文件：索引与维护规范
 ├── 01-product/                    # 产品层：做什么、为谁做
-│   ├── PRD.md                     # 产品需求文档
+│   ├── PRD.md                     # 产品需求文档（功能清单 F-x-xx 与优先级）
+│   ├── CAPABILITY_MAP.md          # 能力地图：分层、依赖关系、跨切面、覆盖度对照
 │   └── ROADMAP.md                 # 路线图与里程碑
 ├── 02-architecture/               # 架构层：怎么做
 │   ├── ARCHITECTURE.md            # 整体架构设计
@@ -48,18 +49,21 @@ docs/
 **新人 / AI 首次接触项目**：
 
 1. [`../AGENTS.md`](../AGENTS.md) — 项目规则与红线（必读）
-2. [`01-product/PRD.md`](01-product/PRD.md) — 项目要做什么
-3. [`02-architecture/ARCHITECTURE.md`](02-architecture/ARCHITECTURE.md) — 整体怎么组织
-4. [`04-engineering/DEVELOPMENT.md`](04-engineering/DEVELOPMENT.md) — 本地怎么跑起来
-5. [`05-ai/AI_DEVELOPMENT.md`](05-ai/AI_DEVELOPMENT.md) — 与 AI 协作的正确姿势
+2. [`01-product/PRD.md`](01-product/PRD.md) — 项目要做什么（功能清单与优先级）
+3. [`01-product/CAPABILITY_MAP.md`](01-product/CAPABILITY_MAP.md) — 有哪些能力、什么关系、先做谁
+4. [`02-architecture/ARCHITECTURE.md`](02-architecture/ARCHITECTURE.md) — 整体怎么组织
+5. [`04-engineering/DEVELOPMENT.md`](04-engineering/DEVELOPMENT.md) — 本地怎么跑起来
+6. [`05-ai/AI_DEVELOPMENT.md`](05-ai/AI_DEVELOPMENT.md) — 与 AI 协作的正确姿势
 
 **准备开发一个功能**：
 
-1. 在 [`07-specs/`](07-specs/README.md) 找到或编写功能规格
-2. 查阅 [`02-architecture/ARCHITECTURE.md`](02-architecture/ARCHITECTURE.md) 确认归属模块
-3. 查阅 [`04-engineering/CODING_STANDARDS.md`](04-engineering/CODING_STANDARDS.md) 与 [`TESTING.md`](04-engineering/TESTING.md)
-4. 涉及接口 → [`03-api/API.md`](03-api/API.md)
-5. 需要借鉴外部实现 → [`08-reference/README.md`](08-reference/README.md) 及各参考项目资料（[QVMConsole](08-reference/qvmconsole/README.md) / [kite](08-reference/kite/README.md)）
+1. 在 [`01-product/CAPABILITY_MAP.md`](01-product/CAPABILITY_MAP.md) 定位能力归属与**前置依赖**
+2. 在 [`01-product/PRD.md`](01-product/PRD.md) §4 取功能编号、优先级与边界说明
+3. 在 [`07-specs/`](07-specs/README.md) 找到或编写功能规格
+4. 查阅 [`02-architecture/ARCHITECTURE.md`](02-architecture/ARCHITECTURE.md) 确认归属模块
+5. 查阅 [`04-engineering/CODING_STANDARDS.md`](04-engineering/CODING_STANDARDS.md) 与 [`TESTING.md`](04-engineering/TESTING.md)
+6. 涉及接口 → [`03-api/API.md`](03-api/API.md)
+7. 需要借鉴外部实现 → [`08-reference/README.md`](08-reference/README.md) 及各参考项目资料（[QVMConsole](08-reference/qvmconsole/README.md) / [kite](08-reference/kite/README.md)）
 
 **排查问题 / 操作运行环境**：
 
