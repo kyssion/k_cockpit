@@ -89,6 +89,7 @@ docs/06-decisions/             不得违背既有 ADR
 | [`f-1-06-authorization.md`](f-1-06-authorization.md) | 授权与资源归属 | F-1-06、F-1-09 | **Ready**（8 项决策见 §9） | <!-- TODO --> |
 | [`f-7-01-task-queue.md`](f-7-01-task-queue.md) | 异步任务队列、任务中心与实时通道 | F-7-01、F-7-02、F-7-03 | **Ready**（11 项决策见 §9） | <!-- TODO --> |
 | [`f-5-01-storage-pool.md`](f-5-01-storage-pool.md) | 存储池管理 | F-5-01 | **Ready**（9 项决策见 §9） | <!-- TODO --> |
+| [`f-4-01-network-backend.md`](f-4-01-network-backend.md) | 网络后端抽象与能力降级 | F-4-01 | **Ready**（9 项决策见 §9） | <!-- TODO --> |
 
 ### 6.2 M2 待创建（按依赖顺序）
 
@@ -102,7 +103,7 @@ docs/06-decisions/             不得违背既有 ADR
 | 3 | `f-1-06-authorization.md` ✅ | F-1-06、F-1-09 | 2 |
 | 4 | `f-7-01-task-queue.md` ✅ | F-7-01、F-7-02、F-7-03 | 2、3 |
 | 5 | `f-5-01-storage-pool.md` ✅ | F-5-01 | 1 |
-| 6 | `f-4-01-network-backend.md` | F-4-01 | 1 |
+| 6 | `f-4-01-network-backend.md` ✅ | F-4-01 | 1 |
 | 7 | `f-2-02-vm-create.md` | F-2-02 | 1、4、5、6 |
 | 8 | `f-2-01-vm-list.md` | F-2-01、F-2-03 | 7 |
 | 9 | `f-10-01-high-risk-verification.md` | F-10-01、F-10-02 | 2、3 |
@@ -154,3 +155,4 @@ AI 代理在实现某个功能前，应：
 | 2026-09-15 | 新增第四份规格 [`f-7-01-task-queue.md`](f-7-01-task-queue.md)（异步任务队列、任务中心与实时通道，**Ready**）；其 5 个接口 API-011~API-015 登记至 [`../03-api/API.md`](../03-api/API.md) |
 | 2026-09-15 | 新增 §5.1「规格的演进」：明确规格是**阶段性方案**，细节调整直接更新规格并记变更记录，重大变更新建 ADR；红线是「代码改了而规格没改」 |
 | 2026-09-15 | 新增第五份规格 [`f-5-01-storage-pool.md`](f-5-01-storage-pool.md)（存储池管理，**Ready**）；其 5 个接口 API-016~API-020 登记至 [`../03-api/API.md`](../03-api/API.md) |
+| 2026-09-15 | 新增第六份规格 [`f-4-01-network-backend.md`](f-4-01-network-backend.md)（网络后端抽象与能力降级，**Ready**）；其 2 个接口 API-021~API-022 登记至 [`../03-api/API.md`](../03-api/API.md)；同步清理 ADR-0004 中已过时的「待 PRD 定稿后确认」说明 |

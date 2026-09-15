@@ -169,6 +169,8 @@
 | API-018 | POST | `/api/v1/storage-pools` | 创建存储池（格式化 + 挂载），返回任务标识 | 是（管理员） | 规划中 | F-5-01 |
 | API-019 | PATCH | `/api/v1/storage-pools/:id` | 设为默认池 / 修改备注 | 是（管理员） | 规划中 | F-5-01 |
 | API-020 | DELETE | `/api/v1/storage-pools/:id` | 删除存储池（含占用检查），返回任务标识 | 是（管理员） | 规划中 | F-5-01 |
+| API-021 | GET | `/api/v1/nodes/:nodeId/network` | 网络后端模式、能力清单、降级说明与默认网络状态 | 是 | 规划中 | F-4-01 |
+| API-022 | GET | `/api/v1/nodes/:nodeId/networks` | 该节点可用网络列表（M2 仅系统基础网络） | 是 | 规划中 | F-4-01 |
 
 **状态口径**：
 

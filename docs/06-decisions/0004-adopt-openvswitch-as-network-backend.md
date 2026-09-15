@@ -5,7 +5,7 @@
 - 决策人：<!-- TODO -->
 - 关联：[`../02-architecture/TECH_STACK.md`](../02-architecture/TECH_STACK.md) · [`../02-architecture/ARCHITECTURE.md`](../02-architecture/ARCHITECTURE.md) · [`../08-reference/qvmconsole/features.md`](../08-reference/qvmconsole/features.md)
 
-> 说明：本决策为**方向性预判**。PRD 尚未定稿，需求明确后需确认并转为 `Accepted`（或另建 ADR 取代）。
+> 说明：本决策已于 2026-09-15 转为 `Accepted`——PRD 网络需求已定稿（[`../01-product/PRD.md`](../01-product/PRD.md) §4 域 4），实现规格见 [`../07-specs/f-4-01-network-backend.md`](../07-specs/f-4-01-network-backend.md)。
 
 ---
 
