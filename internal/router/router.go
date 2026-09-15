@@ -15,6 +15,7 @@ import (
 	"k_cockpit/internal/auth"
 	"k_cockpit/internal/authz"
 	"k_cockpit/internal/handler"
+	"k_cockpit/internal/network"
 	"k_cockpit/internal/node"
 	"k_cockpit/internal/risk"
 	"k_cockpit/internal/storage"
@@ -33,6 +34,7 @@ type Deps struct {
 	Node      *node.Service
 	VM        *vm.Service
 	Storage   *storage.Service
+	Network   *network.Service
 	Task      *task.Queue
 	// Risk 强制高风险操作的二次验证（f-10-01）。受保护的操作在 handler
 	// 入口调用它，清单本身集中在 internal/risk。
@@ -59,6 +61,7 @@ func Register(h *server.Hertz, deps Deps) {
 	taskHandler := handler.NewTask(deps.Task)
 	securityHandler := handler.NewSecurity(deps.Risk, deps.Auth)
 	storageHandler := handler.NewStorage(deps.Storage, deps.Risk)
+	networkHandler := handler.NewNetwork(deps.Network)
 
 	authMW := auth.NewMiddleware(deps.Auth)
 	// 认证接口都计为真实用户活动：它们由用户显式操作触发，不是后台轮询。
@@ -104,6 +107,11 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/storage-pools", requireAuth, adminOnly, storageHandler.CreatePool)
 		v1.PATCH("/storage-pools/:id", requireAuth, adminOnly, storageHandler.UpdatePool)
 		v1.DELETE("/storage-pools/:id", requireAuth, adminOnly, storageHandler.DeletePool)
+
+		// 网络（F-4-01）：M2 只有只读接口——能力探测与降级说明。
+		// 网络变更（建网桥、物理口入桥）属 M3 范围。
+		v1.GET("/nodes/:id/network", requireAuth, adminOnly, networkHandler.Status)
+		v1.GET("/nodes/:id/networks", requireAuth, adminOnly, networkHandler.Networks)
 
 		// 虚拟机：管理员可操作全部，tenant 仅自己名下（归属过滤在数据访问层注入，
 		// 因此这里不需要按角色分路由）。

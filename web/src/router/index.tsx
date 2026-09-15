@@ -5,6 +5,7 @@ import { AppLayout } from '@/layout/AppLayout'
 import { DashboardPage } from '@/views/dashboard/DashboardPage'
 import { LoginPage } from '@/views/auth/LoginPage'
 import { SetupPage } from '@/views/auth/SetupPage'
+import { NetworkPage } from '@/views/network/NetworkPage'
 import { NodeListPage } from '@/views/node/NodeListPage'
 import { SecurityPage } from '@/views/security/SecurityPage'
 import { StoragePoolPage } from '@/views/storage/StoragePoolPage'
@@ -43,7 +44,7 @@ export const router = createBrowserRouter([
           { path: 'public-ip', element: pending('公网 IP', '资源池与绑定') },
           { path: 'node', element: <NodeListPage /> },
           { path: 'storage-pool', element: <StoragePoolPage /> },
-          { path: 'network', element: pending('网络中心', '交换机、安全组与 ACL') },
+          { path: 'network', element: <NetworkPage /> },
           { path: 'firewall', element: pending('防火墙', '规则与连接管理') },
           { path: 'user', element: pending('用户管理', '账号与配额') },
           { path: 'settings', element: pending('系统设置', '配置项与环境变量对照') },
