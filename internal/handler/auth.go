@@ -10,20 +10,22 @@ import (
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/auth"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/risk"
 )
 
 // Auth 提供认证相关接口。
 type Auth struct {
 	svc          *auth.Service
 	secureCookie bool
+	risk         *risk.Guard
 }
 
 // NewAuth 构造认证接口。
 //
 // secureCookie 在 HTTPS 部署时必须为 true；本地 HTTP 开发必须为 false，
 // 否则浏览器不会回传带 Secure 标记的 Cookie，表现为「登录成功但仍未认证」。
-func NewAuth(svc *auth.Service, secureCookie bool) *Auth {
-	return &Auth{svc: svc, secureCookie: secureCookie}
+func NewAuth(svc *auth.Service, secureCookie bool, guard *risk.Guard) *Auth {
+	return &Auth{svc: svc, secureCookie: secureCookie, risk: guard}
 }
 
 // userView 是返回给前端的用户信息。
@@ -92,6 +94,9 @@ func (h *Auth) Logout(ctx context.Context, c *app.RequestContext) {
 			api.Fail(c, err)
 			return
 		}
+		// 丢弃该会话未消费的许可（R-013）：否则一个已经登出的会话仍可能
+		// 在许可有效期内消费掉它，用户会看到「已登出却操作成功」。
+		h.risk.RevokeSession(session.ID)
 	}
 	// 无论会话是否已存在，都清掉浏览器 Cookie：否则用户会带着一个
 	// 已失效的令牌反复请求，每次都触发一次无谓的 401。
@@ -131,6 +136,11 @@ func (h *Auth) Sessions(ctx context.Context, c *app.RequestContext) {
 
 // RevokeSession 撤销指定会话（撤销他人会话返回 404，不泄漏其是否存在）。
 func (h *Auth) RevokeSession(ctx context.Context, c *app.RequestContext) {
+	// 高风险操作：撤销会话会让被撤销方立即失去访问（f-10-02）。
+	if !h.risk.Require(c, risk.ActionSessionRevoke) {
+		return
+	}
+
 	id, err := namedPathID(c, "id", "会话 ID")
 	if err != nil {
 		api.Fail(c, err)
@@ -142,6 +152,8 @@ func (h *Auth) RevokeSession(ctx context.Context, c *app.RequestContext) {
 		api.Fail(c, err)
 		return
 	}
+	// 被撤销的会话若持有未消费的许可，一并丢弃。
+	h.risk.RevokeSession(id)
 	api.NoContent(c)
 }
 

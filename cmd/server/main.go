@@ -18,6 +18,7 @@ import (
 	"k_cockpit/internal/config"
 	"k_cockpit/internal/database"
 	"k_cockpit/internal/node"
+	"k_cockpit/internal/risk"
 	"k_cockpit/internal/router"
 	"k_cockpit/internal/task"
 	"k_cockpit/internal/vm"
@@ -53,6 +54,11 @@ func main() {
 	// 系统尚无管理员时生成一次性初始化令牌。**它只打印到日志**：
 	// 能读到日志即等价于拥有服务器访问权，这是「谁有权初始化」的判据。
 	// 不采用默认账号密码——那是全网皆知的凭据，存在被抢先登录的窗口。
+	// 高风险二次验证的守卫。根密钥复用会话密钥但在内部按用途派生：
+	// 单一密钥配置避免部署时多一个必填项，而用途隔离保证签名与加密
+	// 不会互相影响。
+	riskGuard := risk.NewGuard(db, []byte(cfg.Session.Secret), recorder)
+
 	bootstrap, token, err := auth.NewBootstrap(db, recorder)
 	if err != nil {
 		log.Fatalf("检查初始化状态失败: %v", err)
@@ -99,6 +105,7 @@ func main() {
 		Node:          nodeSvc,
 		VM:            vmSvc,
 		Task:          queue,
+		Risk:          riskGuard,
 		SecureCookie:  cfg.Session.SecureCookie,
 		SimulateAgent: cfg.Agent.Transport == config.AgentTransportMock,
 	})

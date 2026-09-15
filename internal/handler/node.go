@@ -10,6 +10,7 @@ import (
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/auth"
 	"k_cockpit/internal/node"
+	"k_cockpit/internal/risk"
 )
 
 // Node 提供节点管理接口（F-6-01 / F-6-02）。
@@ -21,11 +22,12 @@ type Node struct {
 	// simulateAgent 为 true 时暴露开发期的模拟注册入口。
 	// 仅在 AGENT_TRANSPORT=mock 时启用；接入真实 agent 后该路由不再注册。
 	simulateAgent bool
+	risk          *risk.Guard
 }
 
 // NewNode 构造节点接口。
-func NewNode(svc *node.Service, simulateAgent bool) *Node {
-	return &Node{svc: svc, simulateAgent: simulateAgent}
+func NewNode(svc *node.Service, simulateAgent bool, guard *risk.Guard) *Node {
+	return &Node{svc: svc, simulateAgent: simulateAgent, risk: guard}
 }
 
 // List 返回节点列表（含运行态）。
@@ -56,6 +58,11 @@ func (h *Node) Get(ctx context.Context, c *app.RequestContext) {
 
 // Remove 移除节点。
 func (h *Node) Remove(ctx context.Context, c *app.RequestContext) {
+	// 高风险操作：移除节点后其上的虚拟机将失去管控（f-10-02）。
+	if !h.risk.Require(c, risk.ActionNodeRemove) {
+		return
+	}
+
 	id, err := namedPathID(c, "id", "节点 ID")
 	if err != nil {
 		api.Fail(c, err)

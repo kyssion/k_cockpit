@@ -8,6 +8,7 @@ import (
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/auth"
 	"k_cockpit/internal/authz"
+	"k_cockpit/internal/risk"
 	"k_cockpit/internal/vm"
 )
 
@@ -16,12 +17,13 @@ import (
 // 权限：管理员可操作全部；tenant 只能操作自己名下的（f-1-06 §3.1）。
 // 该判定由**归属过滤**在数据访问层强制注入，不在本文件重复实现。
 type VM struct {
-	svc *vm.Service
+	svc  *vm.Service
+	risk *risk.Guard
 }
 
 // NewVM 构造虚拟机接口。
-func NewVM(svc *vm.Service) *VM {
-	return &VM{svc: svc}
+func NewVM(svc *vm.Service, guard *risk.Guard) *VM {
+	return &VM{svc: svc, risk: guard}
 }
 
 // List 返回虚拟机列表。
@@ -163,6 +165,14 @@ type deleteVMRequest struct {
 // 磁盘处理方式由用户在界面上显式选择后传入；缺失时服务端拒绝，而不是
 // 替用户选一个——默认连盘删除的误操作代价是数据永久丢失。
 func (h *VM) Delete(ctx context.Context, c *app.RequestContext) {
+	// 高风险操作：删除（尤其连盘删除）会造成不可逆结果（f-10-02）。
+	//
+	// 检查放在解析参数之前：验证未通过时不做任何业务处理，也不消费任何
+	// 业务资源。
+	if !h.risk.Require(c, risk.ActionVMDelete) {
+		return
+	}
+
 	id, err := namedPathID(c, "id", "虚拟机 ID")
 	if err != nil {
 		api.Fail(c, err)

@@ -16,6 +16,7 @@ import (
 	"k_cockpit/internal/authz"
 	"k_cockpit/internal/handler"
 	"k_cockpit/internal/node"
+	"k_cockpit/internal/risk"
 	"k_cockpit/internal/task"
 	"k_cockpit/internal/vm"
 )
@@ -31,6 +32,9 @@ type Deps struct {
 	Node      *node.Service
 	VM        *vm.Service
 	Task      *task.Queue
+	// Risk 强制高风险操作的二次验证（f-10-01）。受保护的操作在 handler
+	// 入口调用它，清单本身集中在 internal/risk。
+	Risk *risk.Guard
 
 	SecureCookie bool
 	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
@@ -46,11 +50,12 @@ func Register(h *server.Hertz, deps Deps) {
 
 	h.GET("/health", handler.Health(deps.DB))
 
-	authHandler := handler.NewAuth(deps.Auth, deps.SecureCookie)
+	authHandler := handler.NewAuth(deps.Auth, deps.SecureCookie, deps.Risk)
 	setupHandler := handler.NewSetup(deps.Bootstrap, deps.Auth, deps.SecureCookie)
-	nodeHandler := handler.NewNode(deps.Node, deps.SimulateAgent)
-	vmHandler := handler.NewVM(deps.VM)
+	nodeHandler := handler.NewNode(deps.Node, deps.SimulateAgent, deps.Risk)
+	vmHandler := handler.NewVM(deps.VM, deps.Risk)
 	taskHandler := handler.NewTask(deps.Task)
+	securityHandler := handler.NewSecurity(deps.Risk, deps.Auth)
 
 	authMW := auth.NewMiddleware(deps.Auth)
 	// 认证接口都计为真实用户活动：它们由用户显式操作触发，不是后台轮询。
@@ -71,6 +76,16 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/auth/session", requireAuth, authHandler.Session)
 		v1.GET("/auth/sessions", requireAuth, authHandler.Sessions)
 		v1.DELETE("/auth/sessions/:id", requireAuth, authHandler.RevokeSession)
+
+		// 高风险二次验证（f-10-01）：清单只读，验证接口换取一次性许可。
+		// 清单是**唯一事实来源**，前端不得硬编码第二份（R-002）。
+		v1.GET("/security/high-risk-policy", requireAuth, securityHandler.Policy)
+		v1.POST("/auth/risk-verification", requireAuth, securityHandler.Verify)
+
+		// 二次验证方式的绑定：没有绑定渠道，428 将永远无法通过。
+		v1.GET("/auth/security-setup", requireAuth, securityHandler.SetupStatus)
+		v1.POST("/auth/totp/setup", requireAuth, securityHandler.BeginTOTP)
+		v1.POST("/auth/totp/confirm", requireAuth, securityHandler.ConfirmTOTP)
 
 		// 节点管理：按 f-1-06 的角色表，全部仅管理员可访问。
 		v1.GET("/nodes", requireAuth, adminOnly, nodeHandler.List)
