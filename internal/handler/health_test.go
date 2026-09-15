@@ -16,11 +16,20 @@ func TestHealth(t *testing.T) {
 		t.Fatalf("状态码 = %d, 期望 %d", w.Code, consts.StatusOK)
 	}
 
-	var body map[string]string
+	var body struct {
+		Data struct {
+			Status   string `json:"status"`
+			Database string `json:"database"`
+		} `json:"data"`
+		RequestID string `json:"request_id"`
+	}
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("解析响应失败: %v", err)
 	}
-	if body["status"] != "ok" || body["database"] != "up" {
-		t.Errorf("健康检查响应 = %v, 期望 status=ok database=up", body)
+	if body.Data.Status != "ok" || body.Data.Database != "up" {
+		t.Errorf("健康检查数据 = %+v, 期望 status=ok database=up", body.Data)
+	}
+	if body.RequestID == "" {
+		t.Error("响应缺少 request_id")
 	}
 }

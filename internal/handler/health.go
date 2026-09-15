@@ -8,26 +8,28 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/cloudwego/hertz/pkg/common/utils"
-	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"gorm.io/gorm"
+
+	"k_cockpit/internal/api"
 )
 
+// healthStatus 是健康检查的返回数据。
+type healthStatus struct {
+	Status   string `json:"status"`
+	Database string `json:"database"`
+}
+
 // Health 返回服务与数据库的健康状态，供探活与就绪检查使用。
+//
+// 无需认证（API.md 中显式标记的公开接口）。
 func Health(db *gorm.DB) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		sqlDB, err := db.DB()
 		if err != nil || sqlDB.PingContext(ctx) != nil {
-			c.JSON(consts.StatusServiceUnavailable, utils.H{
-				"status":   "unhealthy",
-				"database": "down",
-			})
+			api.Fail(c, api.Unavailable("数据库不可用"))
 			return
 		}
 
-		c.JSON(consts.StatusOK, utils.H{
-			"status":   "ok",
-			"database": "up",
-		})
+		api.OK(c, healthStatus{Status: "ok", Database: "up"})
 	}
 }
