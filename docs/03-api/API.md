@@ -164,6 +164,11 @@
 | API-013 | POST | `/api/v1/tasks/:id/cancel` | 请求取消任务 | 是 | 规划中 | F-7-02 |
 | API-014 | DELETE | `/api/v1/tasks` | 清理终态任务（拒绝含非终态） | 是 | 规划中 | F-7-02 |
 | API-015 | GET | `/api/v1/events/{channel}` | **SSE 实时通道**（`vm-list` / `vm-detail` / `tasks` / `host-metrics`） | 是 | 规划中 | F-7-03 |
+| API-016 | GET | `/api/v1/nodes/:nodeId/disks` | 块设备清单（容量、状态标签、是否系统盘、是否含数据） | 是（管理员） | 规划中 | F-5-01 |
+| API-017 | GET | `/api/v1/nodes/:nodeId/storage-pools` | 该节点的存储池列表（含空间与新鲜度） | 是（管理员） | 规划中 | F-5-01 |
+| API-018 | POST | `/api/v1/storage-pools` | 创建存储池（格式化 + 挂载），返回任务标识 | 是（管理员） | 规划中 | F-5-01 |
+| API-019 | PATCH | `/api/v1/storage-pools/:id` | 设为默认池 / 修改备注 | 是（管理员） | 规划中 | F-5-01 |
+| API-020 | DELETE | `/api/v1/storage-pools/:id` | 删除存储池（含占用检查），返回任务标识 | 是（管理员） | 规划中 | F-5-01 |
 
 **状态口径**：
 
