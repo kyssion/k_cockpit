@@ -1,0 +1,122 @@
+/**
+ * 设计令牌 —— 唯一落点（FRONTEND §4.2）。
+ *
+ * 三条约定，改动前务必确认：
+ *   1. 业务代码只引用**语义**令牌，不出现具体色值；
+ *   2. 浅/深两套值由 `[data-theme]` 切换，两套都需满足 WCAG AA
+ *      对比度（正文 ≥ 4.5:1，图形/大字 ≥ 3:1）；
+ *   3. 语义与档位边界不可改（如「运行中 → success」），色值可按对比度微调。
+ */
+
+:root,
+[data-theme='dark'] {
+  /* 中性层 */
+  --kc-bg-base: #0e1116;
+  --kc-bg-surface: #151a21;
+  --kc-bg-raised: #1b222b;
+  --kc-bg-sunken: #0b0e13;
+  --kc-border-subtle: #232b36;
+  --kc-border-strong: #313b48;
+  --kc-text-primary: #e6eaf0;
+  --kc-text-secondary: #a3aebd;
+  --kc-text-tertiary: #6f7b8a;
+
+  /* 品牌与语义色 */
+  --kc-brand: #3b9eff;
+  --kc-brand-hover: #57adff;
+  --kc-brand-active: #2b8eee;
+  --kc-success: #2fbf71;
+  --kc-warning: #e8a33d;
+  --kc-danger: #f0554d;
+  --kc-info: #5b8def;
+  --kc-idle: #7a8699;
+
+  /* 阴影（仅三档，禁止自创） */
+  --kc-shadow-1: 0 1px 2px rgb(0 0 0 / 0.3);
+  --kc-shadow-2: 0 4px 12px rgb(0 0 0 / 0.35);
+  --kc-shadow-3: 0 12px 32px rgb(0 0 0 / 0.45);
+}
+
+[data-theme='light'] {
+  --kc-bg-base: #f6f7f9;
+  --kc-bg-surface: #ffffff;
+  --kc-bg-raised: #ffffff;
+  --kc-bg-sunken: #eff1f4;
+  --kc-border-subtle: #e3e6eb;
+  --kc-border-strong: #d0d5dd;
+  --kc-text-primary: #1d2430;
+  --kc-text-secondary: #5a6472;
+  --kc-text-tertiary: #8a93a0;
+
+  --kc-brand: #1677ff;
+  --kc-brand-hover: #3d8bff;
+  --kc-brand-active: #0f63dd;
+  --kc-success: #12a150;
+  --kc-warning: #c77700;
+  --kc-danger: #d92d20;
+  --kc-info: #3b6edb;
+  --kc-idle: #98a2b3;
+
+  --kc-shadow-1: 0 1px 2px rgb(16 24 40 / 0.06);
+  --kc-shadow-2: 0 4px 12px rgb(16 24 40 / 0.1);
+  --kc-shadow-3: 0 12px 32px rgb(16 24 40 / 0.16);
+}
+
+/**
+ * 令牌 → Tailwind 主题映射。
+ *
+ * 用 `inline` 让 utility 直接产出 `var(--kc-*)` 而不是把色值烤进 CSS：
+ * 否则主题切换（改 `[data-theme]`）不会生效。这是本项目能用原生 CSS 变量
+ * 做主题的前提。
+ */
+@theme inline {
+  /* 背景 */
+  --color-base: var(--kc-bg-base);
+  --color-surface: var(--kc-bg-surface);
+  --color-raised: var(--kc-bg-raised);
+  --color-sunken: var(--kc-bg-sunken);
+
+  /* 边框 */
+  --color-line: var(--kc-border-subtle);
+  --color-line-strong: var(--kc-border-strong);
+
+  /* 文本 */
+  --color-ink: var(--kc-text-primary);
+  --color-ink-2: var(--kc-text-secondary);
+  --color-ink-3: var(--kc-text-tertiary);
+
+  /* 语义色 */
+  --color-brand: var(--kc-brand);
+  --color-brand-hover: var(--kc-brand-hover);
+  --color-brand-active: var(--kc-brand-active);
+  --color-success: var(--kc-success);
+  --color-warning: var(--kc-warning);
+  --color-danger: var(--kc-danger);
+  --color-info: var(--kc-info);
+  --color-idle: var(--kc-idle);
+
+  /* 字号：按 FRONTEND §4.3 重定义语义，避免出现 13px 之类的游离值 */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 16px;
+  --text-lg: 20px;
+  --text-xl: 24px;
+
+  /* 圆角：控件 6 / 卡片与弹层 10 / 徽标 999 */
+  --radius-control: 6px;
+  --radius-card: 10px;
+  --radius-pill: 999px;
+
+  /* 阴影 */
+  --shadow-1: var(--kc-shadow-1);
+  --shadow-2: var(--kc-shadow-2);
+  --shadow-3: var(--kc-shadow-3);
+
+  /* 字体栈：系统 UI 字体，避免为中文引入体积庞大的 Web 字体 */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+}

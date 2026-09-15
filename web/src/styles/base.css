@@ -1,0 +1,66 @@
+/**
+ * 全局重置与排版基线。
+ *
+ * 只放「全局且不可协商」的规则；组件样式一律走 utility 类，
+ * 不要在这里堆砌组件级选择器。
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--kc-bg-base);
+  color: var(--kc-text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 表格、IP、ID 等一律等宽 + 表格数字对齐（§4.3） */
+.kc-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.kc-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 焦点可见性：键盘用户必须能看到焦点，鼠标点击不显示（§8 可访问性） */
+:focus-visible {
+  outline: 2px solid var(--kc-brand);
+  outline-offset: 2px;
+}
+
+/**
+ * 尊重系统的「减少动效」偏好。
+ * 前庭功能障碍用户会因动效不适，这是可访问性要求而非偏好问题。
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* 滚动条：浅/深两套跟随主题，避免在深色页面出现刺眼的白色滚动条 */
+* {
+  scrollbar-color: var(--kc-border-strong) transparent;
+  scrollbar-width: thin;
+}

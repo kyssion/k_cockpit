@@ -1,0 +1,7 @@
+/* 样式入口。顺序不可调换：
+   先引入 Tailwind，再引入令牌（令牌需要覆盖 Tailwind 的主题变量），
+   最后是全局基线，保证基线的优先级高于工具类默认值。 */
+@import 'tailwindcss';
+
+@import './styles/tokens.css';
+@import './styles/base.css';
