@@ -74,8 +74,8 @@ DB_SSLMODE=disable
 | 整理依赖 | `go mod tidy` |
 | 启动开发服务 | `go run ./cmd/server` |
 | 构建 | `go build -o bin/server ./cmd/server` |
-| 格式化检查 | `gofmt -l .` |
-| 格式化修复 | `gofmt -w .` |
+| 格式化检查 | `gofmt -l cmd internal`（不含 `reference/` 参考子模块） |
+| 格式化修复 | `gofmt -w cmd internal` |
 | 静态检查 | `go vet ./...` |
 | 单元测试 | `go test ./...` |
 | 单包测试 | `go test ./internal/handler/...` |

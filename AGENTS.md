@@ -68,7 +68,7 @@ go run ./cmd/server
 go build -o bin/server ./cmd/server
 
 # 格式化检查（列出未格式化的文件）
-gofmt -l .
+gofmt -l cmd internal
 
 # 静态检查
 go vet ./...

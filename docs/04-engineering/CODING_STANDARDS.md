@@ -214,7 +214,7 @@ if (valid) {
 
 - **缩进**：制表符（Tab），由 `gofmt` 强制保证
 - **行宽**：见 `.editorconfig`（建议 120，不做硬性限制）
-- **格式化**：提交前执行 `gofmt -w .`；CI 通过 `gofmt -l .` 校验（有输出即失败）
+- **格式化**：提交前执行 `gofmt -w cmd internal`；CI 通过 `gofmt -l cmd internal` 校验（有输出即失败）。**只扫本项目代码**——`reference/` 是只读参考子模块，不参与格式门禁
 - **静态检查**：`go vet ./...`
 
 **命名**
