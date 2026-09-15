@@ -28,3 +28,19 @@ func namedPathID(c *app.RequestContext, name, label string) (int64, error) {
 	}
 	return id, nil
 }
+
+// queryInt 读取整数查询参数；缺失或非法时返回 0，由调用方决定默认值。
+//
+// 查询参数非法**不报错**而是回落默认值：分页参数写错时，返回第一页
+// 比返回一个错误页更有用——用户至少能看到数据。
+func queryInt(c *app.RequestContext, name string) int {
+	raw := c.Query(name)
+	if raw == "" {
+		return 0
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0
+	}
+	return v
+}

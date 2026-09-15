@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"strconv"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"

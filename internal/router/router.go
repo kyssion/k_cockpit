@@ -16,6 +16,8 @@ import (
 	"k_cockpit/internal/authz"
 	"k_cockpit/internal/handler"
 	"k_cockpit/internal/node"
+	"k_cockpit/internal/task"
+	"k_cockpit/internal/vm"
 )
 
 // Deps 是路由注册所需的外部依赖。
@@ -27,6 +29,8 @@ type Deps struct {
 	Auth      *auth.Service
 	Bootstrap *auth.Bootstrap
 	Node      *node.Service
+	VM        *vm.Service
+	Task      *task.Queue
 
 	SecureCookie bool
 	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
@@ -45,6 +49,8 @@ func Register(h *server.Hertz, deps Deps) {
 	authHandler := handler.NewAuth(deps.Auth, deps.SecureCookie)
 	setupHandler := handler.NewSetup(deps.Bootstrap, deps.Auth, deps.SecureCookie)
 	nodeHandler := handler.NewNode(deps.Node, deps.SimulateAgent)
+	vmHandler := handler.NewVM(deps.VM)
+	taskHandler := handler.NewTask(deps.Task)
 
 	authMW := auth.NewMiddleware(deps.Auth)
 	// 认证接口都计为真实用户活动：它们由用户显式操作触发，不是后台轮询。
@@ -71,6 +77,17 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/nodes/:id", requireAuth, adminOnly, nodeHandler.Get)
 		v1.POST("/nodes/registration-tokens", requireAuth, adminOnly, nodeHandler.CreateEnrollToken)
 		v1.DELETE("/nodes/:id", requireAuth, adminOnly, nodeHandler.Remove)
+
+		// 虚拟机：管理员可操作全部，tenant 仅自己名下（归属过滤在数据访问层注入，
+		// 因此这里不需要按角色分路由）。
+		v1.GET("/vms", requireAuth, vmHandler.List)
+		v1.GET("/vms/:id", requireAuth, vmHandler.Get)
+		v1.POST("/vms", requireAuth, vmHandler.Create)
+
+		// 任务中心：tenant 只能看到自己发起的（同样由归属过滤保证）。
+		v1.GET("/tasks", requireAuth, taskHandler.List)
+		v1.GET("/tasks/:id", requireAuth, taskHandler.Get)
+		v1.POST("/tasks/:id/cancel", requireAuth, taskHandler.Cancel)
 
 		if deps.SimulateAgent {
 			// 开发期专用：调用它与真实 agent 走**同一段注册逻辑**（ADR-0007）。

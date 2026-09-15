@@ -13,11 +13,18 @@ package agent
 
 import "context"
 
-// OpKind 是领域操作的类型标识。
-//
-// 取值形如 `vm.start`、`storage.pool.create`，由各业务能力在实现时定义，
-// 命名遵循「资源域.动作」。
+// OpKind 是领域操作的类型标识，命名遵循「资源域.动作」。
 type OpKind string
+
+// 领域操作标识。
+//
+// 按需扩展：新增能力时在此登记，并在 Executor 中实现对应的执行逻辑。
+const (
+	OpVMCreate OpKind = "vm.create"
+	OpVMStart  OpKind = "vm.start"
+	OpVMStop   OpKind = "vm.stop"
+	OpVMDelete OpKind = "vm.delete"
+)
 
 // Operation 描述一次要节点执行的领域操作。
 type Operation struct {

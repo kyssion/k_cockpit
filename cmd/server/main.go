@@ -6,6 +6,7 @@
 package main
 
 import (
+	"context"
 	"log"
 
 	"github.com/cloudwego/hertz/pkg/app/server"
@@ -18,6 +19,8 @@ import (
 	"k_cockpit/internal/database"
 	"k_cockpit/internal/node"
 	"k_cockpit/internal/router"
+	"k_cockpit/internal/task"
+	"k_cockpit/internal/vm"
 )
 
 func main() {
@@ -67,16 +70,24 @@ func main() {
 
 	// 装配 agent 通道。真实实现（gRPC 双向流）尚未开发，本期由 mock 直接
 	// 返回结果——业务代码只依赖内部接口，接入真实节点时无需改动（ADR-0007）。
-	var runtime agent.SnapshotProvider
+	var mockAgent *agent.MockClient
 	switch cfg.Agent.Transport {
 	case config.AgentTransportMock:
-		runtime = agent.NewMockClient()
-		log.Printf("[agent] 通道 = mock：节点运行态为假数据，不连接真实节点")
+		mockAgent = agent.NewMockClient()
+		log.Printf("[agent] 通道 = mock：节点运行态与领域操作为假数据，不连接真实节点")
 	default:
 		log.Fatalf("AGENT_TRANSPORT=%s 尚未实现（当前仅支持 %s）",
 			cfg.Agent.Transport, config.AgentTransportMock)
 	}
-	nodeSvc := node.NewService(db, runtime, recorder)
+	nodeSvc := node.NewService(db, mockAgent, recorder)
+
+	// 任务队列：所有异步操作的载体。注册各能力的 Executor，队列本身
+	// 不关心任务具体做什么——新增能力时只需在这里多注册一个。
+	queue := task.NewQueue(db, recorder, task.Options{})
+	queue.Register(vm.NewCreateExecutor(db, mockAgent))
+	queue.Start(context.Background())
+
+	vmSvc := vm.NewService(db, queue, recorder)
 
 	h := server.Default(server.WithHostPorts(cfg.HTTP.Addr()))
 	router.Register(h, router.Deps{
@@ -84,6 +95,8 @@ func main() {
 		Auth:          authSvc,
 		Bootstrap:     bootstrap,
 		Node:          nodeSvc,
+		VM:            vmSvc,
+		Task:          queue,
 		SecureCookie:  cfg.Session.SecureCookie,
 		SimulateAgent: cfg.Agent.Transport == config.AgentTransportMock,
 	})

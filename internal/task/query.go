@@ -10,17 +10,13 @@ import (
 
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/audit"
+	"k_cockpit/internal/authz"
 	"k_cockpit/internal/model"
 )
 
-// Viewer 是查询任务的视角，用于归属过滤。
-//
-// 归属过滤**必须在这里强制注入**，而不是让每个调用方自己记得加条件
-// （f-1-06 R-004）——漏加一处就是一次越权。
-type Viewer struct {
-	UserID  int64
-	IsAdmin bool
-}
+// Viewer 是查询视角。语义与授权层一致，直接复用其定义，避免两处各定义一份
+// 然后慢慢分叉。
+type Viewer = authz.Viewer
 
 // Filter 是任务查询条件。
 type Filter struct {

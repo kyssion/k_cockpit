@@ -2,6 +2,9 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"time"
 )
 
@@ -16,12 +19,32 @@ type MockClient struct{}
 func NewMockClient() *MockClient { return &MockClient{} }
 
 // Execute 直接返回成功，不产生任何副作用。
+//
+// 对需要返回值的操作给出形状合理的假数据（如创建虚拟机返回 UUID），
+// 否则上层拿不到它需要的东西，会在业务代码里被迫写 mock 专用的兜底分支
+// ——那正是 ADR-0007 要避免的「业务代码感知 mock」。
 func (m *MockClient) Execute(_ context.Context, op Operation) (*Result, error) {
+	data := map[string]any{}
+
+	if op.Kind == OpVMCreate {
+		data["uuid"] = mockUUID(op.NodeID, op.Target)
+	}
+
 	return &Result{
 		Success: true,
 		Message: "mock: " + string(op.Kind) + " 已执行",
-		Data:    map[string]any{},
+		Data:    data,
 	}, nil
+}
+
+// mockUUID 生成稳定且可辨识的假 UUID。
+//
+// 用运营者能一眼看出是假的格式（前缀 mock-）：如果它长得像真 UUID，
+// 排查问题时很容易把它当成真实虚拟化层的标识。
+func mockUUID(nodeID int64, name string) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d/%s", nodeID, name)))
+	h := hex.EncodeToString(sum[:16])
+	return fmt.Sprintf("mock-%s-%s-%s-%s-%s", h[0:8], h[8:12], h[12:16], h[16:20], h[20:32])
 }
 
 // Snapshot 返回固定的运行态：一律「在线」，心跳时间取当前时刻。
