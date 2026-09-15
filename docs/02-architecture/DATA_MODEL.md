@@ -57,7 +57,7 @@
 | `auth_action_token` | 邮件链接类令牌（邀请、找回密码、邮箱绑定） | `uniq_auth_action_token_token_hash`；`idx_auth_action_token_user_purpose` | 物 | F-1-04、F-1-05 |
 | `security_challenge` | 邮箱验证码与高风险二次验证挑战 | `idx_security_challenge_user_purpose`、`idx_security_challenge_expires_at` | 物 | F-1-03、F-1-04、F-10-01 |
 | `audit_log` | 审计日志（谁 / 何时 / 对哪个资源 / 做了什么 / 结果） | `idx_audit_log_created_at`、`idx_audit_log_resource`、`idx_audit_log_operator_id` | 物 | F-1-12 |
-| `system_setting` | 键值持久化设置（覆盖环境变量默认值） | 主键 `key` | 物 | F-9-01 |
+| `system_setting` | 键值持久化设置（覆盖环境变量默认值）；含 `value`、`previous_value`（最近一次变更前值，供回滚）、`updated_by`、`updated_at` | 主键 `key` | 物 | F-9-01 |
 
 ### 2.2 节点（1）
 
@@ -659,6 +659,7 @@ erDiagram
 | 2026-09-15 | 生成并执行建表脚本 `internal/database/migrations/0001_init_schema.sql`（43 张表 / 81 个显式索引），已建到 PostgreSQL 的 `k_cockpit` 库并在 `schema_migration` 登记；补 §6.1 迁移文件、执行方式与"示例 `user` 表冲突"的前置清理说明；同步 `storage_file` 索引名 | `0001_init_schema` |
 | 2026-09-15 | 按 [ADR-0005](../06-decisions/0005-control-plane-node-agent-architecture.md) 修订：§0 新增「节点接入」差异行；`node` 表去掉 API/SSH 双通道与远程探测字段（9 个），改为 agent 注册与信任字段（注册令牌哈希、证书指纹、注册状态）、agent 与协议版本、心跳与最后通信时间、能力上报时间与最近错误；同步 §2.2、§4.3、§5 枚举与 §2.10；迁移 `0002_node_agent_fields` 已执行 | `0002_node_agent_fields` |
 | 2026-09-15 | 全表复核（按 agent 架构逐表检查 43 张表）后的补充：`task` 表新增 `idempotency_key`（同一意图只允许一个任务）、`dispatched_at`、`last_reported_at`，`task.status` 增加 `unknown`；§0 异步任务差异行与 §5 枚举同步；`task_stage` 标注"由 agent 上报"；迁移 `0003_task_agent_fields` 已执行 | `0003_task_agent_fields` |
+| 2026-09-15 | 按 [`f-9-01-system-settings.md`](../07-specs/f-9-01-system-settings.md) 补充 `system_setting.previous_value`（最近一次变更前的值，供设置回滚，见该规格 §9 Q-007）；§2.1 实体说明同步 | **待创建**：`0004_settings_previous_value` |
 
 ---
 
