@@ -16,7 +16,8 @@ docs/
 ├── 02-architecture/               # 架构层：怎么做
 │   ├── ARCHITECTURE.md            # 整体架构设计
 │   ├── TECH_STACK.md              # 技术选型与理由
-│   └── DATA_MODEL.md              # 数据模型
+│   ├── DATA_MODEL.md              # 数据模型
+│   └── FRONTEND.md                # 前端设计：信息架构、设计系统、逐页设计
 ├── 03-api/                        # 接口层：对外契约
 │   └── API.md                     # 接口规范与清单
 ├── 04-engineering/                # 工程层：怎么协作
@@ -63,7 +64,8 @@ docs/
 4. 查阅 [`02-architecture/ARCHITECTURE.md`](02-architecture/ARCHITECTURE.md) 确认归属模块
 5. 查阅 [`04-engineering/CODING_STANDARDS.md`](04-engineering/CODING_STANDARDS.md) 与 [`TESTING.md`](04-engineering/TESTING.md)
 6. 涉及接口 → [`03-api/API.md`](03-api/API.md)
-7. 需要借鉴外部实现 → [`08-reference/README.md`](08-reference/README.md) 及各参考项目资料（[QVMConsole](08-reference/qvmconsole/README.md) / [kite](08-reference/kite/README.md)）
+7. 涉及界面 → [`02-architecture/FRONTEND.md`](02-architecture/FRONTEND.md)（页面设计、设计令牌与交互约定）
+8. 需要借鉴外部实现 → [`08-reference/README.md`](08-reference/README.md) 及各参考项目资料（[QVMConsole](08-reference/qvmconsole/README.md) / [kite](08-reference/kite/README.md)）
 
 **排查问题 / 操作运行环境**：
 
