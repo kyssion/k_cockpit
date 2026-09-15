@@ -1,6 +1,9 @@
 package agent
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // MockClient 是 Client 的假实现。
 //
@@ -18,6 +21,29 @@ func (m *MockClient) Execute(_ context.Context, op Operation) (*Result, error) {
 		Success: true,
 		Message: "mock: " + string(op.Kind) + " 已执行",
 		Data:    map[string]any{},
+	}, nil
+}
+
+// Snapshot 返回固定的运行态：一律「在线」，心跳时间取当前时刻。
+//
+// 心跳时间用 `time.Now()` 而不是固定值，是为了让界面上的「最后心跳」
+// 不至于随着服务运行时间推移显示成几小时前——那看起来像故障。
+//
+// 注意：这意味着**离线分支在接入真实 agent 前不会被触发**，
+// 包括「离线标记」与「离线时不派发任务」等逻辑，需在联调时集中验证
+// （见 docs/06-decisions/0007-mock-agent-first.md）。
+func (m *MockClient) Snapshot(_ context.Context, _ int64) (*Snapshot, error) {
+	now := time.Now()
+	return &Snapshot{
+		Status:          StatusOnline,
+		LastHeartbeat:   now,
+		AgentVersion:    "mock-0.1.0",
+		ProtocolVersion: 1,
+		Capabilities: []string{
+			"vm.create", "vm.start", "vm.stop", "vm.delete", "vm.snapshot",
+			"storage.pool.create", "network.bridge.list", "network.ovs.configure",
+		},
+		CapabilitiesAt: now,
 	}, nil
 }
 
