@@ -91,6 +91,7 @@ docs/06-decisions/             不得违背既有 ADR
 | [`f-5-01-storage-pool.md`](f-5-01-storage-pool.md) | 存储池管理 | F-5-01 | **Ready**（9 项决策见 §9） | <!-- TODO --> |
 | [`f-4-01-network-backend.md`](f-4-01-network-backend.md) | 网络后端抽象与能力降级 | F-4-01 | **Ready**（9 项决策见 §9） | <!-- TODO --> |
 | [`f-2-02-vm-create.md`](f-2-02-vm-create.md) | 虚拟机创建向导 | F-2-02 | **Ready**（9 项决策见 §9） | <!-- TODO --> |
+| [`f-2-01-vm-list.md`](f-2-01-vm-list.md) | 虚拟机列表、详情与电源操作 | F-2-01、F-2-03、F-2-04 | **Ready**（9 项决策见 §9） | <!-- TODO --> |
 
 ### 6.2 M2 待创建（按依赖顺序）
 
@@ -106,8 +107,11 @@ docs/06-decisions/             不得违背既有 ADR
 | 5 | `f-5-01-storage-pool.md` ✅ | F-5-01 | 1 |
 | 6 | `f-4-01-network-backend.md` ✅ | F-4-01 | 1 |
 | 7 | `f-2-02-vm-create.md` ✅ | F-2-02 | 1、4、5、6 |
-| 8 | `f-2-01-vm-list.md` | F-2-01、F-2-03 | 7 |
-| 9 | `f-10-01-high-risk-verification.md` | F-10-01、F-10-02 | 2、3 |
+| 8 | `f-2-01-vm-list.md` ✅ | F-2-01、F-2-03、F-2-04 | 7 |
+| 9 | `f-2-08-vnc-console.md` | F-2-08（P0，属 M2 完成标志） | 7 |
+| 10 | `f-10-01-high-risk-verification.md` | F-10-01、F-10-02 | 2、3 |
+
+> 第 9 项为**补录**：F-2-08（VNC 控制台）是 M2 的 P0 且是「控制台操作」这一完成标志的必要条件，此前规划时遗漏。它涉及 WebSocket 代理与独立窗口，粒度上独立成规格。
 
 > 平台外壳（F-11-01、F-11-02）属前端范畴，其规格在 `web/` 工程创建后按 [`FRONTEND.md`](../02-architecture/FRONTEND.md) 补，不在上表。
 > `web/` 前端工程本身尚无规格——按 [`ROADMAP.md`](../01-product/ROADMAP.md) M2 §2.5 执行。
@@ -158,3 +162,4 @@ AI 代理在实现某个功能前，应：
 | 2026-09-15 | 新增第五份规格 [`f-5-01-storage-pool.md`](f-5-01-storage-pool.md)（存储池管理，**Ready**）；其 5 个接口 API-016~API-020 登记至 [`../03-api/API.md`](../03-api/API.md) |
 | 2026-09-15 | 新增第六份规格 [`f-4-01-network-backend.md`](f-4-01-network-backend.md)（网络后端抽象与能力降级，**Ready**）；其 2 个接口 API-021~API-022 登记至 [`../03-api/API.md`](../03-api/API.md)；同步清理 ADR-0004 中已过时的「待 PRD 定稿后确认」说明 |
 | 2026-09-15 | 新增第七份规格 [`f-2-02-vm-create.md`](f-2-02-vm-create.md)（虚拟机创建向导，**Ready**）；其 2 个接口 API-023~API-024 登记至 [`../03-api/API.md`](../03-api/API.md) |
+| 2026-09-15 | 新增第八份规格 [`f-2-01-vm-list.md`](f-2-01-vm-list.md)（虚拟机列表、详情与电源操作，**Ready**）；其 5 个接口 API-025~API-029 登记至 [`../03-api/API.md`](../03-api/API.md)；**补录遗漏**：F-2-08（VNC 控制台，P0 且属 M2 完成标志）此前未列入规划，现补为第 9 项 |
