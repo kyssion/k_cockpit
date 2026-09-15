@@ -32,12 +32,12 @@ docs/
 │   ├── PROMPTS.md                 # 提示词库
 │   └── CONTEXT.md                 # 上下文管理策略
 ├── 06-decisions/                  # 决策层：为什么这么选
-│   ├── README.md                  # ADR 说明
-│   └── 0001-record-architecture-decisions.md
+│   ├── README.md                  # ADR 说明与清单
+│   └── 0001~0006-*.md             # 架构决策记录（只增不改）
 ├── 07-specs/                      # 规格层：单个功能怎么做
-│   ├── README.md                  # 规格说明与规格清单（含 M2 规划顺序）
+│   ├── README.md                  # 规格说明、规格清单与 M2 规划顺序
 │   ├── _TEMPLATE.md               # 规格模板
-│   └── f-6-01-node-onboarding.md  # 节点纳管与 agent 通道（Draft）
+│   └── f-*.md                     # 各功能规格（清单见 README）
 └── 08-reference/                  # 参考层：外部参考项目的功能与实现资料
     ├── README.md                  # 参考项目总览：使用原则、只读与同步
     ├── qvmconsole/                # QVMConsole：工程概览 / 工程架构 / 功能清单 / 详细功能清单(接口·任务) / 功能结论 / 踩坑清单
