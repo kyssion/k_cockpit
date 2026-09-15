@@ -42,6 +42,10 @@
 | 缓存 | <!-- TODO: 需要时再选型 --> | | | |
 | 消息队列 | <!-- TODO: 需要时再选型 --> | | | |
 | 接口风格 | REST（JSON） | — | 起步阶段最直接；详见 `../03-api/API.md` | |
+| 架构形态 | 控制面 + 节点代理（agent） | — | 控制面保持平台无关；宿主侧操作与能力探测全部下沉到节点 | [0005](../06-decisions/0005-control-plane-node-agent-architecture.md) |
+| 节点代理 | 与控制面同仓库构建的独立二进制（systemd 托管） | — | 节点侧只需一个进程，无前端、无独立数据库 | [0005](../06-decisions/0005-control-plane-node-agent-architecture.md) |
+| 控制面 ↔ agent 协议 | 领域操作 + 任务指令/进度流的 RPC 长连接（gRPC 系） | **待定** | 不转发 libvirt 原始 RPC；协议版本兼容 N-1；实现阶段另定具体框架 | [0005](../06-decisions/0005-control-plane-node-agent-architecture.md) |
+| 节点接入鉴权 | 一次性注册令牌 + mTLS 客户端证书 | — | 控制面**不持有**宿主机登录凭据 | [0005](../06-decisions/0005-control-plane-node-agent-architecture.md) |
 
 ---
 
@@ -85,3 +89,4 @@
 | 日期 | 变更内容 | 关联 ADR |
 |---|---|---|
 | | 创建文档 | |
+| 2026-09-15 | 新增「架构形态」「节点代理」「控制面 ↔ agent 协议」「节点接入鉴权」四行（协议实现与版本标注为待定，不臆造） | [0005](../06-decisions/0005-control-plane-node-agent-architecture.md) |
