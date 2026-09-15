@@ -14,7 +14,8 @@
 |---|---|---|---|
 | 表名 | 复数（`users`、`vpc_switches`） | **单数**（`user`、`vpc_switch`） | 项目已定 GORM `SingularTable`，避免 `user` / `users` 两套命名并存（见 `internal/database`） |
 | 部署形态 | 单机：面板与被管宿主机 1:1 | **多节点**：资源表带 `node_id`，"全局名称唯一"改为"**`(node_id, name)` 唯一**" | 一个控制面管理 N 台宿主机（PRD §4.2）；这也是迁移与放置能力的前提 |
-| 异步任务 | 纯内存，进程重启即丢失 | **落库**：`task` + `task_stage` | 控制面重启不丢任务；任务中心可查历史；支持"宿主阶段/来宾阶段"分别重试与审计 |
+| 节点接入 | 目标面板 API + 宿主机 **root SSH** 双通道（控制面持有各节点凭据） | **agent 反向长连接** + 一次性注册令牌 + mTLS；`node` 表**不含任何登录凭据字段** | [ADR-0005](../06-decisions/0005-control-plane-node-agent-architecture.md)：凭据集中化风险不可接受，能力探测下沉到节点 |
+| 异步任务 | 纯内存，进程重启即丢失 | **落库**：`task` + `task_stage`；任务带**幂等键**、下发时间与最近上报时间 | 控制面重启不丢任务；任务中心可查历史；agent 侧据幂等键去重、重连重放不重复执行；支持"宿主阶段/来宾阶段"分别重试与审计 |
 | JSON 列 | SQLite `text` 内嵌 JSON | 统一 `text` + 应用层序列化，**不使用 PG 的 `JSONB`** | 双库（PostgreSQL / SQLite）行为一致，避免驱动差异 |
 | 运行时属性 | 面板配置落库，运行时走命令 | 同：**快照、磁盘、网卡运行时详情以虚拟化层为唯一事实来源，不落库** | 避免双源不一致；配额计数按需查询 |
 | 外键 | 无数据库级外键 | 同：**不建数据库外键**，用索引 + 应用层校验 + 显式级联删除 | 与 GORM 约定一致；软删除与级联策略必须在应用层决策，硬外键会挡住 |
@@ -62,7 +63,7 @@
 
 | 表 | 用途 | 关键字段与索引 | 删除 | 关联功能 |
 |---|---|---|---|---|
-| `node` | 被管宿主机：API / SSH 双通道连接信息、状态、能力探测结果、维护模式 | `uniq_node_name`；`idx_node_enabled_status` | 软 | F-6-01 ~ F-6-07 |
+| `node` | 被管宿主机：**agent 注册与信任信息**（注册令牌哈希、证书指纹、注册状态）、agent 与协议版本、心跳与状态、**能力自报**、维护模式 | `uniq_node_name`、`uniq_node_agent_id`；`idx_node_enabled_status`、`idx_node_last_heartbeat` | 软 | F-6-01 ~ F-6-08 |
 
 ### 2.3 存储（6）
 
@@ -118,7 +119,7 @@
 
 | 表 | 用途 | 关键字段与索引 | 删除 | 关联功能 |
 |---|---|---|---|---|
-| `task` | 异步任务：类型、状态、参数（脱敏）、进度、结果、取消标记 | `idx_task_status_created`、`idx_task_node_id`、`idx_task_resource`、`idx_task_type` | 物 | F-7-01、F-7-02、F-7-06 |
+| `task` | 异步任务：类型、**幂等键**、状态、参数（脱敏）、进度、结果、取消标记、下发与上报时间 | `uniq_task_idempotency_key`；`idx_task_status_created`、`idx_task_node_id`、`idx_task_resource`、`idx_task_type`、`idx_task_dispatched_at` | 物 | F-7-01、F-7-02、F-7-06 |
 | `task_stage` | 任务阶段（宿主阶段 / 来宾阶段），支持阶段级重试 | `idx_task_stage_task_seq` | 物 | F-2-10、F-7-06 |
 | `scheduler_event` | 调度事件（调度器 key / 分组 / 结果） | `idx_scheduler_event_key`、`idx_scheduler_event_created_at` | 物 | F-7-04 |
 
@@ -145,7 +146,7 @@
 | ACL 预览（F-4-04） | 由安全组规则**实时汇总计算** | 无独立状态 |
 | 实时通道（F-7-03）与指标实时值（F-8-02 ~ F-8-05） | 周期采集落 `host_stats_record` / `vm_stats_record`；实时值只在内存 | 展示层只读缓存，不在请求路径直连虚拟化层 |
 | 导入 / 导出（F-2-13、F-2-14、F-3-05） | 结果文件 + `task` / `storage_file` | 无常驻状态 |
-| 节点探测明细（F-6-02） | 内嵌 `node.probe_detail`（JSON） | 只需保留最近一次结论与逐项结果 |
+| 节点能力明细（F-6-02） | agent 自报，内嵌 `node.capabilities`（JSON）+ `capabilities_at` | 只需保留最近一次上报结果与时间，不保留历史序列 |
 | 高风险验证挑战（F-10-01） | `security_challenge` | 短时有效，用后即焚 |
 | 输入侧防护与响应安全（F-10-03、F-10-04）、公网开关（F-10-06）、危险变更回滚（F-10-07） | 中间件与内存状态；开关类配置落 `system_setting` | 无业务实体 |
 | 进程与资源归属校验（F-10-08） | 运行时判定 | 规则属代码约束，不落数据 |
@@ -263,30 +264,44 @@ erDiagram
 | 字段 | 类型 | 可空 | 默认值 | 说明 |
 |---|---|---|---|---|
 | id | bigint | 否 | 自增 | 主键 |
-| name | varchar(64) | 否 | — | 节点名 |
-| api_base_url | varchar(255) | 是 | NULL | API 通道地址 |
-| api_id | varchar(64) | 是 | NULL | API 凭证 ID |
-| api_key_enc | text | 是 | NULL | API 凭证密钥（加密） |
-| ssh_host | varchar(255) | 是 | NULL | SSH 地址 |
-| ssh_port | int | 否 | 22 | SSH 端口 |
-| ssh_user | varchar(64) | 是 | NULL | SSH 用户（迁移目标要求 root） |
-| ssh_auth_type | varchar(16) | 否 | `key` | `password` / `key` |
-| ssh_password_enc | text | 是 | NULL | SSH 密码（加密） |
-| ssh_private_key_enc | text | 是 | NULL | SSH 私钥（加密） |
+| name | varchar(64) | 否 | — | 节点名（展示用） |
+| agent_id | varchar(64) | 是 | NULL | agent 唯一标识（注册时分配），唯一 |
+| enroll_state | varchar(16) | 否 | `pending` | 注册状态：`pending` / `registered` / `revoked` |
+| enroll_token_hash | varchar(128) | 是 | NULL | 一次性注册令牌（**只存哈希**，用后失效） |
+| enroll_expires_at | timestamptz | 是 | NULL | 注册令牌有效期 |
+| cert_fingerprint | varchar(128) | 是 | NULL | 客户端证书指纹（mTLS 与节点绑定） |
+| agent_version | varchar(32) | 是 | NULL | agent 版本 |
+| protocol_version | int | 否 | 0 | agent 协议版本（控制面兼容 N-1） |
+| status | varchar(16) | 否 | `unknown` | `online` / `offline` / `unknown`（由心跳驱动） |
+| last_heartbeat_at | timestamptz | 是 | NULL | 最近心跳时间（超出阈值判离线） |
+| last_seen_at | timestamptz | 是 | NULL | 最近一次成功通信时间（"数据陈旧"判定基准） |
+| last_error | varchar(255) | 是 | NULL | 最近一次错误摘要（断开原因等） |
+| capabilities | text | 是 | NULL | **agent 自报能力**（JSON：虚拟化命令与版本、网桥与 OVS 能力、IOMMU、目录与权限等） |
+| capabilities_at | timestamptz | 是 | NULL | 能力上报时间 |
 | enabled | bool | 否 | true | 是否启用 |
-| status | varchar(16) | 否 | `unknown` | `online` / `error` / `unknown` |
 | maintenance_mode | bool | 否 | false | 维护模式（进入后拒绝新建类操作） |
 | is_migration_target | bool | 否 | true | 是否可作为迁移目标 |
-| capabilities | text | 是 | NULL | 能力探测结果（JSON：虚拟化命令、网桥、IOMMU、OVS 能力等） |
-| last_probe_at | timestamptz | 是 | NULL | 最近探测时间 |
-| last_probe_message | varchar(255) | 是 | NULL | 最近探测结论（失败原因摘要） |
-| probe_detail | text | 是 | NULL | 逐项探测明细（JSON） |
 | remark | varchar(255) | 是 | NULL | 备注 |
 | created_at / updated_at | timestamptz | 否 | now | 审计字段 |
 | deleted_at | timestamptz | 是 | NULL | 软删除标记 |
 
-**索引**：`uniq_node_name`（唯一）；`idx_node_enabled_status`。
-**约束**：`api_key_enc` / `ssh_password_enc` / `ssh_private_key_enc` **必须加密**（`F-6-01`）；保存时先完整探测，探测不通过不得入库。
+**索引**：`uniq_node_name`、`uniq_node_agent_id`（唯一）；`idx_node_enabled_status`、`idx_node_last_heartbeat`。
+**约束**：
+- `enroll_token_hash` **只存哈希**，用后失效、可撤销；
+- 控制面**不保存宿主机登录凭据**（无 SSH 密码/私钥字段），节点侧交互一律经 agent（[ADR-0005](../06-decisions/0005-control-plane-node-agent-architecture.md)）；
+- `capabilities` 为 agent 上报结果，控制面**只读不改**；节点离线时其数据按 `last_seen_at` 标记为陈旧。
+
+**`capabilities` 键位约定**（agent 自报；控制面据此启用或降级，对应 `F-6-02`、`F-4-01`、`F-6-03`）：
+
+| 键 | 内容 | 用途 |
+|---|---|---|
+| `os` | 发行版、版本、内核、架构 | 平台适配与降级提示 |
+| `commands` | 关键命令及版本（虚拟化、镜像、网络、存储、抓包类） | 命令缺失即关闭对应能力（"整功能不可用"或降级） |
+| `libvirt` | 是否可用、连接方式、版本 | 决定虚拟机操作走库接口还是命令降级 |
+| `network_backend` | 网桥列表、OVS 是否安装、OpenFlow13 / meter / ingress policing 支持 | 决定基础模式 / 增强模式（[ADR-0004](../06-decisions/0004-adopt-openvswitch-as-network-backend.md)） |
+| `iommu` | 是否开启、可绑定 vfio-pci 的设备 | 硬件直通可用性 |
+| `storage` | 镜像与模板目录、可用容量、文件系统类型 | 创建与放置依据 |
+| `guest_support` | 可创建的来宾架构与固件支持 | 创建向导的机型与固件联动 |
 
 ### 4.4 `storage_pool`
 
@@ -441,7 +456,8 @@ erDiagram
 |---|---|---|---|---|
 | id | bigint | 否 | 自增 | 主键（任务号） |
 | type | varchar(48) | 否 | — | 任务类型（如 `vm_create`、`vm_migrate`、`template_prepare`） |
-| status | varchar(16) | 否 | `pending` | `pending` / `running` / `success` / `failed` / `canceled` |
+| idempotency_key | varchar(64) | 是 | NULL | **幂等键**：控制面生成、随指令下发给 agent；agent 据此去重，重连重放不会重复执行（唯一索引） |
+| status | varchar(16) | 否 | `pending` | `pending` / `running` / `success` / `failed` / `canceled` / **`unknown`**（节点离线导致结果未知，由重连对账收敛） |
 | node_id | bigint | 是 | NULL | 执行节点（跨节点任务记目标节点） |
 | resource_type | varchar(32) | 是 | NULL | 关联资源类型（`vm` / `template` / `switch` …） |
 | resource_id | bigint | 是 | NULL | 关联资源 ID |
@@ -454,11 +470,16 @@ erDiagram
 | error | varchar(512) | 是 | NULL | 失败原因 |
 | cancel_requested | bool | 否 | false | 是否请求取消（等待中直接标记取消，运行中触发取消信号） |
 | created_by | bigint | 是 | NULL | 发起人 |
+| dispatched_at | timestamptz | 是 | NULL | 指令**下发**时间（与 created_at 区分，便于判断排队与通道耗时） |
+| last_reported_at | timestamptz | 是 | NULL | agent **最近一次进度上报**时间（配合 `node.last_seen_at` 判定任务是否失联） |
 | started_at / finished_at | timestamptz | 是 | NULL | 开始 / 结束时间 |
 | created_at / updated_at | timestamptz | 否 | now | 审计字段 |
 
-**索引**：`idx_task_status_created`；`idx_task_node_id`；`idx_task_resource`（`resource_type` + `resource_id`）；`idx_task_type`；`idx_task_owner_id`。
-**约束**：params / result **必须脱敏**（`F-9-02`）；同一资源的互斥由应用层加锁，不依赖本表。
+**索引**：`uniq_task_idempotency_key`（唯一）；`idx_task_status_created`、`idx_task_node_id`、`idx_task_resource`（`resource_type` + `resource_id`）、`idx_task_type`、`idx_task_owner_id`、`idx_task_dispatched_at`。
+**约束**：
+- params / result **必须脱敏**（`F-9-02`）；
+- 同一资源的互斥由应用层加锁，不依赖本表；
+- 任务状态以**控制面记录为权威**，agent 只上报进度与阶段；节点离线时任务转为 `unknown`，**不得**据此判定失败（见 [`../02-architecture/ARCHITECTURE.md`](../02-architecture/ARCHITECTURE.md) §4.4）。
 
 ### 4.12 `task_stage`
 
@@ -545,9 +566,9 @@ erDiagram
 | `user` | role | `admin` / `tenant` | 平台管理员 / 租户用户 |
 | `user` | status | `pending` / `active` / `banned` | 待激活 / 正常 / 已封禁 |
 | `user_session` | token_type | `access` / `login` / `bootstrap` | 完整会话 / 登录二次验证 / 安全初始化 |
-| `node` | status | `online` / `error` / `unknown` | 在线 / 异常 / 未知 |
-| `node` | ssh_auth_type | `password` / `key` | SSH 认证方式 |
-| `node` | capabilities | key-value | 能力探测结果（虚拟化命令、网桥、IOMMU、OVS 能力） |
+| `node` | status | `online` / `offline` / `unknown` | 心跳正常 / 心跳超时（数据标记陈旧） / 从未连接 |
+| `node` | enroll_state | `pending` / `registered` / `revoked` | 已生成令牌待注册 / 已注册 / 已撤销 |
+| `node` | capabilities | key-value | **agent 自报**能力（虚拟化命令与版本、网桥与 OVS 能力、IOMMU、目录与权限） |
 | `storage_pool` | kind | `local` / `lvm_vg` | 本地盘 / LVM 卷组 |
 | `storage_pool` | status | `ready` / `unmounted` / `unallocated` / `error` | 就绪 / 未挂载 / 未分配 / 异常 |
 | `storage_file` | category | `iso` / `share` / `disk` | ISO 镜像 / 文件共享 / 虚拟磁盘 |
@@ -564,8 +585,8 @@ erDiagram
 | `vm` | status | `running` / `stopped` / `paused` / `suspended` / `error` / `unknown` | **以虚拟化层为准** |
 | `template` | status | `preparing` / `ready` / `error` | 制作中 / 就绪 / 失败 |
 | `template` | visibility | `private` / `public` | 私有 / 对租户可见 |
-| `task` | status | `pending` / `running` / `success` / `failed` / `canceled` | 任务状态（"取消算不算失败"由 `F-7-06` 定义） |
-| `task_stage` | status | `pending` / `running` / `success` / `failed` / `skipped` | 阶段状态 |
+| `task` | status | `pending` / `running` / `success` / `failed` / `canceled` / `unknown` | 任务状态（"取消算不算失败"由 `F-7-06` 定义）；`unknown` 表示节点离线导致结果未知，重连对账后收敛 |
+| `task_stage` | status | `pending` / `running` / `success` / `failed` / `skipped` | 阶段状态（阶段由 **agent 上报**，控制面只聚合） |
 | `traffic_stat_daily` | scope_type | `user` / `switch` / `vm` | 流量统计口径 |
 | `audit_log` | source | `web` / `api` / `scheduler` / `system` | 操作来源 |
 
@@ -580,6 +601,8 @@ erDiagram
 | 文件 | 说明 |
 |---|---|
 | `internal/database/migrations/0001_init_schema.sql` | 初始表结构：**43 张表 + 81 个显式索引**（另有 43 个主键索引）。PostgreSQL 专用，全部语句带 `IF NOT EXISTS`，可重复执行 |
+| `internal/database/migrations/0002_node_agent_fields.sql` | 节点接入方式改为 **agent**（[ADR-0005](../06-decisions/0005-control-plane-node-agent-architecture.md)）：删除 API/SSH 双通道与远程探测字段，新增注册令牌哈希、证书指纹、注册状态、agent 与协议版本、心跳/最后通信/能力上报时间与最近错误 |
+| `internal/database/migrations/0003_task_agent_fields.sql` | 任务表适配 agent 执行：新增 `idempotency_key`（唯一）、`dispatched_at`、`last_reported_at`；`task.status` 增加 `unknown` 取值用于"节点离线致结果未知" |
 
 - **执行方式**：`psql "<DSN>" -f internal/database/migrations/0001_init_schema.sql`；或由迁移执行器读取该目录、按 `schema_migration` 去重后执行。
 - **执行后登记**：写入 `schema_migration`（`migration_id` = 文件名去扩展名、`checksum` = 文件 sha256、`applied_at`），用于发现"历史迁移被改动"。
@@ -634,6 +657,8 @@ erDiagram
 |---|---|---|
 | 2026-09-14 | 完成数据模型设计：43 张表（身份 7 / 节点 1 / 存储 6 / 网络 16 / 虚拟机 7 / 模板 1 / 任务 3 / 监控 1 / 迁移 1），确定多节点归属、任务落库、JSON 列与不建外键等设计要点，补核心表字段、枚举登记、迁移策略与生命周期 | 待实现 |
 | 2026-09-15 | 生成并执行建表脚本 `internal/database/migrations/0001_init_schema.sql`（43 张表 / 81 个显式索引），已建到 PostgreSQL 的 `k_cockpit` 库并在 `schema_migration` 登记；补 §6.1 迁移文件、执行方式与"示例 `user` 表冲突"的前置清理说明；同步 `storage_file` 索引名 | `0001_init_schema` |
+| 2026-09-15 | 按 [ADR-0005](../06-decisions/0005-control-plane-node-agent-architecture.md) 修订：§0 新增「节点接入」差异行；`node` 表去掉 API/SSH 双通道与远程探测字段（9 个），改为 agent 注册与信任字段（注册令牌哈希、证书指纹、注册状态）、agent 与协议版本、心跳与最后通信时间、能力上报时间与最近错误；同步 §2.2、§4.3、§5 枚举与 §2.10；迁移 `0002_node_agent_fields` 已执行 | `0002_node_agent_fields` |
+| 2026-09-15 | 全表复核（按 agent 架构逐表检查 43 张表）后的补充：`task` 表新增 `idempotency_key`（同一意图只允许一个任务）、`dispatched_at`、`last_reported_at`，`task.status` 增加 `unknown`；§0 异步任务差异行与 §5 枚举同步；`task_stage` 标注"由 agent 上报"；迁移 `0003_task_agent_fields` 已执行 | `0003_task_agent_fields` |
 
 ---
 
