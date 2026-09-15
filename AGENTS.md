@@ -125,10 +125,17 @@ pnpm test:e2e     # E2E（Playwright）
 k_cockpit/
 ├── cmd/server/            # 程序入口（main 包）
 ├── internal/              # 私有代码，外部模块不可导入
+│   ├── agent/             # 节点 agent 交互契约（开发期为 mock，见 ADR-0007）
+│   ├── api/               # HTTP 通用约定：统一响应、错误码、中间件
+│   ├── audit/             # 审计流水写入
+│   ├── auth/              # 认证：密码、令牌、会话、首次初始化
+│   ├── authz/             # 授权：角色判定（资源归属过滤随业务接入）
 │   ├── config/            # 配置加载与校验
 │   ├── database/          # 数据库连接、驱动切换与 SQL 迁移（migrations/）
 │   ├── handler/           # HTTP 接口实现（测试同目录）
-│   └── router/            # 路由注册
+│   ├── model/             # 数据库模型（表结构以 DATA_MODEL.md 为准）
+│   ├── node/              # 节点管理（F-6-01 / F-6-02）
+│   └── router/            # 路由注册（角色要求在此声明）
 ├── web/                   # 前端工程（纯 SPA，结构与约定见 docs/02-architecture/FRONTEND.md §2.2）
 ├── reference/             # 只读的外部参考项目（git 子模块，见 docs/08-reference/README.md）
 ├── docs/                  # 所有项目文档（见 docs/README.md）
