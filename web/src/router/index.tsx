@@ -5,6 +5,7 @@ import { AppLayout } from '@/layout/AppLayout'
 import { DashboardPage } from '@/views/dashboard/DashboardPage'
 import { LoginPage } from '@/views/auth/LoginPage'
 import { SetupPage } from '@/views/auth/SetupPage'
+import { NodeListPage } from '@/views/node/NodeListPage'
 
 import { RequireAuth } from './RequireAuth'
 import { RequireInitialized } from './RequireInitialized'
@@ -34,7 +35,7 @@ export const router = createBrowserRouter([
           { path: 'task', element: pending('任务中心', '任务列表、进度与日志') },
           { path: 'my-storage', element: pending('我的存储', '个人空间与文件管理') },
           { path: 'public-ip', element: pending('公网 IP', '资源池与绑定') },
-          { path: 'node', element: pending('节点管理', '节点列表与 agent 纳管') },
+          { path: 'node', element: <NodeListPage /> },
           { path: 'storage-pool', element: pending('存储池', '存储池与磁盘管理') },
           { path: 'network', element: pending('网络中心', '交换机、安全组与 ACL') },
           { path: 'firewall', element: pending('防火墙', '规则与连接管理') },
