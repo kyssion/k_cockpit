@@ -158,11 +158,11 @@
 | API-003 | GET | `/api/v1/nodes` | 节点列表（含状态与最后心跳） | 是 | 规划中 | F-6-02 |
 | API-004 | GET | `/api/v1/nodes/:id` | 节点详情（含能力清单） | 是 | 规划中 | F-6-02 |
 | API-005 | DELETE | `/api/v1/nodes/:id` | 移除节点（需二次验证） | 是（管理员） | 规划中 | F-6-01 |
-| API-006 | POST | `/api/v1/auth/login` | 用户名密码登录，返回令牌与用户信息 | 否（公开，理由见规格） | 规划中 | F-1-01 |
-| API-007 | POST | `/api/v1/auth/logout` | 登出当前会话 | 是 | 规划中 | F-1-02 |
-| API-008 | GET | `/api/v1/auth/session` | 当前会话与用户信息 | 是 | 规划中 | F-1-02 |
-| API-009 | GET | `/api/v1/auth/sessions` | 会话与登录记录列表（含当前会话标记） | 是 | 规划中 | F-1-02 |
-| API-010 | DELETE | `/api/v1/auth/sessions/:id` | 撤销指定会话（敏感操作，需二次验证） | 是 | 规划中 | F-1-02 |
+| API-006 | POST | `/api/v1/auth/login` | 用户名密码登录；令牌经 **HttpOnly Cookie** 下发，响应只含用户信息 | 否（公开，理由见 ADR-0008 同类的自举问题） | 已实现 | F-1-01 |
+| API-007 | POST | `/api/v1/auth/logout` | 登出当前会话（仅撤销当前会话，并清除 Cookie） | 是 | 已实现 | F-1-02 |
+| API-008 | GET | `/api/v1/auth/session` | 当前会话与用户信息 | 是 | 已实现 | F-1-02 |
+| API-009 | GET | `/api/v1/auth/sessions` | 会话与登录记录列表（含当前会话标记，响应不含 session_id） | 是 | 已实现 | F-1-02 |
+| API-010 | DELETE | `/api/v1/auth/sessions/:id` | 撤销指定会话（越权与不存在均返回 404） | 是 | 已实现（**二次验证待 f-10-01 接入**） | F-1-02 |
 | API-011 | GET | `/api/v1/tasks` | 任务列表（按状态 / 类型 / 资源 / 时间筛选，归属过滤） | 是 | 规划中 | F-7-02 |
 | API-012 | GET | `/api/v1/tasks/:id` | 任务详情（含参数、结果与阶段时间线） | 是 | 规划中 | F-7-02 |
 | API-013 | POST | `/api/v1/tasks/:id/cancel` | 请求取消任务 | 是 | 规划中 | F-7-02 |
@@ -191,6 +191,10 @@
 | API-036 | GET | `/api/v1/settings` | 设置项清单（元数据、当前生效值、来源、是否被环境变量锁定） | 是 | 规划中 | F-9-01 |
 | API-037 | PATCH | `/api/v1/settings` | 批量更新设置（部分成功语义，失败项自动回滚） | 是 | 规划中 | F-9-01 |
 | API-038 | POST | `/api/v1/settings/rollback` | 将指定设置项回滚到最近一次变更前的值 | 是 | 规划中 | F-9-01 |
+| API-039 | GET | `/api/v1/setup/status` | 系统是否已完成初始化（供前端决定跳初始化页或登录页） | 否（公开，理由见 [ADR-0008](../06-decisions/0008-first-admin-bootstrap.md)） | 已实现 | 首次初始化 |
+| API-040 | POST | `/api/v1/setup/admin` | 用一次性令牌创建首个管理员；成功后自动建立会话 | 否（公开，理由同上） | 已实现 | 首次初始化 |
+
+> **公开接口共 4 个**（`/health`、`/api/v1/setup/*`、`/api/v1/auth/login`）。前两个的公开理由是「系统尚无可用凭据时的自举需要」：初始化接口靠**只能从服务端日志获取**的一次性令牌保护（[ADR-0008](../06-decisions/0008-first-admin-bootstrap.md)），登录接口是获取凭据的入口本身。新增公开接口必须在此说明理由。
 
 **状态口径**：
 
