@@ -73,7 +73,7 @@ go test -cover ./...
 go test ./internal/handler/...
 ```
 
-**本地运行提示**：默认配置使用 SQLite，数据文件写入 `data/`；首次运行需将 `DB_AUTO_MIGRATE` 设为 `true` 才会自动建表。
+**本地运行提示**：默认配置使用 SQLite，数据文件写入 `data/`。表结构由 [`internal/database/migrations/`](internal/database/migrations/) 下的 SQL 迁移管理（**服务启动不做自动迁移**），执行方式见 [`docs/02-architecture/DATA_MODEL.md`](docs/02-architecture/DATA_MODEL.md) 第 6 节。
 
 ---
 

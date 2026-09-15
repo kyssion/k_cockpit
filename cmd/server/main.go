@@ -1,6 +1,8 @@
 // Package main 是 HTTP 服务的入口。
 //
-// 启动流程：加载配置 -> 连接数据库 -> （可选）自动迁移 -> 注册路由 -> 启动服务。
+// 启动流程：加载配置 -> 连接数据库 -> 注册路由 -> 启动服务。
+// 表结构由 internal/database/migrations/ 下的 SQL 迁移管理（见
+// docs/02-architecture/DATA_MODEL.md 第 6 节），启动流程不做自动迁移。
 package main
 
 import (
@@ -11,7 +13,6 @@ import (
 
 	"k_cockpit/internal/config"
 	"k_cockpit/internal/database"
-	"k_cockpit/internal/model"
 	"k_cockpit/internal/router"
 )
 
@@ -28,13 +29,6 @@ func main() {
 	db, err := database.Open(cfg.DB, cfg.Debug)
 	if err != nil {
 		log.Fatalf("初始化数据库失败: %v", err)
-	}
-
-	if cfg.DB.AutoMigrate {
-		if err := db.AutoMigrate(&model.User{}); err != nil {
-			log.Fatalf("自动迁移失败: %v", err)
-		}
-		log.Print("数据库迁移完成")
 	}
 
 	h := server.Default(server.WithHostPorts(cfg.HTTP.Addr()))

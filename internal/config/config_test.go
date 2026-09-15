@@ -134,7 +134,6 @@ func TestLoad_FromEnv(t *testing.T) {
 	t.Setenv("DB_MAX_OPEN_CONNS", "10")
 	t.Setenv("DB_MAX_IDLE_CONNS", "2")
 	t.Setenv("DB_CONN_MAX_LIFETIME", "30m")
-	t.Setenv("DB_AUTO_MIGRATE", "true")
 
 	cfg, err := Load()
 	if err != nil {
@@ -155,9 +154,6 @@ func TestLoad_FromEnv(t *testing.T) {
 	}
 	if cfg.DB.ConnMaxLifetime != 30*time.Minute {
 		t.Errorf("ConnMaxLifetime = %v, 期望 30m", cfg.DB.ConnMaxLifetime)
-	}
-	if !cfg.DB.AutoMigrate {
-		t.Error("AutoMigrate 应为 true")
 	}
 }
 

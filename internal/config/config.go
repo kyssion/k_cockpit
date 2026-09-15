@@ -57,8 +57,6 @@ type DB struct {
 	MaxOpenConns    int
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
-
-	AutoMigrate bool // 启动时自动建表，仅建议开发环境开启
 }
 
 // DSN 依据 Driver 返回对应的连接串。
@@ -102,8 +100,8 @@ func (c Config) Validate() error {
 // String 返回脱敏后的配置摘要，避免密码等敏感信息进入日志。
 func (c Config) String() string {
 	return fmt.Sprintf(
-		"env=%s debug=%t http=%s db.driver=%s db.name=%s db.maxOpen=%d autoMigrate=%t",
-		c.Env, c.Debug, c.HTTP.Addr(), c.DB.Driver, c.DB.Name, c.DB.MaxOpenConns, c.DB.AutoMigrate,
+		"env=%s debug=%t http=%s db.driver=%s db.name=%s db.maxOpen=%d",
+		c.Env, c.Debug, c.HTTP.Addr(), c.DB.Driver, c.DB.Name, c.DB.MaxOpenConns,
 	)
 }
 
@@ -131,8 +129,6 @@ func Load() (Config, error) {
 			MaxOpenConns:    envInt("DB_MAX_OPEN_CONNS", 25),
 			MaxIdleConns:    envInt("DB_MAX_IDLE_CONNS", 5),
 			ConnMaxLifetime: envDuration("DB_CONN_MAX_LIFETIME", time.Hour),
-
-			AutoMigrate: envBool("DB_AUTO_MIGRATE", false),
 		},
 	}
 

@@ -237,7 +237,7 @@ if (valid) {
 - 接收者用 1-2 字符短名，同类型保持一致；不用 `this` / `self`
 - 切片用 `make` 预分配已知容量；判空用 `len(s) == 0`
 - `context.Context` 作为函数首个参数传递；**不把它存进结构体**
-- 依赖通过构造函数注入（见 `handler.NewUser`），不用全局变量
+- 依赖通过构造函数 / 工厂函数注入，不用全局变量（如 handler 以函数参数接收 `*gorm.DB`，见 `handler.Health`）
 - 仅在程序无法继续初始化时使用 `panic`，常规错误一律返回 `error`
 
 **禁忌**

@@ -27,7 +27,6 @@ cd k_cockpit
 
 # 2. 准备环境变量（默认即为 SQLite，无需额外安装数据库）
 cp .env.example .env
-# 首次运行请把 .env 中的 DB_AUTO_MIGRATE 改为 true，服务启动时会自动建表
 
 # 3. 安装依赖
 go mod download
@@ -59,7 +58,7 @@ DB_PASSWORD=your_password
 DB_SSLMODE=disable
 ```
 
-需先自行创建数据库 `k_cockpit`。表结构通过 `DB_AUTO_MIGRATE=true` 自动创建。
+需先自行创建数据库 `k_cockpit`，再执行 `internal/database/migrations/` 下的 SQL 迁移建表（见 [`../02-architecture/DATA_MODEL.md`](../02-architecture/DATA_MODEL.md) 第 6 节）。**服务启动不做自动建表**。
 
 ---
 
@@ -79,7 +78,7 @@ DB_SSLMODE=disable
 | 单元测试 | `go test ./...` |
 | 单包测试 | `go test ./internal/handler/...` |
 | 覆盖率 | `go test -cover ./...` |
-| 数据库迁移 | 由 `DB_AUTO_MIGRATE=true` 自动执行（<!-- TODO: 生产环境需改用版本化迁移工具 -->） |
+| 数据库迁移 | 执行 `internal/database/migrations/` 下的 SQL 迁移，并登记到 `schema_migration`（见 [`../02-architecture/DATA_MODEL.md`](../02-architecture/DATA_MODEL.md) §6） |
 
 ---
 

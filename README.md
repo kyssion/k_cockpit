@@ -20,7 +20,8 @@
 - [x] AI 协作规范（`AGENTS.md`）
 - [x] 文档体系（`docs/`）
 - [x] 技术栈选型（Go 1.27 + Hertz + GORM）
-- [x] Go Web 基础框架与示例接口
+- [x] Go Web 基础框架（健康检查接口）
+- [x] 表结构设计与建库（43 张表，见 `docs/02-architecture/DATA_MODEL.md`）
 - [ ] 业务功能开发
 
 详见 [`docs/01-product/ROADMAP.md`](docs/01-product/ROADMAP.md)。
@@ -60,23 +61,16 @@ go mod download
 go run ./cmd/server
 ```
 
-> 首次运行需将 `.env` 中的 `DB_AUTO_MIGRATE` 设为 `true`，服务启动时会自动建表。
+> 表结构由 `internal/database/migrations/` 下的 SQL 迁移管理，**服务启动不做自动建表**；执行方式见 [`docs/02-architecture/DATA_MODEL.md`](docs/02-architecture/DATA_MODEL.md) 第 6 节。
 
 ### 验证服务
 
 ```bash
-# 健康检查
 curl http://127.0.0.1:8080/health
 # {"database":"up","status":"ok"}
-
-# 创建用户
-curl -X POST http://127.0.0.1:8080/api/v1/users \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"张三","email":"zhangsan@example.com"}'
-
-# 查询列表
-curl "http://127.0.0.1:8080/api/v1/users?page=1&page_size=10"
 ```
+
+> 业务接口尚未实现。第一个业务功能落地后，先在 [`docs/03-api/API.md`](docs/03-api/API.md) 登记接口，再在此补充调用示例。
 
 ### 切换到 PostgreSQL
 
@@ -112,7 +106,8 @@ k_cockpit/
 ├── internal/
 │   ├── config/            # 环境变量配置加载与校验
 │   ├── database/          # 数据库连接（PostgreSQL / SQLite 双支持）
-│   ├── model/             # GORM 数据模型
+│   │   └── migrations/    # SQL 迁移：表结构的唯一入口
+│   ├── model/             # GORM 数据模型（随功能实现逐步补齐）
 │   ├── handler/           # HTTP 接口实现
 │   └── router/            # 路由注册
 ├── docs/                  # 项目文档（入口见 docs/README.md）
