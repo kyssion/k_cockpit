@@ -83,6 +83,25 @@ go test -cover ./...
 go test ./internal/handler/...
 ```
 
+**前端（`web/`）**：
+
+```bash
+# 安装依赖
+cd web && pnpm install
+
+# 本地开发（自动代理 /api 到控制面 127.0.0.1:8080）
+cd web && pnpm dev
+
+# 类型检查
+cd web && pnpm exec tsc -b
+
+# 静态检查
+cd web && pnpm lint
+
+# 构建（产物在 web/dist，由控制面托管）
+cd web && pnpm build
+```
+
 前端（`web/`，**尚未创建**；技术栈见 [ADR-0006](docs/06-decisions/0006-frontend-tech-stack.md)，脚本名以落地后的 `web/package.json` 为准）：
 
 ```bash
@@ -110,7 +129,7 @@ k_cockpit/
 │   ├── database/          # 数据库连接、驱动切换与 SQL 迁移（migrations/）
 │   ├── handler/           # HTTP 接口实现（测试同目录）
 │   └── router/            # 路由注册
-├── web/                   # 前端工程（纯 SPA，规划中；结构与约定见 docs/02-architecture/FRONTEND.md §2.2）
+├── web/                   # 前端工程（纯 SPA，结构与约定见 docs/02-architecture/FRONTEND.md §2.2）
 ├── reference/             # 只读的外部参考项目（git 子模块，见 docs/08-reference/README.md）
 ├── docs/                  # 所有项目文档（见 docs/README.md）
 │   ├── 01-product/        # 产品：需求、路线图

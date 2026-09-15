@@ -63,6 +63,10 @@
 
 **版本策略**：主版本以 ADR-0006 为准，具体小版本由 `web/pnpm-lock.yaml` 锁定，以落地时最新稳定版为准。
 
+**落地情况（2026-09-15）**：`web/` 工程已创建，实际解析版本为 Vite 8 · React 19.2 · TypeScript 6.0（strict，另启用 `noUncheckedIndexedAccess`）· Tailwind CSS 4.3 · **React Router 8.3** · TanStack Query 5.102 · Zustand 5.0；Lint 采用脚手架默认的 **oxlint**（Rust 实现，零配置）。
+
+> **与 ADR-0006 的两处差异**：React Router 实际落地的**主版本为 v8**（ADR 记录为 v7），Lint 为 oxlint（ADR 记录为 ESLint + Prettier）。两者都是「选定了同一类工具、版本或实现不同」的落地差异，不影响 ADR 的决策本身（库模式路由、静态检查能力）。是否需要为此补 ADR 由维护者决定。
+
 ### 2.2 目录结构（`web/`，规划）
 
 > 前端工程位于仓库根目录 `web/`（与 `cmd/`、`internal/` 平级），纯 SPA，构建产物由控制面托管。**目录尚未创建**——技术栈已由 [ADR-0006](../06-decisions/0006-frontend-tech-stack.md) 确认，创建时以本节为准。
