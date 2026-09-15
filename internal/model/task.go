@@ -28,6 +28,11 @@ const (
 	// 而它们的差异用参数表达更自然。
 	TaskVMPower  = "vm.power"
 	TaskVMDelete = "vm.delete"
+
+	// 存储池变更。这两个任务**全局串行**（f-5-01 R-003）：同一时刻只允许
+	// 一个存储池变更任务运行，因此它们共用同一个资源锁键。
+	TaskStoragePoolCreate = "storage.pool.create"
+	TaskStoragePoolDelete = "storage.pool.delete"
 )
 
 // Task 对应 task 表。

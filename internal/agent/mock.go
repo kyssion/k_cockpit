@@ -29,6 +29,40 @@ func (m *MockClient) Execute(_ context.Context, op Operation) (*Result, error) {
 	switch op.Kind {
 	case OpVMCreate:
 		data["uuid"] = mockUUID(op.NodeID, op.Target)
+	case OpNodeDisks:
+		// 返回三块有代表性的盘，覆盖界面需要处理的三种状态：系统盘
+		// （不可选）、空闲盘（可直接用）、已含数据的盘（需显式确认）。
+		//
+		// 只给"全都是空闲盘"的假数据会让「存在数据」这条分支永远不被
+		// 前端渲染到，而那恰恰是最需要用户看清的一条。
+		data[DiskListKey] = []Disk{
+			{
+				DeviceID:   "ata-mock-system",
+				Path:       "/dev/sda",
+				SizeBytes:  64 << 30,
+				IsSystem:   true,
+				Mounted:    true,
+				Filesystem: "ext4",
+				MountPoint: "/",
+			},
+			{
+				DeviceID:  "ata-mock-data1",
+				Path:      "/dev/sdb",
+				SizeBytes: 512 << 30,
+			},
+			{
+				DeviceID:   "ata-mock-data2",
+				Path:       "/dev/sdc",
+				SizeBytes:  1024 << 30,
+				HasData:    true,
+				Filesystem: "ext4",
+			},
+		}
+
+	case OpStoragePoolCreate:
+		data["mount_path"] = "/var/lib/k_cockpit/pools/" + op.Target
+		data[StatusDataKey] = "ready"
+
 	case OpVMStatus:
 		// 固定返回 running（取值与 model.VMStatusRunning 一致；本包不引用
 		// model —— 协议层与存储层保持解耦，状态的解释由调用方负责）。
