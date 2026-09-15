@@ -81,7 +81,7 @@ func (h *Auth) Login(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	h.setSessionCookie(c, res.Token, res.ExpiresAt)
+	setSessionCookie(c, res.Token, res.ExpiresAt, h.secureCookie)
 	api.OK(c, loginResponse{User: userViewOf(res.User), ExpiresAt: res.ExpiresAt})
 }
 
@@ -96,7 +96,7 @@ func (h *Auth) Logout(ctx context.Context, c *app.RequestContext) {
 	}
 	// 无论会话是否已存在，都清掉浏览器 Cookie：否则用户会带着一个
 	// 已失效的令牌反复请求，每次都触发一次无谓的 401。
-	h.clearSessionCookie(c)
+	clearSessionCookie(c, h.secureCookie)
 	api.NoContent(c)
 }
 
@@ -149,19 +149,19 @@ func (h *Auth) RevokeSession(ctx context.Context, c *app.RequestContext) {
 // setSessionCookie 下发会话 Cookie。
 //
 // maxAge 与会话过期时间对齐：Cookie 不应比会话活得更久。
-func (h *Auth) setSessionCookie(c *app.RequestContext, token string, expiresAt time.Time) {
+func setSessionCookie(c *app.RequestContext, token string, expiresAt time.Time, secure bool) {
 	maxAge := int(time.Until(expiresAt).Seconds())
 	if maxAge <= 0 {
 		maxAge = 1
 	}
 	c.SetCookie(auth.CookieName, token, maxAge, "/", "",
-		protocol.CookieSameSiteStrictMode, h.secureCookie, true)
+		protocol.CookieSameSiteStrictMode, secure, true)
 }
 
 // clearSessionCookie 清除会话 Cookie（MaxAge 为负即让浏览器立即删除）。
-func (h *Auth) clearSessionCookie(c *app.RequestContext) {
+func clearSessionCookie(c *app.RequestContext, secure bool) {
 	c.SetCookie(auth.CookieName, "", -1, "/", "",
-		protocol.CookieSameSiteStrictMode, h.secureCookie, true)
+		protocol.CookieSameSiteStrictMode, secure, true)
 }
 
 func userViewOf(u *model.User) userView {

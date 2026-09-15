@@ -23,6 +23,7 @@ import (
 type Deps struct {
 	DB           *gorm.DB
 	Auth         *auth.Service
+	Bootstrap    *auth.Bootstrap
 	SecureCookie bool
 }
 
@@ -35,12 +36,18 @@ func Register(h *server.Hertz, deps Deps) {
 	h.GET("/health", handler.Health(deps.DB))
 
 	authHandler := handler.NewAuth(deps.Auth, deps.SecureCookie)
+	setupHandler := handler.NewSetup(deps.Bootstrap, deps.Auth, deps.SecureCookie)
 	authMW := auth.NewMiddleware(deps.Auth)
 	// 认证接口都计为真实用户活动：它们由用户显式操作触发，不是后台轮询。
 	requireAuth := authMW.Require(auth.Real)
 
 	v1 := h.Group("/api/v1")
 	{
+		// 公开接口：系统尚无管理员时不可能要求认证（自举问题，见 ADR-0008）。
+		// 安全性由「一次性令牌只能从服务端日志获取」保证。
+		v1.GET("/setup/status", setupHandler.Status)
+		v1.POST("/setup/admin", setupHandler.CreateAdmin)
+
 		// 公开接口：获取凭据的入口，必须在 API.md 中显式标记为公开。
 		v1.POST("/auth/login", authHandler.Login)
 
