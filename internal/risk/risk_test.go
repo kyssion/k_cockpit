@@ -170,15 +170,23 @@ func TestOpenSecretDetectsTampering(t *testing.T) {
 	key := testKey(t)
 
 	sealed, _ := sealSecret(key, "JBSWY3DPEHPK3PXP")
-	// 篡改最后一个字符：AES-GCM 应当拒绝，而不是解出一段垃圾密钥。
-	// 只保证保密性、不保证完整性的方案在这里是不够的——能写库的攻击者
-	// 可以把密钥改成自己已知的值，从而完全绕过第二因素。
-	tampered := sealed[:len(sealed)-1] + "A"
-	if tampered == sealed {
-		tampered = sealed[:len(sealed)-1] + "B"
+
+	// 篡改**中间**的字符，而不是最后一个。
+	//
+	// base64 的末字符含有填充位：改动它可能解码出完全相同的字节，
+	// 那样一来「篡改」其实没有改动任何内容，测试会时灵时不灵——而且
+	// 失败时的现象是「密文没被检测出篡改」，看起来像实现有漏洞。
+	idx := len(sealed) / 2
+	flipped := "A"
+	if sealed[idx] == 'A' {
+		flipped = "B"
 	}
+	tampered := sealed[:idx] + flipped + sealed[idx+1:]
+
+	// 只保证保密性、不保证完整性的方案在这里是不够的——能写库的攻击者
+	// 可以把密钥改成自己已知的值，从而完全绕过第二因素。AES-GCM 必须拒绝。
 	if _, err := openSecret(key, tampered); err == nil {
-		t.Error("被篡改的密文解密未报错")
+		t.Errorf("被篡改的密文解密未报错 (原=%s 改=%s)", sealed, tampered)
 	}
 }
 
