@@ -94,6 +94,30 @@ func FailWith(c *app.RequestContext, err *Error, details ...Detail) {
 	Fail(c, &clone)
 }
 
+// ErrorResponseWithData 是携带附加数据的错误响应。
+type ErrorResponseWithData struct {
+	Error     ErrorBody `json:"error"`
+	Data      any       `json:"data,omitempty"`
+	RequestID string    `json:"request_id"`
+}
+
+// FailWithData 返回携带附加数据的错误响应。
+//
+// 专用于 **428**：它既是失败（请求缺少必要前置条件），又必须携带足够信息
+// 让前端能继续——需要哪种验证方式、challenge_id 是什么、何时过期。把这些
+// 塞进 message 字符串会逼前端去解析文案，而文案是可以随时调整的。
+func FailWithData(c *app.RequestContext, err *Error, data any) {
+	c.JSON(err.Status, ErrorResponseWithData{
+		Error: ErrorBody{
+			Code:    err.Code,
+			Message: err.Message,
+			Details: err.Details,
+		},
+		Data:      data,
+		RequestID: RequestIDFrom(c),
+	})
+}
+
 // requestIDKey 是 request_id 在 RequestContext 中的键。
 const requestIDKey = "request_id"
 
