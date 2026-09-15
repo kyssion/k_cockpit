@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider } from 'react-router'
 
-import { ApiError, setUnauthorizedHandler } from '@/api/client'
+import { ApiError, setRiskVerificationHandler, setUnauthorizedHandler } from '@/api/client'
 import { router } from '@/router'
+import { useRiskStore } from '@/stores/risk'
 import { useSessionStore } from '@/stores/session'
 
 /**
@@ -29,6 +30,12 @@ const queryClient = new QueryClient({
 setUnauthorizedHandler(() => {
   useSessionStore.getState().setAnonymous()
 })
+
+// 收到 428 时唤起验证弹窗；用户完成验证后请求层会自动重放原请求。
+// 页面代码因此完全不需要感知二次验证的存在（f-10-01）。
+setRiskVerificationHandler((required) =>
+  useRiskStore.getState().requestVerification(required),
+)
 
 export function App() {
   return (

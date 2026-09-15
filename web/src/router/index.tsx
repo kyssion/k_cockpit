@@ -6,6 +6,7 @@ import { DashboardPage } from '@/views/dashboard/DashboardPage'
 import { LoginPage } from '@/views/auth/LoginPage'
 import { SetupPage } from '@/views/auth/SetupPage'
 import { NodeListPage } from '@/views/node/NodeListPage'
+import { SecurityPage } from '@/views/security/SecurityPage'
 import { TaskListPage } from '@/views/task/TaskListPage'
 import { VmDetailPage } from '@/views/vm/VmDetailPage'
 import { VmListPage } from '@/views/vm/VmListPage'
@@ -45,7 +46,7 @@ export const router = createBrowserRouter([
           { path: 'firewall', element: pending('防火墙', '规则与连接管理') },
           { path: 'user', element: pending('用户管理', '账号与配额') },
           { path: 'settings', element: pending('系统设置', '配置项与环境变量对照') },
-          { path: 'security', element: pending('安全中心', '两步验证、API 凭证、会话与登录记录') },
+          { path: 'security', element: <SecurityPage /> },
           { path: '*', element: <Placeholder title="页面不存在" planned="请检查地址是否正确" /> },
         ],
       },

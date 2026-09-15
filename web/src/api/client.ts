@@ -50,6 +50,8 @@ export class ApiError extends Error {
   readonly code: string
   readonly details: FieldDetail[]
   readonly requestId: string
+  /** 附加数据。目前只有 428 会携带（验证方式与 challenge）。 */
+  readonly data: unknown
 
   constructor(
     status: number,
@@ -57,6 +59,7 @@ export class ApiError extends Error {
     message: string,
     requestId: string,
     details: FieldDetail[] = [],
+    data?: unknown,
   ) {
     super(message)
     this.name = 'ApiError'
@@ -64,8 +67,26 @@ export class ApiError extends Error {
     this.code = code
     this.requestId = requestId
     this.details = details
+    this.data = data
   }
 }
+
+/** 一种可用的验证方式，由后端按用户实际绑定情况下发。 */
+export interface RiskMethod {
+  method: string
+  label: string
+}
+
+/** 428 响应携带的验证要求（f-10-01 §5.2）。 */
+export interface RiskRequiredData {
+  action: string
+  challenge_id: string
+  methods: RiskMethod[]
+  expires_at: string
+}
+
+/** 重放原请求时携带一次性许可的请求头。 */
+export const GRANT_HEADER = 'X-Risk-Grant'
 
 /** 网络层失败（断网、响应非 JSON）。与业务错误区分开，提示文案也不同。 */
 export class NetworkError extends Error {
@@ -78,8 +99,11 @@ export class NetworkError extends Error {
 
 type UnauthorizedHandler = () => void
 
+/** 验证处理器：展示验证框、等待用户完成，成功时返回一次性许可。 */
+type RiskVerificationHandler = (required: RiskRequiredData) => Promise<string | null>
+
 let onUnauthorized: UnauthorizedHandler | undefined
-let onRiskVerification: (() => Promise<boolean>) | undefined
+let onRiskVerification: RiskVerificationHandler | undefined
 
 /** 注册 401 处理器。由应用启动时注入，避免请求层依赖路由与状态库。 */
 export function setUnauthorizedHandler(handler: UnauthorizedHandler): void {
@@ -87,10 +111,12 @@ export function setUnauthorizedHandler(handler: UnauthorizedHandler): void {
 }
 
 /**
- * 注册高风险二次验证处理器：返回 true 表示验证通过，可以重放原请求。
- * 由高风险验证模块在启动时注入（f-10-01）。
+ * 注册高风险二次验证处理器（f-10-01）。
+ *
+ * 处理器返回许可令牌表示验证通过，请求层据此重放原请求；返回 null 表示
+ * 用户取消，原请求以 428 错误结束。
  */
-export function setRiskVerificationHandler(handler: () => Promise<boolean>): void {
+export function setRiskVerificationHandler(handler: RiskVerificationHandler): void {
   onRiskVerification = handler
 }
 
@@ -98,6 +124,8 @@ interface RequestOptions {
   method?: string
   body?: unknown
   query?: Record<string, string | number | undefined>
+  /** 一次性许可，仅在验证通过后重放原请求时携带。 */
+  grant?: string
 }
 
 function buildUrl(path: string, query?: RequestOptions['query']): string {
@@ -116,13 +144,19 @@ function buildUrl(path: string, query?: RequestOptions['query']): string {
  * 返回完整响应体而非只返回 `data`——分页接口需要读取 `pagination`。
  */
 async function rawRequest<B>(path: string, options: RequestOptions = {}): Promise<B> {
-  const { method = 'GET', body, query } = options
+  const { method = 'GET', body, query, grant } = options
+
+  const headers: Record<string, string> = {}
+  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  // 许可走请求头而非 Cookie：它只对紧接着的这一次重放有意义，不应被浏览器
+  // 自动附加到后续所有请求上（那会把「一次性」变成「一段时间内全程有效」）。
+  if (grant) headers[GRANT_HEADER] = grant
 
   let response: Response
   try {
     response = await fetch(buildUrl(path, query), {
       method,
-      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
       body: body === undefined ? undefined : JSON.stringify(body),
       // 会话凭据经 Cookie 传递，必须显式带上。
       credentials: 'same-origin',
@@ -142,13 +176,14 @@ async function rawRequest<B>(path: string, options: RequestOptions = {}): Promis
 
   if (response.ok) return payload as B
 
-  const body_ = payload as { error?: ErrorBody; request_id?: string }
+  const body_ = payload as { error?: ErrorBody; data?: unknown; request_id?: string }
   const error = new ApiError(
     response.status,
     body_.error?.code ?? 'INTERNAL_ERROR',
     body_.error?.message ?? '请求失败',
     body_.request_id ?? '',
     body_.error?.details ?? [],
+    body_.data,
   )
 
   // 401 在任何入口都要触发登出：会话可能在任意时刻被撤销或过期。
@@ -163,16 +198,27 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     const payload = await rawRequest<SuccessBody<T>>(path, options)
     return payload?.data as T
   } catch (error) {
-    // 428：完成二次验证后重放一次。**只重放一次**——若重放后仍返回 428，
-    // 说明许可未被识别（过期或并发），此时应当报错而不是继续弹框。
-    if (error instanceof ApiError && error.status === 428 && onRiskVerification) {
-      const passed = await onRiskVerification()
-      if (passed) {
-        const payload = await rawRequest<SuccessBody<T>>(path, options)
-        return payload?.data as T
-      }
+    if (!(error instanceof ApiError) || error.status !== 428) throw error
+
+    // 已经因为 428 重放过一次，仍然被拒：说明许可未被识别（过期、已被消费、
+    // 会话不匹配）。此时**直接报错，不再弹框**——继续弹会让用户在「验证成功
+    // 却毫无反应」之间循环，而且退不出去（f-10-01 Q-010）。
+    if (options.grant) {
+      throw new ApiError(
+        error.status,
+        error.code,
+        '验证状态已失效，请重试刚才的操作',
+        error.requestId,
+      )
     }
-    throw error
+    if (!onRiskVerification) throw error
+
+    const grant = await onRiskVerification(error.data as RiskRequiredData)
+    if (!grant) throw error
+
+    // 重放**原样**的请求（方法、路径、查询、请求体完全一致），只多一个许可头。
+    const payload = await rawRequest<SuccessBody<T>>(path, { ...options, grant })
+    return payload?.data as T
   }
 }
 

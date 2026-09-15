@@ -3,6 +3,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router'
 
 import { authApi } from '@/api/auth'
 import { Button } from '@/components/common/Button'
+import { RiskVerificationGate } from '@/components/risk/RiskVerificationGate'
 import { useSessionStore } from '@/stores/session'
 import type { UserRole } from '@/api/auth'
 import { cn } from '@/utils/cn'
@@ -93,6 +94,10 @@ export function AppLayout() {
           <Outlet />
         </main>
       </div>
+
+      {/* 高风险操作的验证弹窗。挂在布局里而非请求层：它需要 Router 上下文
+          （未绑定验证方式时给出跳转），而请求层是纯模块。 */}
+      <RiskVerificationGate />
     </div>
   )
 }
