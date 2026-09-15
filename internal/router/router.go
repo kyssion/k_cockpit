@@ -83,6 +83,10 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/vms", requireAuth, vmHandler.List)
 		v1.GET("/vms/:id", requireAuth, vmHandler.Get)
 		v1.POST("/vms", requireAuth, vmHandler.Create)
+		// 电源与删除都是异步操作：受理时校验状态并返回任务标识，执行由
+		// 任务队列按资源锁串行（f-2-01 R-005）。
+		v1.POST("/vms/:id/power-actions", requireAuth, vmHandler.Power)
+		v1.DELETE("/vms/:id", requireAuth, vmHandler.Delete)
 
 		// 任务中心：tenant 只能看到自己发起的（同样由归属过滤保证）。
 		v1.GET("/tasks", requireAuth, taskHandler.List)

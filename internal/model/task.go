@@ -21,8 +21,12 @@ const (
 // 任务类型。取值形如「资源域.动作」，与 agent 的领域操作标识对应。
 const (
 	TaskVMCreate = "vm.create"
-	TaskVMStart  = "vm.start"
-	TaskVMStop   = "vm.stop"
+	// TaskVMPower 覆盖全部电源操作，具体动作在任务参数的 `action` 字段中。
+	//
+	// 不为每个动作单独建类型：五个动作的执行逻辑相同（探测前置已完成，
+	// 下发指令、回写投影），拆成五个类型只会产生五份几乎相同的代码，
+	// 而它们的差异用参数表达更自然。
+	TaskVMPower  = "vm.power"
 	TaskVMDelete = "vm.delete"
 )
 

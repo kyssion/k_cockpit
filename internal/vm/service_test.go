@@ -23,6 +23,16 @@ import (
 
 func newTestEnv(t *testing.T) (*vm.Service, *task.Queue, *gorm.DB) {
 	t.Helper()
+	return newTestEnvWithClient(t, agent.NewMockClient())
+}
+
+// newTestEnvWithClient 允许替换 agent 实现。
+//
+// 需要它的理由：mock 的探测固定返回 running，而「删除要求虚拟机不处于运行态」
+// 这条分支用固定 mock 覆盖不到。测试需要可控的替身，而不是去改 mock ——
+// mock 的职责是让生产代码跑通，不是让测试好写。
+func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task.Queue, *gorm.DB) {
+	t.Helper()
 
 	db, err := database.Open(config.DB{
 		Driver:       config.DriverSQLite,
@@ -33,8 +43,16 @@ func newTestEnv(t *testing.T) (*vm.Service, *task.Queue, *gorm.DB) {
 	if err != nil {
 		t.Fatalf("打开测试库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.VM{}, &model.Task{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(
+		&model.VM{}, &model.Task{}, &model.AuditLog{}, &model.Node{},
+	); err != nil {
 		t.Fatalf("建表失败: %v", err)
+	}
+
+	// 预置节点 1：多数用例以它为目标节点，逐处重复建节点只会淹没测试意图。
+	// 「节点不存在」这条分支由 TestPowerRejectsMissingNode 单独覆盖。
+	if err := db.Create(&model.Node{ID: 1, Name: "test-node"}).Error; err != nil {
+		t.Fatalf("创建测试节点失败: %v", err)
 	}
 
 	recorder := audit.NewRecorder(db)
@@ -42,9 +60,10 @@ func newTestEnv(t *testing.T) (*vm.Service, *task.Queue, *gorm.DB) {
 		MaxConcurrent: 2,
 		PollInterval:  20 * time.Millisecond,
 	})
-	// 用真实的 mock agent：创建链路端到端走通，只有「执行」那一步是假的。
-	client := agent.NewMockClient()
+	// 用真实的 mock agent：业务链路端到端走通，只有「执行」那一步是假的。
 	queue.Register(vm.NewCreateExecutor(db, client))
+	queue.Register(vm.NewPowerExecutor(db, client))
+	queue.Register(vm.NewDeleteExecutor(db, client))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	queue.Start(ctx)
@@ -53,7 +72,35 @@ func newTestEnv(t *testing.T) (*vm.Service, *task.Queue, *gorm.DB) {
 		queue.Stop()
 	})
 
-	return vm.NewService(db, queue, recorder), queue, db
+	return vm.NewService(db, queue, recorder, client), queue, db
+}
+
+// probeClient 在 mock 之上覆盖**探测结果**，其余操作沿用 mock。
+type probeClient struct {
+	*agent.MockClient
+	status string
+}
+
+func (c *probeClient) Execute(ctx context.Context, op agent.Operation) (*agent.Result, error) {
+	if op.Kind == agent.OpVMStatus {
+		return &agent.Result{
+			Success: true,
+			Data:    map[string]any{agent.StatusDataKey: c.status},
+		}, nil
+	}
+	return c.MockClient.Execute(ctx, op)
+}
+
+// unreachableClient 模拟**指令未送达**：返回 error 而不是 Success=false。
+//
+// 两者语义不同，调用方的处理也不同（见 agent.Client.Execute 的注释），
+// 因此需要分别覆盖。
+type unreachableClient struct {
+	*agent.MockClient
+}
+
+func (c *unreachableClient) Execute(_ context.Context, _ agent.Operation) (*agent.Result, error) {
+	return nil, errors.New("dial tcp: connection refused")
 }
 
 func waitFor(t *testing.T, what string, cond func() bool) {
@@ -268,6 +315,206 @@ func TestKeywordEscapesWildcards(t *testing.T) {
 	if total != 0 {
 		t.Errorf("通配符未被转义，匹配到了 %d 条记录", total)
 	}
+}
+
+// --- 电源操作 ---
+
+func TestPowerJudgesByLiveProbeNotProjection(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	// 投影写的是 stopped，但探测返回 running。
+	//
+	// 这个不一致正是本测试要表达的核心：判定必须基于**实时探测**（f-2-01
+	// R-002）。若凭投影放行，就可能在虚拟机实际运行时执行只该对关机状态
+	// 做的操作——而投影滞后恰恰是最常见的场景。
+	row := model.VM{NodeID: 1, Name: "vm-probe", Status: model.VMStatusStopped, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	_, err := svc.Power(ctx, row.ID, "start", authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 422)
+
+	// 拒绝文案必须说明**当前真实状态**：只说「操作不被允许」会让用户以为
+	// 是权限问题，而真正的原因是状态不匹配。
+	var apiErr *api.Error
+	if errors.As(err, &apiErr) && !strings.Contains(apiErr.Message, "运行中") {
+		t.Errorf("拒绝原因未说明当前状态: %q", apiErr.Message)
+	}
+}
+
+func TestPowerEnqueuesAndUpdatesProjection(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-power", Status: model.VMStatusRunning, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	tk, err := svc.Power(ctx, row.ID, "shutdown", authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("受理失败: %v", err)
+	}
+	if tk.Type != model.TaskVMPower {
+		t.Errorf("任务类型 = %q, 期望 %q", tk.Type, model.TaskVMPower)
+	}
+	// 资源锁键必须是 vm:<id>：否则同一台虚拟机的并发电源操作不会串行，
+	// 可能交错执行出错误的状态（f-2-01 R-005）。
+	if rt, rid := tk.TaskResource(); rt != "vm" || rid != row.ID {
+		t.Errorf("资源锁键 = %s:%d, 期望 vm:%d", rt, rid, row.ID)
+	}
+
+	waitFor(t, "投影状态更新为已关机", func() bool {
+		var got model.VM
+		db.First(&got, row.ID)
+		return got.Status == model.VMStatusStopped
+	})
+}
+
+func TestPowerRejectsUnknownAction(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-bad", Status: model.VMStatusRunning, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	_, err := svc.Power(ctx, row.ID, "explode", authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 400)
+}
+
+func TestPowerRejectsOthersVM(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	theirs := model.VM{NodeID: 1, Name: "vm-theirs", Status: model.VMStatusRunning, OwnerID: ptr(int64(20))}
+	db.Create(&theirs)
+
+	// 404 而非 403：403 会告诉对方「这个 ID 确实存在」，可被用来枚举资源。
+	_, err := svc.Power(ctx, theirs.ID, "shutdown", authz.Viewer{UserID: 10}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 404)
+}
+
+func TestPowerBlockedInMaintenanceMode(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	db.Create(&model.Node{ID: 5, Name: "maintenance-node", MaintenanceMode: true})
+	row := model.VM{NodeID: 5, Name: "vm-maint", Status: model.VMStatusRunning, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	_, err := svc.Power(ctx, row.ID, "shutdown", authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 422)
+}
+
+func TestPowerUnavailableWhenAgentUnreachable(t *testing.T) {
+	svc, _, db := newTestEnvWithClient(t, &unreachableClient{agent.NewMockClient()})
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-offline", Status: model.VMStatusRunning, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	// 探测不到状态时拒绝，而不是放行：猜错的方向可能是对运行中的虚拟机断电。
+	_, err := svc.Power(ctx, row.ID, "shutdown", authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 503)
+}
+
+// --- 删除 ---
+
+func TestDeleteRequiresExplicitDiskAction(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-del", Status: model.VMStatusStopped, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	// 空值与非法值都必须拒绝：服务端**不替用户选默认值**（R-009）——
+	// 默认连盘删除的误操作代价是数据永久丢失。
+	for _, action := range []string{"", "drop", "Delete"} {
+		_, err := svc.Delete(ctx, row.ID, vm.DeleteRequest{DiskAction: action},
+			authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+		assertAPIError(t, err, 400)
+	}
+}
+
+func TestDeleteRejectedWhileRunning(t *testing.T) {
+	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-running", Status: model.VMStatusStopped, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	// 对运行中的虚拟机执行删除会强杀来宾进程并删除磁盘，代价不可逆。
+	_, err := svc.Delete(ctx, row.ID, vm.DeleteRequest{DiskAction: vm.DiskActionKeep},
+		authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 422)
+}
+
+func TestDeleteMarksNotPresentInsteadOfRemoving(t *testing.T) {
+	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-to-delete", Status: model.VMStatusStopped, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	if _, err := svc.Delete(ctx, row.ID, vm.DeleteRequest{DiskAction: vm.DiskActionDelete},
+		authz.Viewer{UserID: 7}, "alice", "10.0.0.1"); err != nil {
+		t.Fatalf("受理失败: %v", err)
+	}
+
+	waitFor(t, "记录被标记为已不在虚拟化层", func() bool {
+		var got model.VM
+		if err := db.First(&got, row.ID).Error; err != nil {
+			return false
+		}
+		return !got.Present
+	})
+
+	// 记录必须**保留**：审计与历史任务都引用它，物理删除会让这些引用悬空。
+	var count int64
+	db.Model(&model.VM{}).Where("id = ?", row.ID).Count(&count)
+	if count != 1 {
+		t.Errorf("记录被物理删除了, 期望保留并标记 present=false")
+	}
+
+	// 列表按 present 过滤，删除后不再出现。
+	list, total, err := svc.List(ctx, vm.ListFilter{Viewer: authz.Viewer{UserID: 7}})
+	if err != nil {
+		t.Fatalf("查询失败: %v", err)
+	}
+	if total != 0 || len(list) != 0 {
+		t.Errorf("已删除的虚拟机仍出现在列表中: total=%d", total)
+	}
+}
+
+func TestDeleteRejectedWhenTaskInFlight(t *testing.T) {
+	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-busy", Status: model.VMStatusStopped, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	running := model.Task{
+		Type: model.TaskVMPower, Status: model.TaskRunning,
+		ResourceType: ptr("vm"), ResourceID: ptr(row.ID),
+	}
+	db.Create(&running)
+
+	// 删除排在在途任务后面执行，意味着「用户以为取消了的操作其实照样做了」，
+	// 因此这里拒绝而不是排队。
+	_, err := svc.Delete(ctx, row.ID, vm.DeleteRequest{DiskAction: vm.DiskActionKeep},
+		authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 409)
+}
+
+func TestPowerRejectsMissingNode(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	// 节点在控制面之外被移除了：此时不能放行操作，否则指令会发往一个
+	// 已不存在的目标。
+	row := model.VM{NodeID: 999, Name: "vm-orphan", Status: model.VMStatusRunning, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	_, err := svc.Power(ctx, row.ID, "shutdown", authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 422)
 }
 
 func ptr[T any](v T) *T { return &v }

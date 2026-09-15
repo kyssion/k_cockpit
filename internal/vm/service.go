@@ -16,6 +16,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"k_cockpit/internal/agent"
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/audit"
 	"k_cockpit/internal/authz"
@@ -37,11 +38,16 @@ type Service struct {
 	db    *gorm.DB
 	queue *task.Queue
 	audit *audit.Recorder
+	// agent 用于**实时探测**运行态：投影不得参与业务判定（f-2-01 R-002），
+	// 因此受理写操作前必须向节点确认一次真实状态，而不是凭投影下结论。
+	agent agent.Client
 }
 
 // NewService 构造虚拟机服务。
-func NewService(db *gorm.DB, queue *task.Queue, recorder *audit.Recorder) *Service {
-	return &Service{db: db, queue: queue, audit: recorder}
+func NewService(
+	db *gorm.DB, queue *task.Queue, recorder *audit.Recorder, client agent.Client,
+) *Service {
+	return &Service{db: db, queue: queue, audit: recorder, agent: client}
 }
 
 // View 是虚拟机的对外视图。
@@ -66,6 +72,13 @@ type View struct {
 	// Stale 提示投影数据可能已经过期，界面据此展示「数据可能陈旧」。
 	Stale     bool      `json:"stale"`
 	CreatedAt time.Time `json:"created_at"`
+
+	// AvailableActions 是按**投影状态**算出的可用电源操作，供界面渲染按钮。
+	//
+	// 它可能与实际可用性不一致（投影滞后），此时后端会在受理请求时基于
+	// 实时探测拒绝并说明原因。前端禁用只是体验优化，不构成安全边界
+	// （f-2-01 R-004）。`stale` 为 true 时界面不应完全依赖它。
+	AvailableActions []string `json:"available_actions"`
 }
 
 // ListFilter 是列表查询条件。
@@ -113,6 +126,20 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]View, int64, error)
 
 // Get 返回虚拟机详情；不属于当前视角的返回 404（不泄漏其是否存在）。
 func (s *Service) Get(ctx context.Context, id int64, v authz.Viewer) (*View, error) {
+	vm, err := s.load(ctx, id, v)
+	if err != nil {
+		return nil, err
+	}
+
+	view := toView(vm, time.Now())
+	return &view, nil
+}
+
+// load 按归属读取虚拟机。
+//
+// 不属于当前视角的返回 **404 而非 403**：403 会告诉调用方「这个 ID 确实
+// 存在，只是你没权限」，从而可以被用来枚举他人资源（f-1-06 §5.2）。
+func (s *Service) load(ctx context.Context, id int64, v authz.Viewer) (*model.VM, error) {
 	query := s.db.WithContext(ctx).Where("id = ?", id)
 	if !v.IsAdmin {
 		query = query.Where("owner_id = ?", v.UserID)
@@ -127,9 +154,7 @@ func (s *Service) Get(ctx context.Context, id int64, v authz.Viewer) (*View, err
 		log.Printf("[vm] 查询虚拟机失败: %v", err)
 		return nil, api.Internal()
 	}
-
-	view := toView(&vm, time.Now())
-	return &view, nil
+	return &vm, nil
 }
 
 // CreateRequest 是创建虚拟机的请求。
@@ -206,6 +231,254 @@ func (s *Service) Create(
 	return t, nil
 }
 
+// 磁盘处理方式（f-2-01 R-009）。
+const (
+	DiskActionDelete = "delete"
+	DiskActionKeep   = "keep"
+)
+
+// Power 受理一次电源操作。
+//
+// 受理前做三件事，缺一不可：
+//  1. **归属校验**——不属于当前视角的返回 404，不泄漏资源是否存在；
+//  2. **维护模式校验**——维护模式的意义是「不再引入变更」（R-014）；
+//  3. **实时探测 + 状态机校验**——投影可能滞后，凭它判断就可能在虚拟机
+//     实际运行时执行危险操作（R-002 / R-004）。
+//
+// 通过后入队并立即返回：真正的执行由任务队列按资源锁串行（R-005），
+// 同一虚拟机的并发电源操作不会交错。
+//
+// 刻意**不设幂等键**：连点两次「关机」会产生两个任务，第二个执行时因
+// 状态已变而失败并说明原因。这是对的——用固定的幂等键（如
+// `vm.power:{id}:start`）会把「开机→关机→再开机」中第三次开机与第一次
+// 判为同一意图而静默丢弃。
+func (s *Service) Power(
+	ctx context.Context, id int64, rawAction string, v authz.Viewer, operatorName, clientIP string,
+) (*model.Task, error) {
+	action, err := ParsePowerAction(rawAction)
+	if err != nil {
+		return nil, err
+	}
+
+	vm, err := s.load(ctx, id, v)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureNodeUsable(ctx, vm.NodeID); err != nil {
+		return nil, err
+	}
+
+	current, err := s.probeStatus(ctx, vm)
+	if err != nil {
+		return nil, err
+	}
+	if err := action.Validate(current); err != nil {
+		return nil, err
+	}
+
+	params := powerParams{
+		VMID:   vm.ID,
+		VMName: vm.Name,
+		Action: string(action),
+		// 记录受理时的真实状态，便于事后区分「探测结果与投影不一致」
+		// 与「执行时状态已变」两种情况。
+		ObservedStatus: current,
+	}
+
+	t, err := s.queue.Enqueue(ctx, task.Spec{
+		Type:         model.TaskVMPower,
+		NodeID:       vm.NodeID,
+		ResourceType: "vm",
+		ResourceID:   vm.ID,
+		ResourceName: vm.Name,
+		OwnerID:      ownerOf(vm, v),
+		CreatedBy:    v.UserID,
+		Params:       params,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	s.record(ctx, audit.Entry{
+		OperatorID:   v.UserID,
+		OperatorName: operatorName,
+		NodeID:       vm.NodeID,
+		ResourceType: "vm",
+		ResourceID:   vm.ID,
+		ResourceName: vm.Name,
+		Action:       "vm.power.request",
+		Params:       params,
+		BeforeState:  map[string]any{"status": current},
+		AfterState:   map[string]any{"task_id": t.ID},
+		Success:      true,
+		ClientIP:     clientIP,
+	})
+	return t, nil
+}
+
+// DeleteRequest 是一次删除请求。
+type DeleteRequest struct {
+	// DiskAction 必填，取值 delete / keep。
+	DiskAction string
+}
+
+// Delete 受理一次删除。
+//
+// 磁盘处理方式**必填且不做默认**（R-009）：默认值即「用户最可能接受的
+// 选项」，若默认连盘删除，误操作代价是数据永久丢失；默认保留会累积无主
+// 磁盘，但可以事后清理——两者相较取其轻，因此把选择交给用户显式做出。
+func (s *Service) Delete(
+	ctx context.Context, id int64, req DeleteRequest, v authz.Viewer, operatorName, clientIP string,
+) (*model.Task, error) {
+	switch req.DiskAction {
+	case DiskActionDelete, DiskActionKeep:
+	default:
+		return nil, api.InvalidParameter("必须选择磁盘处理方式：delete（连同磁盘删除）或 keep（保留磁盘）")
+	}
+
+	vm, err := s.load(ctx, id, v)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureNodeUsable(ctx, vm.NodeID); err != nil {
+		return nil, err
+	}
+
+	// 在途任务存在时拒绝删除，而不是排队（f-2-01 边界）。
+	//
+	// 与电源操作不同：电源操作排队是合理的（用户可能连续调整），而删除
+	// 排在创建/开机后面执行，意味着「用户以为取消了的操作其实照样做了」。
+	active, err := s.hasActiveTask(ctx, vm.ID)
+	if err != nil {
+		return nil, err
+	}
+	if active {
+		return nil, api.Conflict("该虚拟机有正在执行的任务，请先等待完成或取消")
+	}
+
+	// 删除同样要探测：对运行中的虚拟机执行删除会强杀来宾进程并删除磁盘，
+	// 代价不可逆。
+	current, err := s.probeStatus(ctx, vm)
+	if err != nil {
+		return nil, err
+	}
+	switch current {
+	case model.VMStatusRunning, model.VMStatusPaused, model.VMStatusSuspended:
+		return nil, api.ValidationFailed(
+			"虚拟机当前为" + DescribeStatus(current) + "，请先关机或强制断电后再删除",
+		)
+	}
+
+	params := deleteParams{
+		VMID:           vm.ID,
+		VMName:         vm.Name,
+		DiskAction:     req.DiskAction,
+		ObservedStatus: current,
+	}
+
+	t, err := s.queue.Enqueue(ctx, task.Spec{
+		Type:         model.TaskVMDelete,
+		NodeID:       vm.NodeID,
+		ResourceType: "vm",
+		ResourceID:   vm.ID,
+		ResourceName: vm.Name,
+		OwnerID:      ownerOf(vm, v),
+		CreatedBy:    v.UserID,
+		Params:       params,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	s.record(ctx, audit.Entry{
+		OperatorID:   v.UserID,
+		OperatorName: operatorName,
+		NodeID:       vm.NodeID,
+		ResourceType: "vm",
+		ResourceID:   vm.ID,
+		ResourceName: vm.Name,
+		Action:       "vm.delete.request",
+		Params:       params,
+		BeforeState:  map[string]any{"status": current},
+		AfterState:   map[string]any{"task_id": t.ID, "disk_action": req.DiskAction},
+		Success:      true,
+		ClientIP:     clientIP,
+	})
+	return t, nil
+}
+
+// probeStatus 向节点**实时探测**虚拟机的真实运行态。
+//
+// 投影不可用于业务判定（R-002），因此每个写操作受理前都要走这一趟。
+// 探测失败一律拒绝操作：无法确认状态时不猜，猜错的方向可能是对运行中的
+// 虚拟机断电。
+func (s *Service) probeStatus(ctx context.Context, vm *model.VM) (string, error) {
+	result, err := s.agent.Execute(ctx, agent.Operation{
+		Kind:   agent.OpVMStatus,
+		NodeID: vm.NodeID,
+		Target: vm.Name,
+	})
+	if err != nil {
+		return "", api.Unavailable("节点不可达，无法确认虚拟机当前状态")
+	}
+	if !result.Success {
+		return "", api.Unavailable("无法确认虚拟机当前状态")
+	}
+
+	status, _ := result.Data[agent.StatusDataKey].(string)
+	if status == "" {
+		return "", api.Unavailable("节点未返回虚拟机状态")
+	}
+	return status, nil
+}
+
+// ensureNodeUsable 校验节点存在且未处于维护模式。
+func (s *Service) ensureNodeUsable(ctx context.Context, nodeID int64) error {
+	var n model.Node
+	err := s.db.WithContext(ctx).
+		Select("id", "maintenance_mode").
+		Where("id = ?", nodeID).
+		First(&n).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return api.ValidationFailed("虚拟机的所属节点已不存在")
+	case err != nil:
+		log.Printf("[vm] 查询节点失败: %v", err)
+		return api.Internal()
+	}
+	if n.MaintenanceMode {
+		return api.ValidationFailed("节点处于维护模式，已暂停创建与电源操作")
+	}
+	return nil
+}
+
+// hasActiveTask 报告该虚拟机是否有在途任务。
+//
+// unknown 也算在途：它等待节点重连后对账收敛，而不是已经结束。
+func (s *Service) hasActiveTask(ctx context.Context, vmID int64) (bool, error) {
+	var count int64
+	err := s.db.WithContext(ctx).Model(&model.Task{}).
+		Where("resource_type = ? AND resource_id = ?", "vm", vmID).
+		Where("status IN ?", []string{model.TaskPending, model.TaskRunning, model.TaskUnknown}).
+		Count(&count).Error
+	if err != nil {
+		log.Printf("[vm] 统计在途任务失败: %v", err)
+		return false, api.Internal()
+	}
+	return count > 0, nil
+}
+
+// ownerOf 返回新任务应记录的归属。
+//
+// 管理员代他人操作时沿用资源原有的归属，否则会把别人的虚拟机「过户」给自己
+// ——那是权限提升的一个入口（f-1-06 R-007）。
+func ownerOf(vm *model.VM, v authz.Viewer) int64 {
+	if vm.OwnerID != nil {
+		return *vm.OwnerID
+	}
+	return v.UserID
+}
+
 func (s *Service) record(ctx context.Context, e audit.Entry) {
 	if s.audit != nil {
 		s.audit.Record(ctx, e)
@@ -255,6 +528,9 @@ func toView(vm *model.VM, now time.Time) View {
 		LastSyncedAt: vm.LastSyncedAt,
 		Stale:        vm.IsStale(now, StaleThreshold),
 		CreatedAt:    vm.CreatedAt,
+		// 按投影状态给出可用动作。投影滞后时可能与实际不符，后端受理时
+		// 会以实时探测为准重新校验（f-2-01 R-004）。
+		AvailableActions: AvailableActions(vm.Status),
 	}
 	if vm.UUID != nil {
 		view.UUID = *vm.UUID

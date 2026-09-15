@@ -20,11 +20,31 @@ type OpKind string
 //
 // 按需扩展：新增能力时在此登记，并在 Executor 中实现对应的执行逻辑。
 const (
-	OpVMCreate OpKind = "vm.create"
-	OpVMStart  OpKind = "vm.start"
-	OpVMStop   OpKind = "vm.stop"
+	// OpVMStatus 探测虚拟机运行态。**只读**，不改变任何东西。
+	//
+	// 它存在的理由是 f-2-01 R-002：投影字段不得参与业务判定——投影可能滞后，
+	// 凭它判断「已关机」就去执行删除，可能在虚拟机实际运行时执行危险操作。
+	// 因此写操作前必须探测真实状态。
+	OpVMStatus OpKind = "vm.status"
+
+	OpVMCreate   OpKind = "vm.create"
+	OpVMStart    OpKind = "vm.start"
+	OpVMShutdown OpKind = "vm.shutdown"
+	// OpVMPoweroff 是强制断电，与 OpVMShutdown 是**两个独立操作**：
+	// 静默强杀可能造成来宾文件系统损坏，何时放弃等待应由用户判断，
+	// 因此不做超时自动降级（f-2-01 R-006）。
+	OpVMPoweroff OpKind = "vm.poweroff"
+	OpVMReboot   OpKind = "vm.reboot"
+	// OpVMReset 是硬重置，仅对暂停态可用（f-2-01 R-007）。
+	OpVMReset  OpKind = "vm.reset"
 	OpVMDelete OpKind = "vm.delete"
 )
+
+// StatusDataKey 是 OpVMStatus 结果中承载运行态的键。
+//
+// 探测结果经 Data 传递而不新增方法：Client 的每次调用都应被理解为
+// 「向节点下一个指令」，探测同样是一次指令往返。
+const StatusDataKey = "status"
 
 // Operation 描述一次要节点执行的领域操作。
 type Operation struct {

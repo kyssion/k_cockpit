@@ -26,8 +26,18 @@ func NewMockClient() *MockClient { return &MockClient{} }
 func (m *MockClient) Execute(_ context.Context, op Operation) (*Result, error) {
 	data := map[string]any{}
 
-	if op.Kind == OpVMCreate {
+	switch op.Kind {
+	case OpVMCreate:
 		data["uuid"] = mockUUID(op.NodeID, op.Target)
+	case OpVMStatus:
+		// 固定返回 running（取值与 model.VMStatusRunning 一致；本包不引用
+		// model —— 协议层与存储层保持解耦，状态的解释由调用方负责）。
+		//
+		// 由此产生的局限需要明确：mock 不维护状态，探测结果不随操作变化，
+		// 因此**只能验证状态机与拒绝路径**（对 running 的虚拟机执行 start
+		// 会被拒绝），**无法验证「先关机再开机」的完整流转**。要打通完整
+		// 流转需要 mock 维护一份状态，那正是 ADR-0007 明确不做的事。
+		data[StatusDataKey] = "running"
 	}
 
 	return &Result{

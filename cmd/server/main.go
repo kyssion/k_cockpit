@@ -85,9 +85,11 @@ func main() {
 	// 不关心任务具体做什么——新增能力时只需在这里多注册一个。
 	queue := task.NewQueue(db, recorder, task.Options{})
 	queue.Register(vm.NewCreateExecutor(db, mockAgent))
+	queue.Register(vm.NewPowerExecutor(db, mockAgent))
+	queue.Register(vm.NewDeleteExecutor(db, mockAgent))
 	queue.Start(context.Background())
 
-	vmSvc := vm.NewService(db, queue, recorder)
+	vmSvc := vm.NewService(db, queue, recorder, mockAgent)
 
 	h := server.Default(server.WithHostPorts(cfg.HTTP.Addr()))
 	router.Register(h, router.Deps{
