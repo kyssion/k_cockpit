@@ -161,7 +161,9 @@ function VmRow({ vm, nodeName }: { vm: VmView; nodeName?: string }) {
   return (
     <tr className="border-t border-line hover:bg-raised">
       <td className="px-4 py-2.5">
-        <span className="font-medium text-ink">{vm.name}</span>
+        <Link to={`/vm/${vm.id}`} className="font-medium text-ink hover:text-brand hover:underline">
+          {vm.name}
+        </Link>
         {vm.group_name && <span className="ml-2 text-xs text-ink-3">{vm.group_name}</span>}
       </td>
       <td className="px-4 py-2.5">

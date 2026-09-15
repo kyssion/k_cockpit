@@ -50,9 +50,22 @@ export const TASK_STATUS_TONE: Record<TaskStatus, StatusTone> = {
 
 export const TASK_TYPE_LABEL: Record<string, string> = {
   'vm.create': '创建虚拟机',
-  'vm.start': '启动虚拟机',
-  'vm.stop': '关闭虚拟机',
+  'vm.power': '电源操作',
   'vm.delete': '删除虚拟机',
+}
+
+/** 电源动作的中文名（与后端 vm.PowerAction 的取值对应）。 */
+export const POWER_ACTION_LABEL: Record<string, string> = {
+  start: '开机',
+  shutdown: '关机',
+  reboot: '重启',
+  poweroff: '强制断电',
+  reset: '重置',
+}
+
+/** 需要二次确认的动作：会造成不可逆后果或中断业务。 */
+export const POWER_ACTION_DANGEROUS: Record<string, string> = {
+  poweroff: '强制断电会立即中断虚拟机，来宾文件系统可能损坏。请优先使用「关机」。',
 }
 
 /** 未登记的类型直接显示原值——比显示「未知操作」更有助于排查。 */

@@ -7,6 +7,7 @@ import { LoginPage } from '@/views/auth/LoginPage'
 import { SetupPage } from '@/views/auth/SetupPage'
 import { NodeListPage } from '@/views/node/NodeListPage'
 import { TaskListPage } from '@/views/task/TaskListPage'
+import { VmDetailPage } from '@/views/vm/VmDetailPage'
 import { VmListPage } from '@/views/vm/VmListPage'
 
 import { RequireAuth } from './RequireAuth'
@@ -34,6 +35,7 @@ export const router = createBrowserRouter([
         children: [
           { index: true, element: <DashboardPage /> },
           { path: 'vm', element: <VmListPage /> },
+          { path: 'vm/:id', element: <VmDetailPage /> },
           { path: 'task', element: <TaskListPage /> },
           { path: 'my-storage', element: pending('我的存储', '个人空间与文件管理') },
           { path: 'public-ip', element: pending('公网 IP', '资源池与绑定') },

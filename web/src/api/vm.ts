@@ -33,6 +33,14 @@ export interface VmView {
   /** 投影数据可能已过期：界面应提示「数据可能陈旧」。 */
   stale: boolean
   created_at: string
+
+  /**
+   * 按**投影状态**算出的可用电源操作。
+   *
+   * 可能与实际不一致（投影滞后），此时后端受理时会基于实时探测拒绝并说明
+   * 原因。`stale` 为 true 时不应完全依赖它。
+   */
+  available_actions: PowerAction[]
 }
 
 export interface VmListParams {
@@ -54,11 +62,23 @@ export interface CreateVmInput {
   group_name?: string
 }
 
-/** 创建结果：返回任务标识，而非创建好的虚拟机。 */
-export interface CreateVmResult {
+/** 创建/电源/删除的结果：都是任务标识，操作本身异步执行。 */
+export interface TaskRef {
   task_id: number
   status: TaskStatus
 }
+
+/**
+ * 电源动作。
+ *
+ * `shutdown`（优雅关机，等来宾配合）与 `poweroff`（强制断电）是**两个独立
+ * 操作**：系统不会在关机超时后自动降级为断电，因为静默强杀可能造成来宾
+ * 文件系统损坏（f-2-01 R-006）。
+ */
+export type PowerAction = 'start' | 'shutdown' | 'reboot' | 'poweroff' | 'reset'
+
+/** 磁盘处理方式。没有默认值——必须由用户显式选择（f-2-01 R-009）。 */
+export type DiskAction = 'delete' | 'keep'
 
 export const vmApi = {
   list: (params: VmListParams = {}): Promise<{ items: VmView[]; pagination: Pagination }> =>
@@ -73,7 +93,13 @@ export const vmApi = {
 
   get: (id: number) => get<VmView>(`/api/v1/vms/${id}`),
 
-  create: (input: CreateVmInput) => post<CreateVmResult>('/api/v1/vms', input),
+  create: (input: CreateVmInput) => post<TaskRef>('/api/v1/vms', input),
 
-  remove: (id: number) => del<void>(`/api/v1/vms/${id}`),
+  power: (id: number, action: PowerAction) =>
+    post<TaskRef>(`/api/v1/vms/${id}/power-actions`, { action }),
+
+  // 磁盘处理方式走查询参数：DELETE 携带 body 并非所有客户端都支持，
+  // 走 query 更稳妥（服务端两种都接受）。
+  remove: (id: number, diskAction: DiskAction) =>
+    del<TaskRef>(`/api/v1/vms/${id}?disk_action=${diskAction}`),
 }
