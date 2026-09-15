@@ -92,13 +92,17 @@ docs/06-decisions/             不得违背既有 ADR
 | [`f-4-01-network-backend.md`](f-4-01-network-backend.md) | 网络后端抽象与能力降级 | F-4-01 | **Ready**（9 项决策见 §9） | <!-- TODO --> |
 | [`f-2-02-vm-create.md`](f-2-02-vm-create.md) | 虚拟机创建向导 | F-2-02 | **Ready**（9 项决策见 §9） | <!-- TODO --> |
 | [`f-2-01-vm-list.md`](f-2-01-vm-list.md) | 虚拟机列表、详情与电源操作 | F-2-01、F-2-03、F-2-04 | **Ready**（9 项决策见 §9） | <!-- TODO --> |
+| [`f-2-08-vnc-console.md`](f-2-08-vnc-console.md) | 虚拟机 VNC 控制台 | F-2-08 | **Ready**（10 项决策见 §9） | <!-- TODO --> |
+| [`f-10-01-high-risk-verification.md`](f-10-01-high-risk-verification.md) | 高风险操作二次验证 | F-10-01、F-10-02 | **Ready**（10 项决策见 §9） | <!-- TODO --> |
 
-### 6.2 M2 待创建（按依赖顺序）
+**M2 规划规格进度：10 / 11（已完成项均 `Ready`）。** 尚缺 `f-9-01-system-settings.md`。
+
+### 6.2 M2 规划清单
 
 > 顺序依据 [`CAPABILITY_MAP.md`](../01-product/CAPABILITY_MAP.md) §3 的依赖链：**先做被依赖的**。
-> 每份规格创建后移入 §6.1，并在 [`../03-api/API.md`](../03-api/API.md) 登记其对外接口。文件名可按实际拆分为更细的粒度。
+> 覆盖口径以 [`PRD.md`](../01-product/PRD.md) §4 的 P0 为准，M2 的 22 项 P0 应逐项有归属。
 
-| 顺序 | 规划文件 | 覆盖需求 | 前置依赖 |
+| 顺序 | 规格文件 | 覆盖需求 | 前置依赖 |
 |---|---|---|---|
 | 1 | `f-6-01-node-onboarding.md` ✅ | F-6-01、F-6-02、F-6-08 | —（依赖树的根） |
 | 2 | `f-1-01-auth-session.md` ✅ | F-1-01、F-1-02 | — |
@@ -108,8 +112,13 @@ docs/06-decisions/             不得违背既有 ADR
 | 6 | `f-4-01-network-backend.md` ✅ | F-4-01 | 1 |
 | 7 | `f-2-02-vm-create.md` ✅ | F-2-02 | 1、4、5、6 |
 | 8 | `f-2-01-vm-list.md` ✅ | F-2-01、F-2-03、F-2-04 | 7 |
-| 9 | `f-2-08-vnc-console.md` | F-2-08（P0，属 M2 完成标志） | 7 |
-| 10 | `f-10-01-high-risk-verification.md` | F-10-01、F-10-02 | 2、3 |
+| 9 | `f-2-08-vnc-console.md` ✅ | F-2-08 | 7 |
+| 10 | `f-10-01-high-risk-verification.md` ✅ | F-10-01、F-10-02 | 2、3 |
+| 11 | `f-9-01-system-settings.md` | **F-9-01**（P0，属 M2「设置与安全基础」） | 2 |
+
+> **未单独成规格但已落实的 P0 需求**：**F-10-07**（危险网络变更可回滚）见 `f-4-01` R-007；**F-10-08**（进程归属校验）作为横切约束见 `f-10-01` §1.3。
+>
+> **F-9-01 为补录**：核对 M2 的 22 项 P0 时发现，`CAPABILITY_MAP.md` §7 的 M2 口径含「设置与安全基础（P0）」、`ROADMAP.md` M2 §2.2 亦列有「系统设置（F-9-01）」，但本清单此前遗漏。
 
 > 第 9 项为**补录**：F-2-08（VNC 控制台）是 M2 的 P0 且是「控制台操作」这一完成标志的必要条件，此前规划时遗漏。它涉及 WebSocket 代理与独立窗口，粒度上独立成规格。
 
@@ -163,3 +172,6 @@ AI 代理在实现某个功能前，应：
 | 2026-09-15 | 新增第六份规格 [`f-4-01-network-backend.md`](f-4-01-network-backend.md)（网络后端抽象与能力降级，**Ready**）；其 2 个接口 API-021~API-022 登记至 [`../03-api/API.md`](../03-api/API.md)；同步清理 ADR-0004 中已过时的「待 PRD 定稿后确认」说明 |
 | 2026-09-15 | 新增第七份规格 [`f-2-02-vm-create.md`](f-2-02-vm-create.md)（虚拟机创建向导，**Ready**）；其 2 个接口 API-023~API-024 登记至 [`../03-api/API.md`](../03-api/API.md) |
 | 2026-09-15 | 新增第八份规格 [`f-2-01-vm-list.md`](f-2-01-vm-list.md)（虚拟机列表、详情与电源操作，**Ready**）；其 5 个接口 API-025~API-029 登记至 [`../03-api/API.md`](../03-api/API.md)；**补录遗漏**：F-2-08（VNC 控制台，P0 且属 M2 完成标志）此前未列入规划，现补为第 9 项 |
+| 2026-09-15 | 新增第九份规格 [`f-2-08-vnc-console.md`](f-2-08-vnc-console.md)（VNC 控制台，**Ready**）；其 4 个接口 API-030~API-033 登记至 [`../03-api/API.md`](../03-api/API.md)。**填补架构缺口**：ADR-0005 规定控制面不直连宿主机且宿主机常在内网/NAT 之后，而 VNC 监听于宿主 `127.0.0.1`——本规格定义 VNC 流量**经 agent 反向通道承载**，并回填 [`f-6-01-node-onboarding.md`](f-6-01-node-onboarding.md) §5.2（通道需支持多路复用流式转发） |
+| 2026-09-15 | 新增第十份规格 [`f-10-01-high-risk-verification.md`](f-10-01-high-risk-verification.md)（高风险操作二次验证，**Ready**）；其 2 个接口 API-034~API-035 登记至 [`../03-api/API.md`](../03-api/API.md)。登记未单独成规格的 P0 需求归属（F-10-07 见 `f-4-01`、F-10-08 为横切约束） |
+| 2026-09-15 | **补齐规划遗漏**：核对 M2 的 22 项 P0 覆盖情况时发现 **F-9-01**（系统设置，P0，属 M2「设置与安全基础」——`CAPABILITY_MAP.md` §7 与 `ROADMAP.md` M2 §2.2 均有要求）此前未列入清单，现补为第 11 项规格（待创建）；§6.1 进度表述与 §6.2 标题同步修正为 10 / 11 |

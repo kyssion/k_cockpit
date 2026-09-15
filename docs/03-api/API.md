@@ -178,6 +178,12 @@
 | API-027 | POST | `/api/v1/vms/:id/power-actions` | 电源操作（`start` / `shutdown` / `reboot` / `poweroff` / `reset`） | 是 | 规划中 | F-2-04 |
 | API-028 | POST | `/api/v1/vms/batch-actions` | 批量操作（逐台独立任务，可部分成功） | 是 | 规划中 | F-2-01 |
 | API-029 | DELETE | `/api/v1/vms/:id` | 删除虚拟机（`disk_action` 必填：`delete` / `keep`） | 是 | 规划中 | F-2-04 |
+| API-030 | GET | `/api/v1/vms/:id/console` | 控制台配置与状态（开启状态、端口、暴露状态、显示设备） | 是 | 规划中 | F-2-08 |
+| API-031 | PATCH | `/api/v1/vms/:id/console` | 开启/关闭、设置密码、切换对外暴露（暴露需二次验证） | 是 | 规划中 | F-2-08 |
+| API-032 | GET | `/api/v1/vms/:id/console/screenshot` | 控制台截帧预览（服务端短时缓存） | 是 | 规划中 | F-2-08 |
+| API-033 | GET | `/api/v1/vms/:id/console/ws` | **WebSocket**：VNC 流量代理（经 agent 通道转发，不直连宿主机） | 是 | 规划中 | F-2-08 |
+| API-034 | GET | `/api/v1/security/high-risk-policy` | 高风险操作清单与判定口径（供前端渲染提示） | 是 | 规划中 | F-10-02 |
+| API-035 | POST | `/api/v1/auth/risk-verification` | 提交验证码，换取一次性高风险许可 | 是 | 规划中 | F-10-01 |
 
 **状态口径**：
 
