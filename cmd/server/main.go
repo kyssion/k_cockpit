@@ -20,6 +20,7 @@ import (
 	"k_cockpit/internal/node"
 	"k_cockpit/internal/risk"
 	"k_cockpit/internal/router"
+	"k_cockpit/internal/storage"
 	"k_cockpit/internal/task"
 	"k_cockpit/internal/vm"
 )
@@ -93,9 +94,12 @@ func main() {
 	queue.Register(vm.NewCreateExecutor(db, mockAgent))
 	queue.Register(vm.NewPowerExecutor(db, mockAgent))
 	queue.Register(vm.NewDeleteExecutor(db, mockAgent))
+	queue.Register(storage.NewCreateExecutor(db, mockAgent))
+	queue.Register(storage.NewDeleteExecutor(db, mockAgent))
 	queue.Start(context.Background())
 
 	vmSvc := vm.NewService(db, queue, recorder, mockAgent)
+	storageSvc := storage.NewService(db, queue, recorder, mockAgent)
 
 	h := server.Default(server.WithHostPorts(cfg.HTTP.Addr()))
 	router.Register(h, router.Deps{
@@ -106,6 +110,7 @@ func main() {
 		VM:            vmSvc,
 		Task:          queue,
 		Risk:          riskGuard,
+		Storage:       storageSvc,
 		SecureCookie:  cfg.Session.SecureCookie,
 		SimulateAgent: cfg.Agent.Transport == config.AgentTransportMock,
 	})

@@ -17,6 +17,7 @@ import (
 	"k_cockpit/internal/handler"
 	"k_cockpit/internal/node"
 	"k_cockpit/internal/risk"
+	"k_cockpit/internal/storage"
 	"k_cockpit/internal/task"
 	"k_cockpit/internal/vm"
 )
@@ -31,6 +32,7 @@ type Deps struct {
 	Bootstrap *auth.Bootstrap
 	Node      *node.Service
 	VM        *vm.Service
+	Storage   *storage.Service
 	Task      *task.Queue
 	// Risk 强制高风险操作的二次验证（f-10-01）。受保护的操作在 handler
 	// 入口调用它，清单本身集中在 internal/risk。
@@ -56,6 +58,7 @@ func Register(h *server.Hertz, deps Deps) {
 	vmHandler := handler.NewVM(deps.VM, deps.Risk)
 	taskHandler := handler.NewTask(deps.Task)
 	securityHandler := handler.NewSecurity(deps.Risk, deps.Auth)
+	storageHandler := handler.NewStorage(deps.Storage, deps.Risk)
 
 	authMW := auth.NewMiddleware(deps.Auth)
 	// 认证接口都计为真实用户活动：它们由用户显式操作触发，不是后台轮询。
@@ -92,6 +95,15 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/nodes/:id", requireAuth, adminOnly, nodeHandler.Get)
 		v1.POST("/nodes/registration-tokens", requireAuth, adminOnly, nodeHandler.CreateEnrollToken)
 		v1.DELETE("/nodes/:id", requireAuth, adminOnly, nodeHandler.Remove)
+
+		// 存储池（F-5-01）：管理员专属。创建与删除会格式化/销毁设备，
+		// 属受二次验证保护的操作（在 handler 入口调用 guard）。
+		v1.GET("/nodes/:id/disks", requireAuth, adminOnly, storageHandler.Disks)
+		v1.GET("/nodes/:id/storage-pools", requireAuth, adminOnly, storageHandler.ListPools)
+		v1.GET("/storage-pools/:id", requireAuth, adminOnly, storageHandler.GetPool)
+		v1.POST("/storage-pools", requireAuth, adminOnly, storageHandler.CreatePool)
+		v1.PATCH("/storage-pools/:id", requireAuth, adminOnly, storageHandler.UpdatePool)
+		v1.DELETE("/storage-pools/:id", requireAuth, adminOnly, storageHandler.DeletePool)
 
 		// 虚拟机：管理员可操作全部，tenant 仅自己名下（归属过滤在数据访问层注入，
 		// 因此这里不需要按角色分路由）。

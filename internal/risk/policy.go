@@ -23,6 +23,10 @@ const (
 	ActionNodeRemove Action = "node.remove"
 	// 撤销会话：被撤销方立即失去访问，同样属于影响可达性。
 	ActionSessionRevoke Action = "session.revoke"
+	// 创建存储池：会**格式化**设备，原有数据无法恢复。
+	ActionStoragePoolCreate Action = "storage.pool.create"
+	// 删除存储池：销毁其中的磁盘。
+	ActionStoragePoolDelete Action = "storage.pool.delete"
 )
 
 // Entry 是清单中的一条，用于对外下发（API-034）。
@@ -54,6 +58,16 @@ var policy = []Entry{
 		Action: ActionSessionRevoke,
 		Label:  "撤销会话",
 		Reason: "被撤销的登录会立即失效",
+	},
+	{
+		Action: ActionStoragePoolCreate,
+		Label:  "创建存储池",
+		Reason: "会格式化所选设备，其上的原有数据无法恢复",
+	},
+	{
+		Action: ActionStoragePoolDelete,
+		Label:  "删除存储池",
+		Reason: "池内的磁盘会被一并销毁",
 	},
 }
 
