@@ -1,0 +1,71 @@
+package model
+
+import (
+	"time"
+
+	"gorm.io/gorm"
+)
+
+// 节点注册状态。
+const (
+	// NodeEnrollPending 已生成注册令牌，等待 agent 注册。
+	NodeEnrollPending = "pending"
+	// NodeEnrollEnrolled agent 已完成注册。
+	NodeEnrollEnrolled = "enrolled"
+)
+
+// 节点运行态。
+//
+// 这些值由**心跳时间推导**得出，不由 agent 直接上报——见 node.Service.deriveStatus。
+const (
+	NodeStatusOnline  = "online"
+	NodeStatusOffline = "offline"
+	NodeStatusUnknown = "unknown"
+)
+
+// Node 对应 node 表。
+//
+// 「元数据」与「运行态」是两类数据，本结构两处都存：
+//   - 元数据（名称、注册信息、备注）由控制面管理，是权威来源；
+//   - 运行态（心跳、能力、版本）是 agent 上报结果的**缓存**，
+//     控制面只是代为保存，用于列表展示与离线判定。
+type Node struct {
+	ID int64 `gorm:"primaryKey"`
+	// Name 带唯一索引：节点名是用户识别机器的唯一凭据，重名会让「哪台是哪台」
+	// 无法回答。索引名与迁移中的 uniq_node_name 对应。
+	Name              string `gorm:"size:64;not null;uniqueIndex:uniq_node_name"`
+	Enabled           bool   `gorm:"not null;default:true"`
+	Status            string `gorm:"size:16;not null;default:unknown"`
+	MaintenanceMode   bool   `gorm:"not null;default:false"`
+	IsMigrationTarget bool   `gorm:"not null;default:true"`
+
+	// agent 注册与信任信息。
+	AgentID         *string `gorm:"size:64"`
+	EnrollTokenHash *string `gorm:"size:128"`
+	EnrollExpiresAt *time.Time
+	CertFingerprint *string `gorm:"size:128"`
+	EnrollState     string  `gorm:"size:16;not null;default:pending"`
+
+	// 版本、心跳与能力上报。
+	AgentVersion    *string `gorm:"size:32"`
+	ProtocolVersion int     `gorm:"not null;default:0"`
+	LastHeartbeatAt *time.Time
+	LastSeenAt      *time.Time
+	Capabilities    *string `gorm:"type:text"`
+	CapabilitiesAt  *time.Time
+	LastError       *string `gorm:"size:255"`
+
+	Remark    *string `gorm:"size:255"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	// 用 gorm.DeletedAt 而非 *time.Time：前者让 GORM **自动**为所有查询
+	// 追加 `deleted_at IS NULL`。用普通指针时，任何一处忘记写条件都会
+	// 让已删除的记录重新出现——这类遗漏在代码审查中很难被发现。
+	DeletedAt gorm.DeletedAt
+}
+
+// TableName 固定表名。
+func (Node) TableName() string { return "node" }
+
+// IsEnrolled 报告该节点是否已完成 agent 注册。
+func (n *Node) IsEnrolled() bool { return n.EnrollState == NodeEnrollEnrolled }

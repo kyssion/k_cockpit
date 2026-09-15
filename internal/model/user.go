@@ -7,7 +7,11 @@
 // 未声明的列不会被读写，因此可以随能力交付逐步补齐。
 package model
 
-import "time"
+import (
+	"time"
+
+	"gorm.io/gorm"
+)
 
 // 用户角色。固定枚举，不支持自定义角色（f-1-06 R-001）。
 const (
@@ -42,7 +46,9 @@ type User struct {
 	Remark            *string `gorm:"size:255"`
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
-	DeletedAt         *time.Time
+	// 用 gorm.DeletedAt 而非 *time.Time：前者让 GORM **自动**为所有查询
+	// 追加 `deleted_at IS NULL`，避免某处漏写条件导致已删除的账号仍可登录。
+	DeletedAt gorm.DeletedAt
 }
 
 // TableName 固定表名：PostgreSQL 中 user 是保留字，迁移里写作 "user"，
@@ -57,5 +63,5 @@ func (u *User) IsAdmin() bool { return u.Role == RoleAdmin }
 // 注意：调用方不应据此区分对外文案——登录失败统一提示（f-1-01 R-002），
 // 该判断只用于决定内部流程。
 func (u *User) IsActive() bool {
-	return u.Status == UserStatusActive && u.DeletedAt == nil
+	return u.Status == UserStatusActive && !u.DeletedAt.Valid
 }
