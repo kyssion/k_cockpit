@@ -154,6 +154,11 @@
 | API-003 | GET | `/api/v1/nodes` | 节点列表（含状态与最后心跳） | 是 | 规划中 | F-6-02 |
 | API-004 | GET | `/api/v1/nodes/:id` | 节点详情（含能力清单） | 是 | 规划中 | F-6-02 |
 | API-005 | DELETE | `/api/v1/nodes/:id` | 移除节点（需二次验证） | 是（管理员） | 规划中 | F-6-01 |
+| API-006 | POST | `/api/v1/auth/login` | 用户名密码登录，返回令牌与用户信息 | 否（公开，理由见规格） | 规划中 | F-1-01 |
+| API-007 | POST | `/api/v1/auth/logout` | 登出当前会话 | 是 | 规划中 | F-1-02 |
+| API-008 | GET | `/api/v1/auth/session` | 当前会话与用户信息 | 是 | 规划中 | F-1-02 |
+| API-009 | GET | `/api/v1/auth/sessions` | 会话与登录记录列表（含当前会话标记） | 是 | 规划中 | F-1-02 |
+| API-010 | DELETE | `/api/v1/auth/sessions/:id` | 撤销指定会话（敏感操作，需二次验证） | 是 | 规划中 | F-1-02 |
 
 **状态口径**：
 
