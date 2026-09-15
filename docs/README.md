@@ -35,8 +35,9 @@ docs/
 │   ├── README.md                  # ADR 说明
 │   └── 0001-record-architecture-decisions.md
 ├── 07-specs/                      # 规格层：单个功能怎么做
-│   ├── README.md                  # 规格说明
-│   └── _TEMPLATE.md               # 规格模板
+│   ├── README.md                  # 规格说明与规格清单（含 M2 规划顺序）
+│   ├── _TEMPLATE.md               # 规格模板
+│   └── f-6-01-node-onboarding.md  # 节点纳管与 agent 通道（Draft）
 └── 08-reference/                  # 参考层：外部参考项目的功能与实现资料
     ├── README.md                  # 参考项目总览：使用原则、只读与同步
     ├── qvmconsole/                # QVMConsole：工程概览 / 工程架构 / 功能清单 / 详细功能清单(接口·任务) / 功能结论 / 踩坑清单

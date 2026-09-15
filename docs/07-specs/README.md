@@ -1,7 +1,8 @@
 # 功能规格
 
 > 状态：生效
-> 最后更新：<!-- TODO: YYYY-MM-DD -->
+> 最后更新：2026-09-15
+> 关联：[`../01-product/PRD.md`](../01-product/PRD.md)（功能编号与优先级）· [`../01-product/ROADMAP.md`](../01-product/ROADMAP.md)（阶段与里程碑）· [`../01-product/CAPABILITY_MAP.md`](../01-product/CAPABILITY_MAP.md)（能力依赖）
 
 本目录存放**单个功能的详细规格**。一份规格对应一个可独立开发与验证的功能单元。
 
@@ -69,9 +70,31 @@ docs/06-decisions/             不得违背既有 ADR
 
 ## 6. 规格清单
 
-| 文件 | 功能 | 状态 | 负责人 | 关联需求 |
+### 6.1 已创建
+
+| 文件 | 功能 | 覆盖需求 | 状态 | 负责人 |
 |---|---|---|---|---|
-| <!-- TODO --> | | | | |
+| [`f-6-01-node-onboarding.md`](f-6-01-node-onboarding.md) | 节点纳管与 agent 通道 | F-6-01、F-6-02、F-6-08 | **Ready**（7 项决策见 §9） | <!-- TODO --> |
+
+### 6.2 M2 待创建（按依赖顺序）
+
+> 顺序依据 [`CAPABILITY_MAP.md`](../01-product/CAPABILITY_MAP.md) §3 的依赖链：**先做被依赖的**。
+> 每份规格创建后移入 §6.1，并在 [`../03-api/API.md`](../03-api/API.md) 登记其对外接口。文件名可按实际拆分为更细的粒度。
+
+| 顺序 | 规划文件 | 覆盖需求 | 前置依赖 |
+|---|---|---|---|
+| 1 | `f-6-01-node-onboarding.md` ✅ | F-6-01、F-6-02、F-6-08 | —（依赖树的根） |
+| 2 | `f-1-01-auth-session.md` | F-1-01、F-1-02 | — |
+| 3 | `f-1-06-rbac.md` | F-1-06、F-1-09 | 2 |
+| 4 | `f-7-01-task-queue.md` | F-7-01、F-7-02、F-7-03 | 2、3 |
+| 5 | `f-5-01-storage-pool.md` | F-5-01 | 1 |
+| 6 | `f-4-01-network-backend.md` | F-4-01 | 1 |
+| 7 | `f-2-02-vm-create.md` | F-2-02 | 1、4、5、6 |
+| 8 | `f-2-01-vm-list.md` | F-2-01、F-2-03 | 7 |
+| 9 | `f-10-01-high-risk-verification.md` | F-10-01、F-10-02 | 2、3 |
+
+> 平台外壳（F-11-01、F-11-02）属前端范畴，其规格在 `web/` 工程创建后按 [`FRONTEND.md`](../02-architecture/FRONTEND.md) 补，不在上表。
+> `web/` 前端工程本身尚无规格——按 [`ROADMAP.md`](../01-product/ROADMAP.md) M2 §2.5 执行。
 
 > 新增规格后必须在此表登记。
 
@@ -104,3 +127,11 @@ AI 代理在实现某个功能前，应：
 2. 若发现歧义、缺失或与既有 ADR 冲突，**先提出疑问**，不要自行假定。
 3. 按规格的「验收标准」编写测试，确保实现与验收一致。
 4. 实现完成后，将规格状态更新为 `Done`。
+
+---
+
+## 10. 变更记录
+
+| 日期 | 变更内容 |
+|---|---|
+| 2026-09-15 | 建立规格清单：登记首份规格 [`f-6-01-node-onboarding.md`](f-6-01-node-onboarding.md)（节点纳管与 agent 通道，Draft）；按 [`CAPABILITY_MAP.md`](../01-product/CAPABILITY_MAP.md) §3 依赖链给出 M2 待创建规格的顺序（9 项） |
