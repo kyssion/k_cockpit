@@ -26,6 +26,10 @@
 
 | 层 | 选型 | 版本 | 备注 |
 |---|---|---|---|
+| 架构形态 | 控制面 + 节点代理（agent） | — | 每台宿主机只部署轻量 agent；控制面**不持有**宿主机登录凭据（[ADR-0005](docs/06-decisions/0005-control-plane-node-agent-architecture.md)） |
+| 节点代理 | 与控制面同仓库构建的独立二进制 | — | systemd 托管；节点侧**唯一**直接操作 libvirt/KVM 的角色 |
+| 控制面 ↔ agent 协议 | 领域操作 + 任务指令 / 进度流的 RPC 长连接 | **待定** | agent **反向**长连接，宿主机无需开放入站端口；不转发 libvirt 原始 RPC |
+| 节点接入鉴权 | 一次性注册令牌 + mTLS 客户端证书 | — | 控制面不持有宿主机登录凭据 |
 | 语言 | Go | 1.27 | 版本以 `go.mod` 为准 |
 | Web 框架 | CloudWeGo Hertz | v0.10.6 | 基于 netpoll，兼容 net/http |
 | ORM | GORM | v1.31.2 | 已关闭默认事务，使用单数表名 |
@@ -34,9 +38,15 @@
 | SQLite 驱动 | github.com/glebarez/sqlite | v1.11.0 | 纯 Go 实现，**无需 CGO** |
 | 配置 | 环境变量 + godotenv | v1.5.1 | godotenv 仅用于本地加载 `.env` |
 | 测试 | 标准库 testing + Hertz `ut` | — | 用 SQLite 临时文件，不依赖外部服务 |
+| 前端框架 | React | 19 | 纯 SPA；构建产物由控制面静态托管 |
+| 前端语言 | TypeScript（strict） | — | 完整选型见 [ADR-0006](docs/06-decisions/0006-frontend-tech-stack.md) |
+| 前端构建 / 样式 / UI | Vite · Tailwind CSS 4 · shadcn/ui | — | 设计令牌 `--kc-*` 三层桥接，业务代码禁魔法值 |
+| 前端路由 / 状态 | React Router v7（库模式）· TanStack Query · Zustand | — | 服务端状态归 Query，UI 状态归 Zustand |
+| 前端包管理 / 测试 | pnpm · Vitest + Playwright | — | 锁文件 `web/pnpm-lock.yaml`；E2E 覆盖核心链路 |
 
 **AI 注意**：
 - 版本号一律以 `go.mod` 为准，不要凭记忆填写。
+- 前端版本号一律以 `web/pnpm-lock.yaml` 为准；前端工程结构与约定见 [`docs/02-architecture/FRONTEND.md`](docs/02-architecture/FRONTEND.md) §2。
 - 新增第三方依赖必须先说明理由并获确认。
 - 关键选型的历史理由见 [`docs/06-decisions/`](docs/06-decisions/README.md)，**不得违背既有 ADR**。
 
@@ -73,6 +83,19 @@ go test -cover ./...
 go test ./internal/handler/...
 ```
 
+前端（`web/`，**尚未创建**；技术栈见 [ADR-0006](docs/06-decisions/0006-frontend-tech-stack.md)，脚本名以落地后的 `web/package.json` 为准）：
+
+```bash
+cd web
+pnpm install      # 安装依赖
+pnpm dev          # 本地开发（/api 代理到控制面 8080）
+pnpm build        # 构建产物（由控制面托管）
+pnpm typecheck    # 类型检查
+pnpm lint         # Lint
+pnpm test         # 单元与组件测试
+pnpm test:e2e     # E2E（Playwright）
+```
+
 **本地运行提示**：默认配置使用 SQLite，数据文件写入 `data/`。表结构由 [`internal/database/migrations/`](internal/database/migrations/) 下的 SQL 迁移管理（**服务启动不做自动迁移**），执行方式见 [`docs/02-architecture/DATA_MODEL.md`](docs/02-architecture/DATA_MODEL.md) 第 6 节。
 
 ---
@@ -84,10 +107,10 @@ k_cockpit/
 ├── cmd/server/            # 程序入口（main 包）
 ├── internal/              # 私有代码，外部模块不可导入
 │   ├── config/            # 配置加载与校验
-│   ├── database/          # 数据库连接与驱动切换
-│   ├── model/             # GORM 数据模型
+│   ├── database/          # 数据库连接、驱动切换与 SQL 迁移（migrations/）
 │   ├── handler/           # HTTP 接口实现（测试同目录）
 │   └── router/            # 路由注册
+├── web/                   # 前端工程（纯 SPA，规划中；结构与约定见 docs/02-architecture/FRONTEND.md §2.2）
 ├── reference/             # 只读的外部参考项目（git 子模块，见 docs/08-reference/README.md）
 ├── docs/                  # 所有项目文档（见 docs/README.md）
 │   ├── 01-product/        # 产品：需求、路线图
@@ -103,6 +126,7 @@ k_cockpit/
 
 **规则**：
 - 文档一律放 `docs/` 下，**不要在根目录散落新的 `.md` 文件**（根目录仅保留 `README.md`、`AGENTS.md`、`CONTRIBUTING.md`、`CHANGELOG.md`、`SECURITY.md`）。
+- 前端代码一律放 `web/`；前端工程结构、组件边界与状态职责见 [`docs/02-architecture/FRONTEND.md`](docs/02-architecture/FRONTEND.md) §2。
 - 新增架构决策 → 在 `docs/06-decisions/` 新建 ADR，**不要修改历史 ADR**。
 - **不要在仓库内创建绑定特定 AI 工具或平台的配置文件**（各产品专属的规则目录等）。AI 规范统一以本文件为准；工具接入方式见 `docs/05-ai/AI_DEVELOPMENT.md`。
 - 新增文档后，需在 `docs/README.md` 的对应索引中登记。
@@ -128,6 +152,7 @@ k_cockpit/
 - **自愈逻辑**：启动期与周期性的 `Restore*` / `Reconcile*` / `Ensure*` 必须**幂等**，且单步失败只降级告警、不阻断主流程。
 - **外部状态先检查**：不可变标记（`chattr +i`）、链式依赖、外部快照链等，必须先探测再操作，并给出可执行的修复提示。
 - **库表变更**：索引冲突、数据去重、枚举回填等必须写**显式迁移**，不能只依赖 ORM 的自动迁移。
+- **前端代码**：组件只消费设计令牌（禁止颜色/间距魔法值）；组件边界以 [`docs/02-architecture/FRONTEND.md`](docs/02-architecture/FRONTEND.md) §4.7 清单与 `web/src/components/` 为准；完整工程约定见该文档 §2。
 
 详细规范见 [`docs/04-engineering/CODING_STANDARDS.md`](docs/04-engineering/CODING_STANDARDS.md)；排障与运行环境操作见 [`docs/04-engineering/TROUBLESHOOTING.md`](docs/04-engineering/TROUBLESHOOTING.md)。
 

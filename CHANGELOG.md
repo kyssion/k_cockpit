@@ -23,6 +23,7 @@
 - 文档体系：`docs/` 七个分区
 - 协作规范：`CONTRIBUTING.md`、`SECURITY.md`、`CHANGELOG.md`
 - **架构决策：控制面 / 节点代理（agent）架构**（[ADR-0005](docs/06-decisions/0005-control-plane-node-agent-architecture.md)）——每台宿主机只部署轻量 agent，控制面**不持有宿主机登录凭据**，能力探测下沉到节点；据此填充 `docs/02-architecture/ARCHITECTURE.md`，并同步 PRD、能力地图、数据模型（迁移 `0002_node_agent_fields`）、前端设计与技术选型
+- **架构决策：前端技术栈**（[ADR-0006](docs/06-decisions/0006-frontend-tech-stack.md)）——Vite + React 19 + TypeScript（strict）+ Tailwind CSS 4 + shadcn/ui + React Router v7（库模式）+ TanStack Query / Zustand / TanStack Table / React Hook Form + Zod / ECharts / i18next / noVNC，工程配套 pnpm + Vitest + Playwright + MSW；前端工程规划于 `web/`（目录结构与约定见 `docs/02-architecture/FRONTEND.md` §2），**尚未创建**
 - **产品与架构文档**：功能需求（`docs/01-product/PRD.md`，11 个能力域 94 项功能与优先级）、能力地图（`docs/01-product/CAPABILITY_MAP.md`）、数据模型（`docs/02-architecture/DATA_MODEL.md`，43 张表）、前端设计（`docs/02-architecture/FRONTEND.md`，设计系统与 17 个页面）
 - **数据库表结构**：`internal/database/migrations/0001_init_schema.sql`（43 张表 / 81 个显式索引）建库并在 `schema_migration` 登记；后续迁移 `0002_node_agent_fields`（节点接入改为 agent）、`0003_task_agent_fields`（任务幂等键、下发与上报时间）均已执行
 - **Go Web 基础框架**（Go 1.27）

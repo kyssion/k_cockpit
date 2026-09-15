@@ -3,7 +3,7 @@
 > 状态：草稿
 > 最后更新：<!-- TODO: YYYY-MM-DD -->
 
-**测试框架尚未确定。** 本文档约定**框架无关的测试要求**，选型后补充具体写法。
+**测试框架已定**：后端为标准库 `testing` + Hertz `ut`；前端为 Vitest + React Testing Library（组件）与 Playwright（E2E），选型见 [ADR-0006](../06-decisions/0006-frontend-tech-stack.md)。本文约定**框架无关的测试要求**，具体写法按上述栈落地。
 
 ---
 
@@ -27,6 +27,14 @@
 | 端到端测试 | 完整用户链路 | 是 | 最少（约 10%） | 合并前 / 定时 |
 
 **原则**：能用单元测试覆盖的，不要放到端到端；测试金字塔底部要厚。
+
+**前端（`web/`）的层级对应**（规划中）：
+
+| 层级 | 工具 | 覆盖对象 |
+|---|---|---|
+| 单元 / 组件 | Vitest + React Testing Library（jsdom） | 组件行为、hooks、格式化与工具函数 |
+| 集成 | Vitest + MSW（拦截接口） | 页面级数据流：列表渲染、表单提交、错误态与空态 |
+| 端到端 | Playwright | 核心用户链路：登录、创建虚拟机、开关机、任务进度 |
 
 ---
 
@@ -84,11 +92,17 @@
 ## 8. 运行方式
 
 ```bash
-# TODO: 技术栈确定后补充
-# 全部测试
-# 单个文件
-# 按名称筛选
-# 覆盖率报告
+# 后端
+go test ./...                    # 全部
+go test ./internal/handler/...   # 单个包
+go test -run TestName ./...      # 按名称筛选
+go test -cover ./...             # 覆盖率
+
+# 前端（web/，尚未创建；技术栈见 ADR-0006）
+cd web
+pnpm test                        # Vitest（追加文件路径可测单个文件）
+pnpm test --coverage             # 覆盖率
+pnpm test:e2e                    # Playwright E2E
 ```
 
 ---
@@ -107,3 +121,4 @@
 | 日期 | 变更内容 |
 |---|---|
 | | 创建文档 |
+| 2026-09-15 | 测试框架更新为已定（后端 `testing` + Hertz `ut`；前端 Vitest + RTL / Playwright，见 [ADR-0006](../06-decisions/0006-frontend-tech-stack.md)）；补充前端测试层级对应与运行方式 |

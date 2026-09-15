@@ -1,11 +1,11 @@
 # 前端设计
 
-> 状态：草稿（信息架构、设计系统与页面设计已定稿；**前端技术栈待定**）
+> 状态：草稿（信息架构、设计系统与页面设计已定稿；**前端技术栈已定，见 [ADR-0006](../06-decisions/0006-frontend-tech-stack.md)**）
 > 最后更新：2026-09-15
 > 关联：[`../01-product/PRD.md`](../01-product/PRD.md)（功能编号 `F-x-xx`）· [`../01-product/CAPABILITY_MAP.md`](../01-product/CAPABILITY_MAP.md)（能力分层）· [`ARCHITECTURE.md`](ARCHITECTURE.md) · [`../03-api/API.md`](../03-api/API.md)
 > 对标参考：[`../08-reference/qvmconsole/capabilities.md`](../08-reference/qvmconsole/capabilities.md) §3（工作台与全局界面、设计系统与前端约定）
 
-本文是**前端的产品级设计**：信息架构、设计系统、逐页设计与跨页交互规格。**不含**具体组件库 API 与版本号（技术栈待 ADR，见 §2 与 §10）。
+本文是**前端的产品级设计**：信息架构、设计系统、逐页设计与跨页交互规格。**不含**具体组件库 API 与版本号（技术栈见 [ADR-0006](../06-decisions/0006-frontend-tech-stack.md)，工程结构与目录见 §2）。
 
 **对标口径**：参考项目的能力面（16 个菜单、工作台、创建向导 9 步、详情 7 标签、控制台、任务栏等）**功能上逐项覆盖**（覆盖对照见 §5.0 表），观感与交互上按 §1.3 的取向做到**不弱于**它。
 
@@ -46,17 +46,102 @@
 
 ---
 
-## 2. 技术栈与工程约定（**待 ADR**）
+## 2. 技术栈与工程架构
 
-> `TECH_STACK.md` 规定：技术栈未定稿前不得臆造框架与版本号。**前端技术栈尚未确定**（见 §10 U-1），落地前须在 `docs/06-decisions/` 新建 ADR，版本以 ADR 与依赖锁定文件为准。
+### 2.1 技术栈
 
-### 2.1 工程约定
+技术栈已由 [ADR-0006](../06-decisions/0006-frontend-tech-stack.md) 定稿（状态：Accepted）。主版本摘要：
 
-- **目录按"功能域"组织**，不按类型堆文件：`views/<域>/` 内聚页面、组件、hooks、样式。
-- 页面**一律懒加载**（按路由分包），控制台/编辑器/图表等重依赖二次懒加载。
+| 类别 | 选型 |
+|---|---|
+| 构建 / 框架 / 语言 | Vite · React 19 · TypeScript（strict） |
+| 样式 / UI 基础 | Tailwind CSS 4（`@theme` 令牌映射）· shadcn/ui（Radix 底座） |
+| 路由 / 服务端状态 / 客户端状态 | React Router v7（**库模式**）· TanStack Query · Zustand |
+| 表格 / 表单 / 图表 | TanStack Table + Virtual · React Hook Form + Zod · ECharts（自研轻封装） |
+| i18n / 控制台 / Mock | i18next · noVNC · MSW |
+| 测试 / 包管理 / 质量 | Vitest + React Testing Library · Playwright · pnpm · ESLint + Prettier |
+
+**版本策略**：主版本以 ADR-0006 为准，具体小版本由 `web/pnpm-lock.yaml` 锁定，以落地时最新稳定版为准。
+
+### 2.2 目录结构（`web/`，规划）
+
+> 前端工程位于仓库根目录 `web/`（与 `cmd/`、`internal/` 平级），纯 SPA，构建产物由控制面托管。**目录尚未创建**——技术栈已由 [ADR-0006](../06-decisions/0006-frontend-tech-stack.md) 确认，创建时以本节为准。
+
+```
+web/
+├── index.html                    # 页面入口
+├── package.json                  # 依赖与脚本
+├── tsconfig.json                 # 类型与路径别名（strict）
+├── vite.config.ts                # 构建配置（分包策略、/api 代理）
+├── public/                       # 不参与构建的静态资源（favicon、图标）
+└── src/
+    ├── main.tsx                  # 入口：挂载与全局初始化
+    ├── App.tsx                   # 根组件：主题与全局装配
+    ├── router/                   # 路由表 / 懒加载声明 / 登录与角色守卫
+    ├── layout/                   # 全局框架（§5.1）
+    │   └── components/           #   侧边栏 / 顶栏标签栏 / 底部任务栏 / 全局搜索
+    ├── views/                    # 页面：一域一目录（对齐 §3.2 路由表）
+    │   ├── auth/                 #   登录链路 / 邀请 / 找回密码
+    │   ├── dashboard/            #   工作台（管理员 / 租户）
+    │   ├── vm/
+    │   │   ├── list/             #   列表（表格 / 卡片 / 批量操作）
+    │   │   ├── create/           #   9 步创建向导
+    │   │   ├── detail/           #   详情（7 个标签页）
+    │   │   └── console/          #   控制台独立窗口（重依赖二次懒加载）
+    │   ├── template/             #   模板
+    │   ├── network/              #   网络中心（交换机 / 安全组 / ACL / 端口安全 / 端口镜像）
+    │   ├── public-ip/            #   公网 IP
+    │   ├── firewall/             #   防火墙
+    │   ├── storage-pool/         #   存储池
+    │   ├── my-storage/           #   我的存储
+    │   ├── user/                 #   用户管理
+    │   ├── node/                 #   节点管理（含 agent 纳管向导）
+    │   ├── task/                 #   任务中心
+    │   ├── scheduler/            #   调度事件
+    │   ├── settings/             #   系统设置
+    │   ├── security/             #   安全中心
+    │   ├── api-docs/             #   API 文档
+    │   └── about/                #   关于
+    ├── components/
+    │   ├── business/             # 业务组件（§4.7 清单，跨页面复用，禁止各页重写）
+    │   └── common/               # 基础组件封装（按钮 / 表格 / 弹层 / 空态 / 错误态…）
+    ├── api/                      # 请求层：一模块一文件，页面不直接拼 URL
+    │   ├── client.ts             #   实例：鉴权 / 401 登出 / 428 二次验证自动重试
+    │   └── sse.ts                #   SSE 通道封装（列表 / 详情 / 任务 / 宿主指标）
+    ├── stores/                   # 全局状态五块（§4.9）：用户 / 任务 / 页面标签 / 高风险验证 / 列表缓存
+    ├── hooks/                    # 跨域复用逻辑：SSE 订阅、主题、密度、快捷键
+    ├── styles/
+    │   ├── tokens.css            #   设计令牌 --kc-*（浅/深两套，§4.2 唯一落点）
+    │   ├── base.css              #   全局重置与排版
+    │   └── themes/               #   主题切换
+    ├── types/                    # 契约类型（对齐 docs/03-api/API.md）
+    ├── utils/                    # 格式化 / 上传器 / VNC 客户端
+    └── locales/                  # 语言包（键值化，§7）
+```
+
+**组织规则**：
+
+- **目录按"功能域"组织**，不按类型堆文件：域内的页面、组件、hooks、样式内聚在 `views/<域>/` 下（如 `views/vm/detail/components/`）；只有**跨域复用**的才升到顶层 `components/` 与 `hooks/`。
+- **页面一律懒加载**（按路由分包），控制台 / 终端 / 编辑器 / 图表等重依赖二次懒加载（§6.7）。
 - 所有接口调用集中在 `api/<模块>`，页面不直接拼 URL。
+- **测试与被测代码同目录**（`*.test.ts(x)`）；E2E 用例放 `web/e2e/`。
+
+### 2.3 数据与状态职责
+
+| 层 | 承担 | 禁止 |
+|---|---|---|
+| TanStack Query | 全部服务端状态：请求缓存 / 失效 / 重试 / 分页；**SSE 推送写入缓存** | 不用路由 `loader` 取数（避免与 Query 双轨） |
+| Zustand（`stores/`） | 仅纯客户端 UI 状态（§4.9 五块） | 域内私有状态不进全局 store |
+| 组件局部状态 | 弹窗开合、表单临时输入等域内状态 | 跨域共享数据不得藏在页面内 |
+
+**样式分层（三层桥接，方向唯一）**：设计令牌 `--kc-*`（唯一事实来源，§4.2）→ Tailwind `@theme` 映射 → shadcn 语义变量（`--background` 等）引用 `--kc-*`。**不允许三套变量并存**；业务代码只使用映射后的 utility 或令牌，禁止魔法值。
+
+### 2.4 工程约定
+
 - **组件只消费设计令牌**，禁止在业务代码里写颜色/间距魔法值（Lint 规则约束）。
-- 类型来自后端契约；接口返回结构变更必须先改契约类型（对应 `docs/03-api/API.md`）。
+- 类型来自后端契约；接口返回结构变更必须先改契约类型（对应 [`../03-api/API.md`](../03-api/API.md)）。
+- 业务规则（运行态可改矩阵、字段联动、高风险清单、配额档位）由后端下发，前端只渲染与禁用，**不允许硬编码第二份**（§6.5）。
+- **AI 生成约束**：组件边界以 §4.7 清单与 `components/` 目录为准，同类组件禁止在各页面重复实现；AI 自检回路 = `tsc --noEmit` + Vitest + Playwright（[`../05-ai/AI_DEVELOPMENT.md`](../05-ai/AI_DEVELOPMENT.md) §6）。
 
 ---
 
@@ -501,12 +586,12 @@ Tab 结构：**网络概览 / 交换机 / 安全组 / ACL / 端口安全 / 端�
 
 | 编号 | 待确认 | 影响 | 建议 |
 |---|---|---|---|
-| U-1 | 前端技术栈（框架 / UI 库 / 图表 / 构建） | 组件实现与样式方案，需新建 ADR | **待定**；在 ADR 定稿前不动手写前端代码 |
+| U-1 | 前端技术栈（框架 / UI 库 / 图表 / 构建） | 组件实现与样式方案 | **已定**：[ADR-0006](../06-decisions/0006-frontend-tech-stack.md)（Vite + React 19 + TS strict + Tailwind 4 + shadcn/ui + React Router v7 库模式 + TanStack Query / Zustand / ECharts…，状态 Accepted） |
 | U-2 | 默认主题（深色 or 浅色） | 设计验收与截图口径 | 建议深色默认（运维场景），浅色完整对等 |
 | U-3 | 是否本期做双语（i18n） | 文案组织方式与工作量 | 建议键值化从第一天就做，翻译可后补 |
 | U-4 | 浏览器支持范围 | 可用 CSS/JS 特性与降级策略 | 建议支持最近两个大版本的 Chrome/Edge/Safari/Firefox |
 | U-5 | 是否需要移动端可用 | 是否投入 <820 断点的完整设计 | 建议只保证"可查看 + 可执行电源操作"，不做移动端完整编辑 |
-| U-6 | 组件库自研 vs 引入 | 观感上限与实现成本 | 建议引入成熟组件库 + 令牌覆盖，只自研业务组件（§4.7） |
+| U-6 | 组件库自研 vs 引入 | 观感上限与实现成本 | **已定**：引入 shadcn/ui（源码模式，Radix 底座）+ 令牌覆盖，只自研业务组件（§4.7），见 [ADR-0006](../06-decisions/0006-frontend-tech-stack.md) |
 
 ---
 
@@ -517,3 +602,5 @@ Tab 结构：**网络概览 / 交换机 / 安全组 / ACL / 端口安全 / 端�
 | 2026-09-15 | 创建文档：确定设计目标与原则、信息架构（6 组菜单 / 路由表 / 导航约定）、设计系统（色彩与状态语义、字体与数值、间距与圆角、动效、组件清单、响应式断点、交互与文案约定）、17 个页面与全局框架的逐页设计、跨页交互规格（实时通道 / 高风险验证 / 任务进度 / 长表单 / 规则同源 / 性能预算）、可访问性与国际化、落地顺序与待确认项 |
 | 2026-09-15 | 按 [ADR-0005](../06-decisions/0005-control-plane-node-agent-architecture.md) 同步：§5.8 节点管理改为 **agent 纳管向导**（注册令牌 → 安装命令 → 心跳上线 → 能力自报清单），补"离线与陈旧数据"语义；§6.1 实时通道新增**节点心跳通道**；§5.0 覆盖表同步 |
 | 2026-09-15 | 移除 §2 前端技术栈候选提案（原「提案，待 ADR」表格），状态改为「待定」；§10 U-1 结论同步调整，避免在 ADR 定稿前形成事实上的技术选型 |
+| 2026-09-15 | 技术栈定稿：新增 [ADR-0006](../06-decisions/0006-frontend-tech-stack.md)（Vite + React 19 + TypeScript strict + Tailwind 4 + shadcn/ui + React Router v7 库模式 + TanStack Query / Zustand / TanStack Table / React Hook Form + Zod / ECharts / i18next / noVNC / pnpm / Vitest + Playwright）；§2 改写为技术栈、目录结构（`web/`）、数据与状态职责、工程约定；U-1 / U-6 结论更新 |
+| 2026-09-15 | ADR-0006 状态更新为 **Accepted**（原为提案态），同步 §2.1 与 §10 U-1 的状态表述 |

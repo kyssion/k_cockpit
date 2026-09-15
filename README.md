@@ -19,7 +19,7 @@
 - [x] 版本控制与 `.gitignore`
 - [x] AI 协作规范（`AGENTS.md`）
 - [x] 文档体系（`docs/`）
-- [x] 技术栈选型（Go 1.27 + Hertz + GORM）
+- [x] 技术栈选型（Go 1.27 + Hertz + GORM；前端见 [ADR-0006](docs/06-decisions/0006-frontend-tech-stack.md)）
 - [x] Go Web 基础框架（健康检查接口）
 - [x] 表结构设计与建库（43 张表，见 `docs/02-architecture/DATA_MODEL.md`）
 - [ ] 业务功能开发
@@ -37,6 +37,8 @@
 | ORM | GORM | v1.31.2 |
 | 数据库 | PostgreSQL / SQLite | — |
 | SQLite 驱动 | glebarez/sqlite（纯 Go，无需 CGO） | v1.11.0 |
+
+前端（`web/`，规划中）：Vite · React 19 · TypeScript · Tailwind CSS 4 · shadcn/ui · TanStack Query / Zustand · Vitest + Playwright · pnpm（见 [ADR-0006](docs/06-decisions/0006-frontend-tech-stack.md)）。
 
 选型理由见 [`docs/02-architecture/TECH_STACK.md`](docs/02-architecture/TECH_STACK.md)。
 
@@ -96,6 +98,10 @@ go test ./...                         # 测试
 go test -cover ./...                  # 测试 + 覆盖率
 ```
 
+### 前端（规划中）
+
+前端工程位于 `web/`，技术栈已由 [ADR-0006](docs/06-decisions/0006-frontend-tech-stack.md) 确认（**尚未创建**）。环境要求：Node.js LTS + pnpm；目录结构与命令见 [`docs/02-architecture/FRONTEND.md`](docs/02-architecture/FRONTEND.md) §2 与 [`docs/04-engineering/DEVELOPMENT.md`](docs/04-engineering/DEVELOPMENT.md)。
+
 ---
 
 ## 目录结构
@@ -110,6 +116,7 @@ k_cockpit/
 │   ├── model/             # GORM 数据模型（随功能实现逐步补齐）
 │   ├── handler/           # HTTP 接口实现
 │   └── router/            # 路由注册
+├── web/                   # 前端工程（纯 SPA，规划中，见 docs/02-architecture/FRONTEND.md §2.2）
 ├── docs/                  # 项目文档（入口见 docs/README.md）
 ├── AGENTS.md              # AI 协作规范（单一事实来源，工具无关）
 ├── CONTRIBUTING.md        # 贡献指南

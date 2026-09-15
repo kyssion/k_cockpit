@@ -12,6 +12,8 @@
 | Go | 1.27 或更高 | `go version` |
 | PostgreSQL | 14+（**可选**，仅在使用 postgres 驱动时需要） | `psql --version` |
 | C 编译器 | **不需要** | — |
+| Node.js | LTS（仅前端 `web/`，**规划中**） | `node --version` |
+| pnpm | 随 Node（仅前端 `web/`，**规划中**） | `pnpm --version` |
 
 > 项目使用纯 Go 的 SQLite 驱动，**无需 CGO 与 C 工具链**，`CGO_ENABLED=0` 即可正常构建（见 [ADR-0003](../06-decisions/0003-pure-go-sqlite-driver.md)）。
 > Go 版本在 `go.mod` 中声明，依赖版本在 `go.sum` 中锁定。
@@ -79,6 +81,9 @@ DB_SSLMODE=disable
 | 单包测试 | `go test ./internal/handler/...` |
 | 覆盖率 | `go test -cover ./...` |
 | 数据库迁移 | 执行 `internal/database/migrations/` 下的 SQL 迁移，并登记到 `schema_migration`（见 [`../02-architecture/DATA_MODEL.md`](../02-architecture/DATA_MODEL.md) §6） |
+| 前端依赖 / 开发 / 构建（`web/`，**尚未创建**，技术栈见 [ADR-0006](../06-decisions/0006-frontend-tech-stack.md)） | `cd web && pnpm install` / `pnpm dev`（`/api` 代理到 8080） / `pnpm build` |
+| 前端类型检查 / Lint | `cd web && pnpm typecheck` / `pnpm lint` |
+| 前端测试 | `cd web && pnpm test`（Vitest）/ `pnpm test:e2e`（Playwright） |
 
 ---
 
