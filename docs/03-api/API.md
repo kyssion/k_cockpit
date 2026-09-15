@@ -159,6 +159,11 @@
 | API-008 | GET | `/api/v1/auth/session` | 当前会话与用户信息 | 是 | 规划中 | F-1-02 |
 | API-009 | GET | `/api/v1/auth/sessions` | 会话与登录记录列表（含当前会话标记） | 是 | 规划中 | F-1-02 |
 | API-010 | DELETE | `/api/v1/auth/sessions/:id` | 撤销指定会话（敏感操作，需二次验证） | 是 | 规划中 | F-1-02 |
+| API-011 | GET | `/api/v1/tasks` | 任务列表（按状态 / 类型 / 资源 / 时间筛选，归属过滤） | 是 | 规划中 | F-7-02 |
+| API-012 | GET | `/api/v1/tasks/:id` | 任务详情（含参数、结果与阶段时间线） | 是 | 规划中 | F-7-02 |
+| API-013 | POST | `/api/v1/tasks/:id/cancel` | 请求取消任务 | 是 | 规划中 | F-7-02 |
+| API-014 | DELETE | `/api/v1/tasks` | 清理终态任务（拒绝含非终态） | 是 | 规划中 | F-7-02 |
+| API-015 | GET | `/api/v1/events/{channel}` | **SSE 实时通道**（`vm-list` / `vm-detail` / `tasks` / `host-metrics`） | 是 | 规划中 | F-7-03 |
 
 **状态口径**：
 
