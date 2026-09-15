@@ -1,6 +1,6 @@
 # 0004. 采用 Open vSwitch 作为虚拟网络后端
 
-- 状态：Proposed
+- 状态：Accepted
 - 日期：2026-09-12
 - 决策人：<!-- TODO -->
 - 关联：[`../02-architecture/TECH_STACK.md`](../02-architecture/TECH_STACK.md) · [`../02-architecture/ARCHITECTURE.md`](../02-architecture/ARCHITECTURE.md) · [`../08-reference/qvmconsole/features.md`](../08-reference/qvmconsole/features.md)

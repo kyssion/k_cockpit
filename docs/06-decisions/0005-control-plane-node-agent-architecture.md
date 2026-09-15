@@ -1,6 +1,6 @@
 # 0005. 采用控制面 / 节点代理（agent）架构
 
-- 状态：Proposed
+- 状态：Accepted
 - 日期：2026-09-15
 - 决策人：<!-- TODO -->
 - 关联：[`../02-architecture/ARCHITECTURE.md`](../02-architecture/ARCHITECTURE.md) · [`0004`](0004-adopt-openvswitch-as-network-backend.md) · [`../01-product/CAPABILITY_MAP.md`](../01-product/CAPABILITY_MAP.md) · [`../02-architecture/DATA_MODEL.md`](../02-architecture/DATA_MODEL.md) · 参考项目思路：[`../08-reference/kite/README.md`](../08-reference/kite/README.md) §2（Cluster Agent 反向隧道）
