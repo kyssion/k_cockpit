@@ -59,6 +59,22 @@ func (m *MockClient) Execute(_ context.Context, op Operation) (*Result, error) {
 			},
 		}
 
+	case OpNodeNetwork:
+		// 上报「基础能力齐全、OVS 缺失」：这恰好是 M2 的典型形态，也让
+		// 界面必须处理「非必需能力缺失」与「降级」两种不同的呈现——
+		// 只返回「全都可用」会让这条分支永远不被渲染到。
+		data[NetworkKey] = NetworkBackend{
+			Mode: ModeBasic,
+			Capabilities: []string{
+				CapabilityBridgeBasic,
+				CapabilityDHCP,
+				CapabilityNAT,
+			},
+			Missing: map[string]string{
+				CapabilityOVS: "未检测到 Open vSwitch",
+			},
+		}
+
 	case OpStoragePoolCreate:
 		data["mount_path"] = "/var/lib/k_cockpit/pools/" + op.Target
 		data[StatusDataKey] = "ready"
