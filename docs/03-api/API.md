@@ -176,12 +176,12 @@
 | API-021 | GET | `/api/v1/nodes/:nodeId/network` | 网络后端模式、能力清单、降级说明与默认网络状态 | 是 | 规划中 | F-4-01 |
 | API-022 | GET | `/api/v1/nodes/:nodeId/networks` | 该节点可用网络列表（M2 仅系统基础网络） | 是 | 规划中 | F-4-01 |
 | API-023 | GET | `/api/v1/vms/create-form` | 创建向导的表单元数据（字段、联动规则、可选值、前置条件） | 是 | 规划中 | F-2-02 |
-| API-024 | POST | `/api/v1/vms` | 创建虚拟机（支持批量），返回任务标识 | 是 | 规划中 | F-2-02 |
-| API-025 | GET | `/api/v1/vms` | 虚拟机列表（筛选 / 排序 / 分页，含数据新鲜度） | 是 | 规划中 | F-2-01 |
-| API-026 | GET | `/api/v1/vms/:id` | 虚拟机详情（配置、投影状态与最近同步时间） | 是 | 规划中 | F-2-03 |
-| API-027 | POST | `/api/v1/vms/:id/power-actions` | 电源操作（`start` / `shutdown` / `reboot` / `poweroff` / `reset`） | 是 | 规划中 | F-2-04 |
+| API-024 | POST | `/api/v1/vms` | 创建虚拟机（单台；批量走 API-028），返回任务标识 | 是 | 已实现 | F-2-02 |
+| API-025 | GET | `/api/v1/vms` | 虚拟机列表（筛选 / 排序 / 分页，含数据新鲜度与可用操作） | 是 | 已实现 | F-2-01 |
+| API-026 | GET | `/api/v1/vms/:id` | 虚拟机详情（配置、投影状态、最近同步时间与可用操作） | 是 | 已实现 | F-2-03 |
+| API-027 | POST | `/api/v1/vms/:id/power-actions` | 电源操作（`start` / `shutdown` / `reboot` / `poweroff` / `reset`）；受理时**基于实时探测校验状态**，返回任务标识 | 是 | 已实现 | F-2-04 |
 | API-028 | POST | `/api/v1/vms/batch-actions` | 批量操作（逐台独立任务，可部分成功） | 是 | 规划中 | F-2-01 |
-| API-029 | DELETE | `/api/v1/vms/:id` | 删除虚拟机（`disk_action` 必填：`delete` / `keep`） | 是 | 规划中 | F-2-04 |
+| API-029 | DELETE | `/api/v1/vms/:id` | 删除虚拟机（`disk_action` 必填：`delete` / `keep`，服务端不设默认值；走 query 或 body 均可） | 是 | 已实现（**二次验证待 f-10-01 接入**） | F-2-04 |
 | API-030 | GET | `/api/v1/vms/:id/console` | 控制台配置与状态（开启状态、端口、暴露状态、显示设备） | 是 | 规划中 | F-2-08 |
 | API-031 | PATCH | `/api/v1/vms/:id/console` | 开启/关闭、设置密码、切换对外暴露（暴露需二次验证） | 是 | 规划中 | F-2-08 |
 | API-032 | GET | `/api/v1/vms/:id/console/screenshot` | 控制台截帧预览（服务端短时缓存） | 是 | 规划中 | F-2-08 |
