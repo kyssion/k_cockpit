@@ -96,6 +96,7 @@ NNNN-动词短语.md
 | [0005](0005-control-plane-node-agent-architecture.md) | 采用控制面 / 节点代理（agent）架构 | Accepted | 2026-09-15 |
 | [0006](0006-frontend-tech-stack.md) | 前端技术栈选型（AI 驱动） | Accepted | 2026-09-15 |
 | [0007](0007-mock-agent-first.md) | 远程操作先以 Mock Agent 落地，业务逻辑保持真实 | Accepted | 2026-09-15 |
+| [0008](0008-first-admin-bootstrap.md) | 首个管理员通过控制台一次性令牌创建 | Accepted | 2026-09-15 |
 
 > **新增 ADR 后必须在此表登记。**
 
