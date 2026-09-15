@@ -184,6 +184,9 @@
 | API-033 | GET | `/api/v1/vms/:id/console/ws` | **WebSocket**：VNC 流量代理（经 agent 通道转发，不直连宿主机） | 是 | 规划中 | F-2-08 |
 | API-034 | GET | `/api/v1/security/high-risk-policy` | 高风险操作清单与判定口径（供前端渲染提示） | 是 | 规划中 | F-10-02 |
 | API-035 | POST | `/api/v1/auth/risk-verification` | 提交验证码，换取一次性高风险许可 | 是 | 规划中 | F-10-01 |
+| API-036 | GET | `/api/v1/settings` | 设置项清单（元数据、当前生效值、来源、是否被环境变量锁定） | 是 | 规划中 | F-9-01 |
+| API-037 | PATCH | `/api/v1/settings` | 批量更新设置（部分成功语义，失败项自动回滚） | 是 | 规划中 | F-9-01 |
+| API-038 | POST | `/api/v1/settings/rollback` | 将指定设置项回滚到最近一次变更前的值 | 是 | 规划中 | F-9-01 |
 
 **状态口径**：
 
