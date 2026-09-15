@@ -54,8 +54,13 @@ func TestDB_DSN(t *testing.T) {
 
 func TestConfig_Validate(t *testing.T) {
 	valid := Config{
+		Env:  EnvDevelopment,
 		HTTP: HTTP{Host: "0.0.0.0", Port: 8080},
 		DB:   DB{Driver: DriverSQLite, Path: "data/test.db", MaxOpenConns: 25, MaxIdleConns: 5},
+		Session: Session{
+			IdleTimeout:     2 * time.Hour,
+			AbsoluteTimeout: 7 * 24 * time.Hour,
+		},
 	}
 
 	tests := []struct {
@@ -93,6 +98,25 @@ func TestConfig_Validate(t *testing.T) {
 			name:    "空闲连接数大于最大连接数",
 			mutate:  func(c *Config) { c.DB.MaxIdleConns = 100 },
 			wantErr: "DB_MAX_IDLE_CONNS",
+		},
+		{
+			name:    "会话空闲超时大于绝对上限",
+			mutate:  func(c *Config) { c.Session.IdleTimeout = 30 * 24 * time.Hour },
+			wantErr: "空闲超时",
+		},
+		{
+			name:    "会话超时为负",
+			mutate:  func(c *Config) { c.Session.IdleTimeout = -time.Hour },
+			wantErr: "会话超时",
+		},
+		{
+			// 生产环境缺少固定密钥会导致重启后全部会话失效，必须拒绝启动。
+			name: "生产环境未配置签名密钥",
+			mutate: func(c *Config) {
+				c.Env = EnvProduction
+				c.Session.Secret = ""
+			},
+			wantErr: "SESSION_SECRET",
 		},
 	}
 

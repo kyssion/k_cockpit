@@ -4,11 +4,21 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+)
+
+// 运行环境取值。
+const (
+	EnvDevelopment = "development"
+	EnvTest        = "test"
+	EnvProduction  = "production"
 )
 
 // 支持的数据库驱动。
@@ -22,8 +32,22 @@ type Config struct {
 	Env   string // 运行环境：development / test / production
 	Debug bool   // 调试开关，决定是否输出完整 SQL，生产必须为 false
 
-	HTTP HTTP
-	DB   DB
+	HTTP    HTTP
+	DB      DB
+	Session Session
+}
+
+// Session 是认证会话配置。
+type Session struct {
+	// Secret 是令牌签名密钥。轮换它会让全部既有令牌立即失效（f-1-01 R-012）。
+	Secret string
+	// SecureCookie 决定会话 Cookie 是否带 Secure 标记。
+	// HTTPS 部署必须为 true；本地 HTTP 开发必须为 false，否则浏览器不回传 Cookie。
+	SecureCookie bool
+	// IdleTimeout 是空闲超时，从最后一次真实用户活动起算。
+	IdleTimeout time.Duration
+	// AbsoluteTimeout 是会话绝对上限，从签发起算。
+	AbsoluteTimeout time.Duration
 }
 
 // HTTP 是 HTTP 服务配置。
@@ -94,21 +118,43 @@ func (c Config) Validate() error {
 	if c.DB.MaxIdleConns > c.DB.MaxOpenConns {
 		return fmt.Errorf("DB_MAX_IDLE_CONNS(%d) 不能大于 DB_MAX_OPEN_CONNS(%d)", c.DB.MaxIdleConns, c.DB.MaxOpenConns)
 	}
+	// 生产环境必须有固定的签名密钥：随机密钥会让重启后全部会话失效，
+	// 也意味着多实例之间无法互认令牌。
+	if c.Env == EnvProduction && strings.TrimSpace(c.Session.Secret) == "" {
+		return fmt.Errorf("生产环境必须配置 SESSION_SECRET")
+	}
+	if c.Session.IdleTimeout <= 0 || c.Session.AbsoluteTimeout <= 0 {
+		return fmt.Errorf("会话超时必须为正数")
+	}
+	if c.Session.IdleTimeout > c.Session.AbsoluteTimeout {
+		return fmt.Errorf("空闲超时(%s)不能大于绝对上限(%s)", c.Session.IdleTimeout, c.Session.AbsoluteTimeout)
+	}
 	return nil
 }
 
-// String 返回脱敏后的配置摘要，避免密码等敏感信息进入日志。
+// String 返回脱敏后的配置摘要，避免密码与密钥进入日志。
 func (c Config) String() string {
 	return fmt.Sprintf(
-		"env=%s debug=%t http=%s db.driver=%s db.name=%s db.maxOpen=%d",
+		"env=%s debug=%t http=%s db.driver=%s db.name=%s db.maxOpen=%d session.idle=%s session.absolute=%s secureCookie=%t",
 		c.Env, c.Debug, c.HTTP.Addr(), c.DB.Driver, c.DB.Name, c.DB.MaxOpenConns,
+		c.Session.IdleTimeout, c.Session.AbsoluteTimeout, c.Session.SecureCookie,
 	)
 }
 
 // Load 从环境变量读取配置并校验。
 func Load() (Config, error) {
+	appEnv := env("APP_ENV", EnvDevelopment)
+	secret := env("SESSION_SECRET", "")
+
+	// 本地开发未配置密钥时临时生成：重启即失效、多实例之间不通用，
+	// 但足以让开发环境开箱可跑。生产环境由 Validate 强制要求配置。
+	if secret == "" && appEnv != EnvProduction {
+		secret = randomSecret()
+		log.Printf("[config] 未配置 SESSION_SECRET，已生成临时密钥；重启后全部会话失效")
+	}
+
 	cfg := Config{
-		Env:   env("APP_ENV", "development"),
+		Env:   appEnv,
 		Debug: envBool("APP_DEBUG", false),
 		HTTP: HTTP{
 			Host: env("APP_HOST", "0.0.0.0"),
@@ -129,6 +175,12 @@ func Load() (Config, error) {
 			MaxOpenConns:    envInt("DB_MAX_OPEN_CONNS", 25),
 			MaxIdleConns:    envInt("DB_MAX_IDLE_CONNS", 5),
 			ConnMaxLifetime: envDuration("DB_CONN_MAX_LIFETIME", time.Hour),
+		},
+		Session: Session{
+			Secret:          secret,
+			SecureCookie:    envBool("SESSION_SECURE_COOKIE", appEnv == EnvProduction),
+			IdleTimeout:     envDuration("SESSION_IDLE_TIMEOUT", 2*time.Hour),
+			AbsoluteTimeout: envDuration("SESSION_ABSOLUTE_TIMEOUT", 7*24*time.Hour),
 		},
 	}
 
@@ -179,4 +231,16 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return v
+}
+
+// randomSecret 生成一次性签名密钥，仅供本地开发使用。
+//
+// 返回空串表示随机源不可用——此时令牌签发会因密钥强度不足而失败，
+// 这是刻意的：与其用可预测的密钥继续运行，不如让启动失败暴露问题。
+func randomSecret() string {
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b[:])
 }
