@@ -75,7 +75,8 @@ docs/06-decisions/             不得违背既有 ADR
 | 文件 | 功能 | 覆盖需求 | 状态 | 负责人 |
 |---|---|---|---|---|
 | [`f-6-01-node-onboarding.md`](f-6-01-node-onboarding.md) | 节点纳管与 agent 通道 | F-6-01、F-6-02、F-6-08 | **Ready**（7 项决策见 §9） | <!-- TODO --> |
-| [`f-1-01-auth-session.md`](f-1-01-auth-session.md) | 本地账号登录与会话令牌 | F-1-01、F-1-02 | **Ready**（7 项决策见 §9） | <!-- TODO --> |
+| [`f-1-01-auth-session.md`](f-1-01-auth-session.md) | 本地账号登录与会话令牌 | F-1-01、F-1-02 | **Ready**（8 项决策见 §9） | <!-- TODO --> |
+| [`f-1-06-authorization.md`](f-1-06-authorization.md) | 授权与资源归属 | F-1-06、F-1-09 | **Ready**（8 项决策见 §9） | <!-- TODO --> |
 
 ### 6.2 M2 待创建（按依赖顺序）
 
@@ -86,7 +87,7 @@ docs/06-decisions/             不得违背既有 ADR
 |---|---|---|---|
 | 1 | `f-6-01-node-onboarding.md` ✅ | F-6-01、F-6-02、F-6-08 | —（依赖树的根） |
 | 2 | `f-1-01-auth-session.md` ✅ | F-1-01、F-1-02 | — |
-| 3 | `f-1-06-rbac.md` | F-1-06、F-1-09 | 2 |
+| 3 | `f-1-06-authorization.md` ✅ | F-1-06、F-1-09 | 2 |
 | 4 | `f-7-01-task-queue.md` | F-7-01、F-7-02、F-7-03 | 2、3 |
 | 5 | `f-5-01-storage-pool.md` | F-5-01 | 1 |
 | 6 | `f-4-01-network-backend.md` | F-4-01 | 1 |
@@ -137,3 +138,4 @@ AI 代理在实现某个功能前，应：
 |---|---|
 | 2026-09-15 | 建立规格清单：登记首份规格 [`f-6-01-node-onboarding.md`](f-6-01-node-onboarding.md)（节点纳管与 agent 通道，Draft）；按 [`CAPABILITY_MAP.md`](../01-product/CAPABILITY_MAP.md) §3 依赖链给出 M2 待创建规格的顺序（9 项） |
 | 2026-09-15 | 首份规格由 Draft 转为 **Ready**（7 项待决按业内实践定稿并落为 §9 决策）；新增第二份规格 [`f-1-01-auth-session.md`](f-1-01-auth-session.md)（本地账号登录与会话令牌，**Ready**），其 5 个接口 API-006~API-010 登记至 [`../03-api/API.md`](../03-api/API.md) |
+| 2026-09-15 | 新增第三份规格 [`f-1-06-authorization.md`](f-1-06-authorization.md)（授权与资源归属，**Ready**）；文件名由规划的 `f-1-06-rbac.md` 调整为 `authorization`——既有数据模型无角色/权限表，实为「固定角色 + 资源归属」模型，沿用 RBAC 命名会造成误解 |
