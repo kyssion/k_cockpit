@@ -13,7 +13,9 @@ import (
 
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/auth"
+	"k_cockpit/internal/authz"
 	"k_cockpit/internal/handler"
+	"k_cockpit/internal/node"
 )
 
 // Deps 是路由注册所需的外部依赖。
@@ -21,10 +23,15 @@ import (
 // 通过参数传入而非包级变量：路由与 handler 的依赖关系一目了然，
 // 测试也能用替身构造独立的引擎。
 type Deps struct {
-	DB           *gorm.DB
-	Auth         *auth.Service
-	Bootstrap    *auth.Bootstrap
+	DB        *gorm.DB
+	Auth      *auth.Service
+	Bootstrap *auth.Bootstrap
+	Node      *node.Service
+
 	SecureCookie bool
+	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
+	// 仅在 AGENT_TRANSPORT=mock 时开启；接入真实 agent 后应关闭。
+	SimulateAgent bool
 }
 
 // Register 注册全局中间件与全部路由。
@@ -37,9 +44,12 @@ func Register(h *server.Hertz, deps Deps) {
 
 	authHandler := handler.NewAuth(deps.Auth, deps.SecureCookie)
 	setupHandler := handler.NewSetup(deps.Bootstrap, deps.Auth, deps.SecureCookie)
+	nodeHandler := handler.NewNode(deps.Node, deps.SimulateAgent)
+
 	authMW := auth.NewMiddleware(deps.Auth)
 	// 认证接口都计为真实用户活动：它们由用户显式操作触发，不是后台轮询。
 	requireAuth := authMW.Require(auth.Real)
+	adminOnly := authz.Admin()
 
 	v1 := h.Group("/api/v1")
 	{
@@ -55,5 +65,17 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/auth/session", requireAuth, authHandler.Session)
 		v1.GET("/auth/sessions", requireAuth, authHandler.Sessions)
 		v1.DELETE("/auth/sessions/:id", requireAuth, authHandler.RevokeSession)
+
+		// 节点管理：按 f-1-06 的角色表，全部仅管理员可访问。
+		v1.GET("/nodes", requireAuth, adminOnly, nodeHandler.List)
+		v1.GET("/nodes/:id", requireAuth, adminOnly, nodeHandler.Get)
+		v1.POST("/nodes/registration-tokens", requireAuth, adminOnly, nodeHandler.CreateEnrollToken)
+		v1.DELETE("/nodes/:id", requireAuth, adminOnly, nodeHandler.Remove)
+
+		if deps.SimulateAgent {
+			// 开发期专用：调用它与真实 agent 走**同一段注册逻辑**（ADR-0007）。
+			// 它不需要认证——真实 agent 注册也不凭用户身份，而凭注册令牌。
+			v1.POST("/dev/agent-register", nodeHandler.SimulateRegister)
+		}
 	}
 }

@@ -84,24 +84,27 @@ func TestCreateEnrollToken(t *testing.T) {
 	svc, db := newTestService(t, &fakeRuntime{})
 	ctx := context.Background()
 
-	token, view, err := svc.CreateEnrollToken(ctx, "node-1", 0, 1, "admin", "10.0.0.1")
+	result, err := svc.CreateEnrollToken(ctx, "node-1", 0, 1, "admin", "10.0.0.1")
 	if err != nil {
 		t.Fatalf("生成注册令牌失败: %v", err)
 	}
-	if len(token) != 48 {
-		t.Errorf("令牌长度 = %d, 期望 48", len(token))
+	if len(result.Token) != 48 {
+		t.Errorf("令牌长度 = %d, 期望 48", len(result.Token))
 	}
-	if view.EnrollState != model.NodeEnrollPending {
-		t.Errorf("注册状态 = %q, 期望 pending", view.EnrollState)
+	if result.Node.EnrollState != model.NodeEnrollPending {
+		t.Errorf("注册状态 = %q, 期望 pending", result.Node.EnrollState)
+	}
+	if !result.ExpiresAt.After(time.Now()) {
+		t.Error("未返回有效的过期时间")
 	}
 
 	// 明文令牌只在这一处返回；数据库里必须是哈希。
 	var stored model.Node
-	db.First(&stored, view.ID)
-	if stored.EnrollTokenHash == nil || *stored.EnrollTokenHash == token {
+	db.First(&stored, result.Node.ID)
+	if stored.EnrollTokenHash == nil || *stored.EnrollTokenHash == result.Token {
 		t.Fatal("数据库存的是令牌明文")
 	}
-	if *stored.EnrollTokenHash != sha256Hex(token) {
+	if *stored.EnrollTokenHash != sha256Hex(result.Token) {
 		t.Error("存储的哈希与令牌不匹配")
 	}
 	if stored.EnrollExpiresAt == nil || !stored.EnrollExpiresAt.After(time.Now()) {
@@ -114,7 +117,7 @@ func TestCreateEnrollTokenValidatesName(t *testing.T) {
 	ctx := context.Background()
 
 	for _, name := range []string{"", "  ", "-bad", "has space", "节点"} {
-		if _, _, err := svc.CreateEnrollToken(ctx, name, 0, 1, "admin", ""); err == nil {
+		if _, err := svc.CreateEnrollToken(ctx, name, 0, 1, "admin", ""); err == nil {
 			t.Errorf("非法节点名 %q 未被拒绝", name)
 		}
 	}
@@ -124,10 +127,10 @@ func TestCreateEnrollTokenRejectsDuplicateName(t *testing.T) {
 	svc, _ := newTestService(t, &fakeRuntime{})
 	ctx := context.Background()
 
-	if _, _, err := svc.CreateEnrollToken(ctx, "node-1", 0, 1, "admin", ""); err != nil {
+	if _, err := svc.CreateEnrollToken(ctx, "node-1", 0, 1, "admin", ""); err != nil {
 		t.Fatalf("首次创建失败: %v", err)
 	}
-	_, _, err := svc.CreateEnrollToken(ctx, "node-1", 0, 1, "admin", "")
+	_, err := svc.CreateEnrollToken(ctx, "node-1", 0, 1, "admin", "")
 	// 唯一约束冲突应转成可操作的提示，而不是笼统的 500。
 	assertAPIError(t, err, 409)
 }
@@ -136,9 +139,9 @@ func TestRegisterSucceeds(t *testing.T) {
 	svc, db := newTestService(t, &fakeRuntime{})
 	ctx := context.Background()
 
-	token, created, _ := svc.CreateEnrollToken(ctx, "node-1", 0, 1, "admin", "")
+	issued, _ := svc.CreateEnrollToken(ctx, "node-1", 0, 1, "admin", "")
 
-	view, err := svc.Register(ctx, token, "agent-abc", "1.2.3")
+	view, err := svc.Register(ctx, issued.Token, "agent-abc", "1.2.3")
 	if err != nil {
 		t.Fatalf("注册失败: %v", err)
 	}
@@ -147,7 +150,7 @@ func TestRegisterSucceeds(t *testing.T) {
 	}
 
 	var stored model.Node
-	db.First(&stored, created.ID)
+	db.First(&stored, issued.Node.ID)
 	if stored.AgentID == nil || *stored.AgentID != "agent-abc" {
 		t.Error("agent 标识未写入")
 	}
@@ -164,7 +167,7 @@ func TestRegisterRejectsInvalidToken(t *testing.T) {
 	svc, _ := newTestService(t, &fakeRuntime{})
 	ctx := context.Background()
 
-	_, _, _ = svc.CreateEnrollToken(ctx, "node-1", 0, 1, "admin", "")
+	_, _ = svc.CreateEnrollToken(ctx, "node-1", 0, 1, "admin", "")
 
 	for name, token := range map[string]string{
 		"不存在的令牌": "deadbeef",
@@ -184,12 +187,12 @@ func TestRegisterTokenIsSingleUse(t *testing.T) {
 	svc, _ := newTestService(t, &fakeRuntime{})
 	ctx := context.Background()
 
-	token, _, _ := svc.CreateEnrollToken(ctx, "node-1", 0, 1, "admin", "")
-	if _, err := svc.Register(ctx, token, "agent-a", "1.0"); err != nil {
+	issued, _ := svc.CreateEnrollToken(ctx, "node-1", 0, 1, "admin", "")
+	if _, err := svc.Register(ctx, issued.Token, "agent-a", "1.0"); err != nil {
 		t.Fatalf("首次注册失败: %v", err)
 	}
 
-	_, err := svc.Register(ctx, token, "agent-b", "1.0")
+	_, err := svc.Register(ctx, issued.Token, "agent-b", "1.0")
 	assertAPIError(t, err, 403)
 }
 
@@ -197,13 +200,13 @@ func TestRegisterRejectsExpiredToken(t *testing.T) {
 	svc, db := newTestService(t, &fakeRuntime{})
 	ctx := context.Background()
 
-	token, created, _ := svc.CreateEnrollToken(ctx, "node-1", 0, 1, "admin", "")
+	issued, _ := svc.CreateEnrollToken(ctx, "node-1", 0, 1, "admin", "")
 	// 直接改库把过期时间挪到过去：CreateEnrollToken 会把非正 TTL 回落为
 	// 默认有效期，因此无法通过参数构造出过期令牌。
-	db.Model(&model.Node{}).Where("id = ?", created.ID).
+	db.Model(&model.Node{}).Where("id = ?", issued.Node.ID).
 		Update("enroll_expires_at", time.Now().Add(-time.Hour))
 
-	_, err := svc.Register(ctx, token, "agent-a", "1.0")
+	_, err := svc.Register(ctx, issued.Token, "agent-a", "1.0")
 	assertAPIError(t, err, 403)
 }
 
@@ -213,8 +216,8 @@ func TestStatusDerivation(t *testing.T) {
 	svc, db := newTestService(t, runtime)
 	ctx := context.Background()
 
-	token, _, _ := svc.CreateEnrollToken(ctx, "node-1", 0, 1, "admin", "")
-	view, _ := svc.Register(ctx, token, "agent-a", "1.0")
+	issued, _ := svc.CreateEnrollToken(ctx, "node-1", 0, 1, "admin", "")
+	view, _ := svc.Register(ctx, issued.Token, "agent-a", "1.0")
 
 	// 未提供运行态、且数据库无心跳记录 → 未知。
 	db.Model(&model.Node{}).Where("id = ?", view.ID).Update("last_heartbeat_at", nil)
@@ -253,7 +256,7 @@ func TestListToleratesRuntimeFailure(t *testing.T) {
 	runtime := &fakeRuntime{err: errors.New("agent 通道不可用")}
 	svc, _ := newTestService(t, runtime)
 
-	_, _, _ = svc.CreateEnrollToken(context.Background(), "node-1", 0, 1, "admin", "")
+	_, _ = svc.CreateEnrollToken(context.Background(), "node-1", 0, 1, "admin", "")
 
 	nodes, err := svc.List(context.Background())
 	if err != nil {
@@ -271,10 +274,10 @@ func TestRemoveIsSoftDelete(t *testing.T) {
 	svc, db := newTestService(t, &fakeRuntime{})
 	ctx := context.Background()
 
-	token, created, _ := svc.CreateEnrollToken(ctx, "node-1", 0, 1, "admin", "")
-	_, _ = svc.Register(ctx, token, "agent-a", "1.0")
+	issued, _ := svc.CreateEnrollToken(ctx, "node-1", 0, 1, "admin", "")
+	_, _ = svc.Register(ctx, issued.Token, "agent-a", "1.0")
 
-	if err := svc.Remove(ctx, created.ID, 1, "admin", "10.0.0.1"); err != nil {
+	if err := svc.Remove(ctx, issued.Node.ID, 1, "admin", "10.0.0.1"); err != nil {
 		t.Fatalf("移除失败: %v", err)
 	}
 
@@ -282,7 +285,7 @@ func TestRemoveIsSoftDelete(t *testing.T) {
 	// 用 Unscoped 才能查到——普通查询会被 GORM 自动加上 deleted_at IS NULL，
 	// 这正说明软删除过滤是生效的。
 	var stored model.Node
-	if err := db.Unscoped().First(&stored, created.ID).Error; err != nil {
+	if err := db.Unscoped().First(&stored, issued.Node.ID).Error; err != nil {
 		t.Fatalf("记录应保留: %v", err)
 	}
 	if !stored.DeletedAt.Valid {
@@ -294,5 +297,5 @@ func TestRemoveIsSoftDelete(t *testing.T) {
 		t.Errorf("移除后的节点仍出现在列表中: %+v", nodes)
 	}
 
-	assertAPIError(t, svc.Remove(ctx, created.ID, 1, "admin", ""), 404)
+	assertAPIError(t, svc.Remove(ctx, issued.Node.ID, 1, "admin", ""), 404)
 }

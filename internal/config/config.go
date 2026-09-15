@@ -35,6 +35,22 @@ type Config struct {
 	HTTP    HTTP
 	DB      DB
 	Session Session
+	Agent   Agent
+}
+
+// 节点 agent 通道的传输方式。
+const (
+	// AgentTransportMock 开发期使用：接口直接返回假数据，不连接真实节点。
+	AgentTransportMock = "mock"
+	// AgentTransportGRPC 真实实现（gRPC 双向流），尚未开发。
+	AgentTransportGRPC = "grpc"
+)
+
+// Agent 是控制面与节点 agent 之间通道的配置。
+type Agent struct {
+	// Transport 在**启动时**决定，运行期不可切换（ADR-0007）。
+	// 同一进程内不得对不同节点使用不同实现，否则会出现无法复现的中间状态。
+	Transport string
 }
 
 // Session 是认证会话配置。
@@ -129,6 +145,10 @@ func (c Config) Validate() error {
 	if c.Session.IdleTimeout > c.Session.AbsoluteTimeout {
 		return fmt.Errorf("空闲超时(%s)不能大于绝对上限(%s)", c.Session.IdleTimeout, c.Session.AbsoluteTimeout)
 	}
+	if c.Agent.Transport != AgentTransportMock && c.Agent.Transport != AgentTransportGRPC {
+		return fmt.Errorf("AGENT_TRANSPORT 非法: %q，可选 %s 或 %s",
+			c.Agent.Transport, AgentTransportMock, AgentTransportGRPC)
+	}
 	return nil
 }
 
@@ -181,6 +201,9 @@ func Load() (Config, error) {
 			SecureCookie:    envBool("SESSION_SECURE_COOKIE", appEnv == EnvProduction),
 			IdleTimeout:     envDuration("SESSION_IDLE_TIMEOUT", 2*time.Hour),
 			AbsoluteTimeout: envDuration("SESSION_ABSOLUTE_TIMEOUT", 7*24*time.Hour),
+		},
+		Agent: Agent{
+			Transport: env("AGENT_TRANSPORT", AgentTransportMock),
 		},
 	}
 

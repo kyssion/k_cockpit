@@ -72,6 +72,16 @@ type View struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// EnrollToken 是一次注册令牌的签发结果。
+//
+// Token 是**明文**，只在这里出现一次——数据库存的是它的哈希，之后无法
+// 再次取出。调用方必须当场展示给用户（拼接安装命令），不得缓存或落库。
+type EnrollToken struct {
+	Token     string
+	ExpiresAt time.Time
+	Node      View
+}
+
 // List 返回全部已接入的节点（含运行态）。
 func (s *Service) List(ctx context.Context) ([]View, error) {
 	var nodes []model.Node
@@ -109,10 +119,10 @@ func (s *Service) Get(ctx context.Context, id int64) (*View, error) {
 // 展示给用户（拼接安装命令），之后无法再次取出。
 func (s *Service) CreateEnrollToken(
 	ctx context.Context, name string, ttl time.Duration, operatorID int64, operatorName, clientIP string,
-) (string, *View, error) {
+) (*EnrollToken, error) {
 	name = strings.TrimSpace(name)
 	if !namePattern.MatchString(name) {
-		return "", nil, api.InvalidParameter("节点名需为 1-64 位字母、数字、点、下划线或连字符，且以字母或数字开头")
+		return nil, api.InvalidParameter("节点名需为 1-64 位字母、数字、点、下划线或连字符，且以字母或数字开头")
 	}
 	if ttl <= 0 {
 		ttl = DefaultEnrollTTL
@@ -121,7 +131,7 @@ func (s *Service) CreateEnrollToken(
 	token, err := newEnrollToken()
 	if err != nil {
 		log.Printf("[node] 生成注册令牌失败: %v", err)
-		return "", nil, api.Internal()
+		return nil, api.Internal()
 	}
 	hash := hashToken(token)
 	expiresAt := time.Now().Add(ttl)
@@ -138,10 +148,10 @@ func (s *Service) CreateEnrollToken(
 		// 节点名唯一索引冲突是最常见的失败：给出可操作的原因，
 		// 而不是笼统的「服务内部错误」。
 		if isDuplicateKey(err) {
-			return "", nil, api.Conflict("节点名已存在")
+			return nil, api.Conflict("节点名已存在")
 		}
 		log.Printf("[node] 创建节点失败: %v", err)
-		return "", nil, api.Internal()
+		return nil, api.Internal()
 	}
 
 	s.record(ctx, audit.Entry{
@@ -156,8 +166,11 @@ func (s *Service) CreateEnrollToken(
 		ClientIP:     clientIP,
 	})
 
-	view := s.toView(ctx, &node)
-	return token, &view, nil
+	return &EnrollToken{
+		Token:     token,
+		ExpiresAt: expiresAt,
+		Node:      s.toView(ctx, &node),
+	}, nil
 }
 
 // Register 用注册令牌完成 agent 注册。

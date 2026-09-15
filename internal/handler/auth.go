@@ -132,9 +132,9 @@ func (h *Auth) Sessions(ctx context.Context, c *app.RequestContext) {
 
 // RevokeSession 撤销指定会话（撤销他人会话返回 404，不泄漏其是否存在）。
 func (h *Auth) RevokeSession(ctx context.Context, c *app.RequestContext) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil || id <= 0 {
-		api.Fail(c, api.InvalidParameter("会话 ID 不合法"))
+	id, err := namedPathID(c, "id", "会话 ID")
+	if err != nil {
+		api.Fail(c, err)
 		return
 	}
 

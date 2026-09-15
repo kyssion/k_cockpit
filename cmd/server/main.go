@@ -11,10 +11,12 @@ import (
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/joho/godotenv"
 
+	"k_cockpit/internal/agent"
 	"k_cockpit/internal/audit"
 	"k_cockpit/internal/auth"
 	"k_cockpit/internal/config"
 	"k_cockpit/internal/database"
+	"k_cockpit/internal/node"
 	"k_cockpit/internal/router"
 )
 
@@ -63,12 +65,27 @@ func main() {
 			"============================================================", token)
 	}
 
+	// 装配 agent 通道。真实实现（gRPC 双向流）尚未开发，本期由 mock 直接
+	// 返回结果——业务代码只依赖内部接口，接入真实节点时无需改动（ADR-0007）。
+	var runtime agent.SnapshotProvider
+	switch cfg.Agent.Transport {
+	case config.AgentTransportMock:
+		runtime = agent.NewMockClient()
+		log.Printf("[agent] 通道 = mock：节点运行态为假数据，不连接真实节点")
+	default:
+		log.Fatalf("AGENT_TRANSPORT=%s 尚未实现（当前仅支持 %s）",
+			cfg.Agent.Transport, config.AgentTransportMock)
+	}
+	nodeSvc := node.NewService(db, runtime, recorder)
+
 	h := server.Default(server.WithHostPorts(cfg.HTTP.Addr()))
 	router.Register(h, router.Deps{
-		DB:           db,
-		Auth:         authSvc,
-		Bootstrap:    bootstrap,
-		SecureCookie: cfg.Session.SecureCookie,
+		DB:            db,
+		Auth:          authSvc,
+		Bootstrap:     bootstrap,
+		Node:          nodeSvc,
+		SecureCookie:  cfg.Session.SecureCookie,
+		SimulateAgent: cfg.Agent.Transport == config.AgentTransportMock,
 	})
 
 	// Spin 阻塞运行，并在收到 SIGINT / SIGTERM / SIGHUP 时触发优雅退出。
