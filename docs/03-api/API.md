@@ -135,6 +135,36 @@
 | INTERNAL_ERROR | 500 | 服务内部错误 | 携带 request_id 反馈 |
 | SERVICE_UNAVAILABLE | 503 | 依赖不可用（如节点离线） | 稍后重试 |
 
+### 3.4 高风险操作的 428 响应结构
+
+被保护的操作在缺少有效许可时返回 428，且**响应体额外携带 `data`**——
+前端要靠它才能发起验证（渲染哪种输入方式、用哪个 challenge）：
+
+```json
+{
+  "error": { "code": "RISK_VERIFICATION_REQUIRED", "message": "该操作需要完成二次验证" },
+  "data": {
+    "action": "vm.delete",
+    "challenge_id": "eyJ1Ijo3...",
+    "methods": [{ "method": "totp", "label": "验证器动态码" }],
+    "expires_at": "2026-09-15T12:05:00Z"
+  },
+  "request_id": "..."
+}
+```
+
+`methods` 为**空数组**（而非 `null`）表示该账号尚未绑定任何验证方式：前端据此
+提示「需先绑定」，而不是渲染一个没有输入框的弹框。
+
+验证通过后，前端在**重放原请求**时通过请求头 `X-Risk-Grant` 携带许可。许可
+**一次性、2 分钟有效、绑定会话，消费即失效**——重放一次即作废，因此「验证
+一次、连续删多次」不成立；而批量操作本就是一次请求，不会带来重复验证。
+
+> **API Key 的差异**（[`f-10-01`](../07-specs/f-10-01-high-risk-verification.md) R-012）：
+> 通过 API Key 调用的请求不触发交互式验证——API 无交互能力，且 Key 本身即长期
+> 凭据。这是**显式取舍**，不是遗漏。当前系统仅支持会话认证，尚无 API Key 能力，
+> 该规则待其交付时落实并在本节更新。
+
 > 新增错误码必须先在此登记，禁止临时编造。
 
 ---
@@ -157,12 +187,12 @@
 | API-002 | POST | `/api/v1/nodes/registration-tokens` | 生成一次性注册令牌并创建待接入节点；**明文令牌只返回一次** | 是（管理员） | 已实现 | F-6-01 |
 | API-003 | GET | `/api/v1/nodes` | 节点列表（元数据 + 运行态；状态由心跳推导） | 是（管理员） | 已实现 | F-6-02 |
 | API-004 | GET | `/api/v1/nodes/:id` | 节点详情（含能力清单） | 是（管理员） | 已实现 | F-6-02 |
-| API-005 | DELETE | `/api/v1/nodes/:id` | 移除节点（软删除，保留审计与历史引用） | 是（管理员） | 已实现（**二次验证待 f-10-01 接入**） | F-6-01 |
+| API-005 | DELETE | `/api/v1/nodes/:id` | 移除节点（软删除，保留审计与历史引用）；**高风险操作，需二次验证** | 是（管理员） | 已实现 | F-6-01 |
 | API-006 | POST | `/api/v1/auth/login` | 用户名密码登录；令牌经 **HttpOnly Cookie** 下发，响应只含用户信息 | 否（公开，理由见 ADR-0008 同类的自举问题） | 已实现 | F-1-01 |
 | API-007 | POST | `/api/v1/auth/logout` | 登出当前会话（仅撤销当前会话，并清除 Cookie） | 是 | 已实现 | F-1-02 |
 | API-008 | GET | `/api/v1/auth/session` | 当前会话与用户信息 | 是 | 已实现 | F-1-02 |
 | API-009 | GET | `/api/v1/auth/sessions` | 会话与登录记录列表（含当前会话标记，响应不含 session_id） | 是 | 已实现 | F-1-02 |
-| API-010 | DELETE | `/api/v1/auth/sessions/:id` | 撤销指定会话（越权与不存在均返回 404） | 是 | 已实现（**二次验证待 f-10-01 接入**） | F-1-02 |
+| API-010 | DELETE | `/api/v1/auth/sessions/:id` | 撤销指定会话（越权与不存在均返回 404）；**高风险操作，需二次验证** | 是 | 已实现 | F-1-02 |
 | API-011 | GET | `/api/v1/tasks` | 任务列表（按状态 / 类型 / 资源 / 时间筛选，归属过滤） | 是 | 规划中 | F-7-02 |
 | API-012 | GET | `/api/v1/tasks/:id` | 任务详情（含参数、结果与阶段时间线） | 是 | 规划中 | F-7-02 |
 | API-013 | POST | `/api/v1/tasks/:id/cancel` | 请求取消任务 | 是 | 规划中 | F-7-02 |
@@ -181,18 +211,21 @@
 | API-026 | GET | `/api/v1/vms/:id` | 虚拟机详情（配置、投影状态、最近同步时间与可用操作） | 是 | 已实现 | F-2-03 |
 | API-027 | POST | `/api/v1/vms/:id/power-actions` | 电源操作（`start` / `shutdown` / `reboot` / `poweroff` / `reset`）；受理时**基于实时探测校验状态**，返回任务标识 | 是 | 已实现 | F-2-04 |
 | API-028 | POST | `/api/v1/vms/batch-actions` | 批量操作（逐台独立任务，可部分成功） | 是 | 规划中 | F-2-01 |
-| API-029 | DELETE | `/api/v1/vms/:id` | 删除虚拟机（`disk_action` 必填：`delete` / `keep`，服务端不设默认值；走 query 或 body 均可） | 是 | 已实现（**二次验证待 f-10-01 接入**） | F-2-04 |
+| API-029 | DELETE | `/api/v1/vms/:id` | 删除虚拟机（`disk_action` 必填：`delete` / `keep`，服务端不设默认值；走 query 或 body 均可）；**高风险操作，需二次验证** | 是 | 已实现 | F-2-04 |
 | API-030 | GET | `/api/v1/vms/:id/console` | 控制台配置与状态（开启状态、端口、暴露状态、显示设备） | 是 | 规划中 | F-2-08 |
 | API-031 | PATCH | `/api/v1/vms/:id/console` | 开启/关闭、设置密码、切换对外暴露（暴露需二次验证） | 是 | 规划中 | F-2-08 |
 | API-032 | GET | `/api/v1/vms/:id/console/screenshot` | 控制台截帧预览（服务端短时缓存） | 是 | 规划中 | F-2-08 |
 | API-033 | GET | `/api/v1/vms/:id/console/ws` | **WebSocket**：VNC 流量代理（经 agent 通道转发，不直连宿主机） | 是 | 规划中 | F-2-08 |
-| API-034 | GET | `/api/v1/security/high-risk-policy` | 高风险操作清单与判定口径（供前端渲染提示） | 是 | 规划中 | F-10-02 |
-| API-035 | POST | `/api/v1/auth/risk-verification` | 提交验证码，换取一次性高风险许可 | 是 | 规划中 | F-10-01 |
+| API-034 | GET | `/api/v1/security/high-risk-policy` | 高风险操作清单与判定口径（供前端渲染提示；**清单由后端下发，前端不得硬编码第二份**） | 是 | 已实现 | F-10-02 |
+| API-035 | POST | `/api/v1/auth/risk-verification` | 提交验证码，换取一次性高风险许可（2 分钟有效、消费即失效、绑定会话） | 是 | 已实现 | F-10-01 |
 | API-036 | GET | `/api/v1/settings` | 设置项清单（元数据、当前生效值、来源、是否被环境变量锁定） | 是 | 规划中 | F-9-01 |
 | API-037 | PATCH | `/api/v1/settings` | 批量更新设置（部分成功语义，失败项自动回滚） | 是 | 规划中 | F-9-01 |
 | API-038 | POST | `/api/v1/settings/rollback` | 将指定设置项回滚到最近一次变更前的值 | 是 | 规划中 | F-9-01 |
 | API-039 | GET | `/api/v1/setup/status` | 系统是否已完成初始化（供前端决定跳初始化页或登录页） | 否（公开，理由见 [ADR-0008](../06-decisions/0008-first-admin-bootstrap.md)） | 已实现 | 首次初始化 |
 | API-040 | POST | `/api/v1/setup/admin` | 用一次性令牌创建首个管理员；成功后自动建立会话 | 否（公开，理由同上） | 已实现 | 首次初始化 |
+| API-041 | GET | `/api/v1/auth/security-setup` | 二次验证方式的绑定进度与可用方式 | 是 | 已实现 | F-10-01 |
+| API-042 | POST | `/api/v1/auth/totp/setup` | 生成 TOTP 密钥并返回 otpauth URI（**未启用**，需确认） | 是 | 已实现 | F-10-01 |
+| API-043 | POST | `/api/v1/auth/totp/confirm` | 提交动态码启用绑定，并返回恢复码（**只返回一次**） | 是 | 已实现 | F-10-01 |
 
 > **公开接口共 4 个**（`/health`、`/api/v1/setup/*`、`/api/v1/auth/login`）。前两个的公开理由是「系统尚无可用凭据时的自举需要」：初始化接口靠**只能从服务端日志获取**的一次性令牌保护（[ADR-0008](../06-decisions/0008-first-admin-bootstrap.md)），登录接口是获取凭据的入口本身。新增公开接口必须在此说明理由。
 
