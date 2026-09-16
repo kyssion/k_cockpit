@@ -8,6 +8,7 @@ import { SetupPage } from '@/views/auth/SetupPage'
 import { NetworkPage } from '@/views/network/NetworkPage'
 import { NodeListPage } from '@/views/node/NodeListPage'
 import { SecurityPage } from '@/views/security/SecurityPage'
+import { SettingsPage } from '@/views/settings/SettingsPage'
 import { StoragePoolPage } from '@/views/storage/StoragePoolPage'
 import { TaskListPage } from '@/views/task/TaskListPage'
 import { VmDetailPage } from '@/views/vm/VmDetailPage'
@@ -47,7 +48,7 @@ export const router = createBrowserRouter([
           { path: 'network', element: <NetworkPage /> },
           { path: 'firewall', element: pending('防火墙', '规则与连接管理') },
           { path: 'user', element: pending('用户管理', '账号与配额') },
-          { path: 'settings', element: pending('系统设置', '配置项与环境变量对照') },
+          { path: 'settings', element: <SettingsPage /> },
           { path: 'security', element: <SecurityPage /> },
           { path: '*', element: <Placeholder title="页面不存在" planned="请检查地址是否正确" /> },
         ],
