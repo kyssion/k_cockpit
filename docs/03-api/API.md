@@ -241,6 +241,14 @@
 | API-056 | GET | `/api/v1/vms/:id/edit-form` | 编辑页的表单元数据与当前值。含**运行态可改矩阵**（`requires_node` / `requires_shutdown` / `read_only`）与子选项卡定义——两者都是单一事实来源，前端不得硬编码第二份 | 是 | 已实现（覆盖 6 个子选项卡） | F-2-05 |
 | API-057 | PATCH | `/api/v1/vms/:id/metadata` | 修改备注、分组。**同步生效、不入队**：纯控制面数据，虚拟化层不知道它们的存在，因此运行中也能改 | 是 | 已实现 | F-2-05 |
 | API-058 | POST | `/api/v1/vms/:id/config-changes` | 提交配置变更（`changes` 为字段集合，形状**由矩阵决定**）。只接受真正变化的字段；不在矩阵里的字段、只读字段、非法枚举一律拒绝；互斥项（IOPS 总量与读写分离）校验**变更后的最终状态** | 是 | 已实现 | F-2-05 |
+| API-059 | POST | `/api/v1/vms/:id/interfaces` | 新增网卡。序号取「当前最大 + 1」而非已有数量；MAC 由控制面生成并**固定**（重建后不变，否则来宾里按 MAC 配的网络会失效） | 是 | 已实现 | F-2-03 |
+| API-060 | PATCH | `/api/v1/vms/:id/interfaces/:nicID` | 修改网卡的型号、限速与接入网络。**序号与 MAC 不可改**：前者是来宾里的设备顺序，后者可能已被按它配置过 | 是 | 已实现 | F-2-03 |
+| API-061 | DELETE | `/api/v1/vms/:id/interfaces/:nicID` | 删除网卡。**主网卡拒绝**：重装系统依赖它保持网络可达 | 是 | 已实现 | F-2-03 |
+| API-062 | POST | `/api/v1/vms/:id/static-ips` | 绑定静态地址。地址在**节点内唯一**，冲突时返回 409 而不是让它静默失效 | 是 | 已实现 | F-2-03 |
+| API-063 | DELETE | `/api/v1/vms/:id/static-ips/:ipID` | 解绑静态地址。只解除控制面的分配关系，不改动来宾内已有的配置 | 是 | 已实现 | F-2-03 |
+| API-064 | GET | `/api/v1/vms/:id/port-forwards` | 端口转发列表。`applied` 为 false 表示规则**尚未下发、当前并不生效** | 是 | 已实现 | F-2-03 |
+| API-065 | POST | `/api/v1/vms/:id/port-forwards` | 新增端口转发。端口在**节点内独占**（`(node_id, protocol, host_port)`）；`allowed_ips` 留空表示**不限制来源**，界面须显式提示 | 是 | 已实现 | F-2-03 |
+| API-066 | DELETE | `/api/v1/vms/:id/port-forwards/:pfID` | 删除端口转发。删除的是宿主机上的规则，虚拟机的服务不受影响 | 是 | 已实现 | F-2-03 |
 
 > **公开接口共 4 个**（`/health`、`/api/v1/setup/*`、`/api/v1/auth/login`）。前两个的公开理由是「系统尚无可用凭据时的自举需要」：初始化接口靠**只能从服务端日志获取**的一次性令牌保护（[ADR-0008](../06-decisions/0008-first-admin-bootstrap.md)），登录接口是获取凭据的入口本身。新增公开接口必须在此说明理由。
 
