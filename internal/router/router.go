@@ -18,6 +18,7 @@ import (
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/node"
 	"k_cockpit/internal/risk"
+	"k_cockpit/internal/settings"
 	"k_cockpit/internal/storage"
 	"k_cockpit/internal/task"
 	"k_cockpit/internal/vm"
@@ -35,6 +36,7 @@ type Deps struct {
 	VM        *vm.Service
 	Storage   *storage.Service
 	Network   *network.Service
+	Settings  *settings.Service
 	Task      *task.Queue
 	// Risk 强制高风险操作的二次验证（f-10-01）。受保护的操作在 handler
 	// 入口调用它，清单本身集中在 internal/risk。
@@ -62,6 +64,7 @@ func Register(h *server.Hertz, deps Deps) {
 	securityHandler := handler.NewSecurity(deps.Risk, deps.Auth)
 	storageHandler := handler.NewStorage(deps.Storage, deps.Risk)
 	networkHandler := handler.NewNetwork(deps.Network)
+	settingsHandler := handler.NewSettings(deps.Settings)
 
 	authMW := auth.NewMiddleware(deps.Auth)
 	// 认证接口都计为真实用户活动：它们由用户显式操作触发，不是后台轮询。
@@ -112,6 +115,12 @@ func Register(h *server.Hertz, deps Deps) {
 		// 网络变更（建网桥、物理口入桥）属 M3 范围。
 		v1.GET("/nodes/:id/network", requireAuth, adminOnly, networkHandler.Status)
 		v1.GET("/nodes/:id/networks", requireAuth, adminOnly, networkHandler.Networks)
+
+		// 系统设置（F-9-01）：**仅管理员**（R-014）。设置变更不得成为
+		// 绕过权限的通道，因此 tenant 连可见性都没有。
+		v1.GET("/settings", requireAuth, adminOnly, settingsHandler.List)
+		v1.PATCH("/settings", requireAuth, adminOnly, settingsHandler.Update)
+		v1.POST("/settings/rollback", requireAuth, adminOnly, settingsHandler.Rollback)
 
 		// 虚拟机：管理员可操作全部，tenant 仅自己名下（归属过滤在数据访问层注入，
 		// 因此这里不需要按角色分路由）。
