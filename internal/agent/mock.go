@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"hash/fnv"
+	"math"
 	"time"
 )
 
@@ -193,6 +195,15 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 		// 流转需要 mock 维护一份状态，那正是 ADR-0007 明确不做的事。
 		data[StatusDataKey] = "running"
 
+	case OpVMStats:
+		// 指标随目标名变化，但**同一台机器每次拿到同一组值**：mock 不维护
+		// 状态，若每帧都随机，界面上的 CPU 曲线会自己抖动起来——那看起来
+		// 像真实负载，而实际上什么都没发生，演示时会误导人。
+		data[StatsDataKey] = mockStats(op.Target)
+
+	case OpVMConsoleFrame:
+		data[FrameDataKey] = mockFrame(op.Target, 320, 180)
+
 	case OpVMSnapshotCreate:
 		// 回显控制面给的标识，让调用方走完整的「写入 domain_name」路径。
 		//
@@ -241,6 +252,38 @@ func (m *MockClient) reportStages(ctx context.Context, op Operation) {
 			case <-time.After(m.StageDelay):
 			}
 		}
+	}
+}
+
+// mockStats 按目标名生成一组**稳定**的运行指标。
+//
+// 稳定（而不是随机）是刻意的：mock 不维护状态，随机值会让轮询界面上的
+// CPU 与 IO 数字自己抖动。那看起来像真实负载在变化，而实际什么都没发生——
+// 演示时它会让人以为指标已经接好了，排查时它会浪费掉一轮怀疑。
+//
+// 取值范围刻意覆盖几种典型形态（低负载、中等、偏高），好让界面上
+// 「计量条」的各个档位都能被看到；全都给 3% 会让满格与告警样式永远
+// 没被渲染过。
+func mockStats(target string) VMStats {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte("stats/" + target))
+	seed := h.Sum32()
+
+	vcpu := float64(seed%75) + 5 // 5% ~ 80%
+	used := int(seed%60) + 30    // 30% ~ 90%
+	total := 4096
+
+	return VMStats{
+		CPUPercent:    math.Round(vcpu*10) / 10,
+		MemTotalMB:    total,
+		MemUsedMB:     total * used / 100,
+		NetRxKbps:     float64(seed%9000)/10 + 12,
+		NetTxKbps:     float64((seed/7)%5000)/10 + 8,
+		DiskReadKbps:  float64((seed/11)%20000) / 10,
+		DiskWriteKbps: float64((seed/13)%12000) / 10,
+		// 运行时长取一个稳定但明显是假的值（数小时量级）。
+		// 不用真实时钟：那会让「运行时长」每秒都在涨，看起来像真的在跑。
+		UptimeSeconds: int64(seed%86400) + 3600,
 	}
 }
 

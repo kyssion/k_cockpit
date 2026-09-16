@@ -141,6 +141,13 @@ func Register(h *server.Hertz, deps Deps) {
 		// 业务软锁（F-2-12）。同步生效——锁只在控制面，虚拟化层不知道它。
 		// 解锁需要二次验证，因此下面这条路由也受 risk 保护（在 handler 内声明）。
 		v1.PATCH("/vms/:id/lock", requireAuth, vmHandler.SetLock)
+
+		// Hero 的资源卡与控制台预览卡（f-2-01 §5.3.3）。
+		//
+		// 两者都是**只读探测**，不入队、不写投影：指标与画面都是瞬时的，
+		// 存下来只会在下一次读取时给出一个过期的答案。
+		v1.GET("/vms/:id/stats", requireAuth, vmHandler.Stats)
+		v1.GET("/vms/:id/console/frame", requireAuth, vmHandler.ConsoleFrame)
 		// 电源与删除都是异步操作：受理时校验状态并返回任务标识，执行由
 		// 任务队列按资源锁串行（f-2-01 R-005）。
 		v1.POST("/vms/:id/power-actions", requireAuth, vmHandler.Power)

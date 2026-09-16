@@ -767,6 +767,50 @@ func (h *VM) RemovePortForward(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
 }
 
+// Stats 返回虚拟机的实时运行指标（Hero 的资源卡）。
+//
+// 响应里带 `at`（采集时刻）：指标是瞬时值，轮询失败时界面会继续显示上一组
+// 数字，没有采集时刻就分不清「当前」与「几分钟前」。
+func (h *VM) Stats(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	stats, err := h.svc.Stats(ctx, id, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, stats)
+}
+
+// ConsoleFrame 返回一帧控制台画面（Hero 的控制台预览卡）。
+//
+// 直接返回 **image/png 字节**而不是包在 JSON 里：画面是二进制，塞进 JSON
+// 要 base64 编码（体积涨 33%）再由前端解码成 data URL，两条路径都不产生
+// 额外信息，只是多绕一圈。用图片本身也让浏览器能正常缓存与懒加载。
+func (h *VM) ConsoleFrame(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	frame, err := h.svc.ConsoleFrame(ctx, id, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	// 画面不进浏览器缓存：它是「此刻的样子」，缓存住会让用户看着一张
+	// 几分钟前的图，还以为虚拟机画面卡住了。
+	c.Header("Cache-Control", "no-store")
+	c.SetContentType(frame.MIME)
+	c.Response.SetBody(frame.Data)
+}
+
 // StaticIPs 返回虚拟机的静态地址列表。
 func (h *VM) StaticIPs(ctx context.Context, c *app.RequestContext) {
 	id, err := namedPathID(c, "id", "虚拟机 ID")

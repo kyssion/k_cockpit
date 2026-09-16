@@ -56,7 +56,73 @@ const (
 	OpVMInterfaceChange   OpKind = "vm.interface.change"
 	OpVMStaticIPChange    OpKind = "vm.staticip.change"
 	OpVMPortForwardChange OpKind = "vm.portforward.change"
+
+	// OpVMStats 读取虚拟机的运行指标（CPU / 内存 / 网络 / 磁盘 / 运行时长）。
+	//
+	// 它是**只读探测**，与 OpVMStatus 同类：不入队、不写投影，只在被请求时
+	// 向节点取一次。指标必须来自这里而不是控制面推算——控制面看到的 vcpu
+	// 与 memory_mb 是**配置**，不是**用量**；把配置当用量显示，用户会看到
+	// 一台空闲机器常年「内存占满」。
+	//
+	// uptime 也由节点给出：只有虚拟化层知道域是什么时候真正起来的，而
+	// 控制面记录的「上次开机成功时间」会因重启、快照恢复等原因与实际不符。
+	OpVMStats OpKind = "vm.stats"
+
+	// OpVMConsoleFrame 抓取一帧控制台画面（f-2-01 的 Hero 控制台预览卡）。
+	//
+	// 与 OpVMStatus 一样是只读的，但它**较慢**（要等 hypervisor 出一帧），
+	// 因此界面按固定间隔（20s）轮询，而不是随页面刷新。
+	OpVMConsoleFrame OpKind = "vm.console.frame"
 )
+
+// StatsDataKey 是 OpVMStats 结果中承载指标的键。
+const StatsDataKey = "stats"
+
+// FrameDataKey 是 OpVMConsoleFrame 结果中承载画面数据的键。
+const FrameDataKey = "frame"
+
+// VMStats 是节点上报的一台虚拟机的运行指标。
+//
+// 各字段的单位写进名字里（MB / Kbps / Seconds）：一个叫 `mem` 的字段到底是
+// 字节、KB 还是 MB，只有写它的人知道，而读它的人只能去翻实现——单位错误
+// 不会报错，只会让界面把一个数量级错误的数字显示得很正常。
+type VMStats struct {
+	// CPUPercent 是相对**全部 vCPU** 的占用率（0-100）。
+	//
+	// 不用「单核百分比」：一台 4 核机器跑满一个核时，单核口径会显示 100%，
+	// 而用户看到 100% 的第一反应是「机器满载了」。
+	CPUPercent float64
+
+	MemTotalMB int
+	MemUsedMB  int
+
+	NetRxKbps float64
+	NetTxKbps float64
+	// DiskReadKbps / DiskWriteKbps 是磁盘吞吐。
+	//
+	// 用吞吐而不是 IOPS（规格里另有 IOPS **限制**的配置项，那是上限不是用量）：
+	// 用户看「这台机器在忙什么」时，吞吐比 IOPS 更好理解，而 IOPS 上限的
+	// 实际效果需要配合队列深度才有意义。
+	DiskReadKbps  float64
+	DiskWriteKbps float64
+
+	// UptimeSeconds 是域已经运行的时间；0 表示未运行。
+	UptimeSeconds int64
+}
+
+// ConsoleFrame 是一帧控制台画面。
+type ConsoleFrame struct {
+	// MIME 是画面的格式，当前为 image/png。
+	MIME string
+	// Data 是**原始字节**，由调用方决定如何编码（本项目在接口层转 base64）。
+	//
+	// 不在协议层就转 base64：那会让每一层都以为「画面本来就是字符串」，
+	// 而它实际是二进制——将来换成 JPEG 或流式传输时，这个假设会变成障碍。
+	Data []byte
+	// Width / Height 供界面预留位置，避免画面加载完成时布局跳动。
+	Width  int
+	Height int
+}
 
 // StatusDataKey 是 OpVMStatus 结果中承载运行态的键。
 //
