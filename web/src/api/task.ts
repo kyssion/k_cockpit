@@ -31,6 +31,36 @@ export interface TaskView {
   started_at?: string
   finished_at?: string
   created_at: string
+
+  /**
+   * 执行阶段流水，**仅在详情接口返回**。
+   *
+   * 列表不带它：一页 20 个任务就是 20 次额外查询，而列表上也显示不下一条
+   * 时间线——它只会被白白查出来再丢掉。
+   */
+  stages?: TaskStage[]
+}
+
+/**
+ * 任务的一个执行阶段。
+ *
+ * 阶段由**节点**上报（控制面只是记录），因此它描述的是宿主机上实际发生的事，
+ * 而不是控制面按操作类型猜出来的步骤。`key` 以 `local.` 开头的是控制面自己
+ * 的步骤（下发指令、回写投影），界面据此把两者区分开——出问题时第一件要判断
+ * 的就是「指令到底有没有送到节点」。
+ */
+export interface TaskStage {
+  seq: number
+  key: string
+  name: string
+  status: 'pending' | 'running' | 'success' | 'failed' | 'skipped'
+  message?: string
+  /** 耗时毫秒。换算成秒是展示层的事。 */
+  duration_ms: number
+  started_at?: string
+  finished_at?: string
+  retryable: boolean
+  retry_of_stage_id?: number
 }
 
 export interface TaskListParams {

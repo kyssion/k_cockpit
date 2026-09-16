@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 
 import { ApiError, NetworkError } from '@/api/client'
-import { isActive, taskApi, type TaskView } from '@/api/task'
+import { isActive, taskApi, type TaskStage, type TaskView } from '@/api/task'
 import { Button } from '@/components/common/Button'
 import { EmptyState, PageLoading } from '@/components/common/Feedback'
 import { Modal } from '@/components/common/Modal'
@@ -374,9 +374,19 @@ function TaskDetailDrawer({
                 <Field label="结束时间">
                   {t.finished_at ? formatDateTime(t.finished_at) : '—'}
                 </Field>
-                <Field label="当前阶段">{t.current_stage || '—'}</Field>
+                <Field label="当前阶段">{currentStageName(t.stages) ?? t.current_stage ?? '—'}</Field>
               </dl>
             </section>
+
+            {/* 阶段时间线。它在「基本信息」之后、「参数」之前：基本信息回答
+                「这是什么任务」，时间线回答「它卡在哪」，而参数只有排查到
+                具体一步时才需要看。 */}
+            {t.stages && t.stages.length > 0 && (
+              <section>
+                <h3 className="text-sm text-ink-3">执行阶段</h3>
+                <StageTimeline stages={t.stages} />
+              </section>
+            )}
 
             {/* 参数与结果只在有内容时出现：一堆空的 JSON 块会让面板显得
                 比实际信息量更大，用户还得逐个扫过去才能确认「确实没有」。 */}
@@ -402,6 +412,91 @@ function TaskDetailDrawer({
       </aside>
     </div>
   )
+}
+
+/** currentStageName 取最近一个阶段的**中文名**。 */
+function currentStageName(stages?: TaskStage[]): string | undefined {
+  const last = stages?.[stages.length - 1]
+  return last?.name
+}
+
+/**
+ * StageTimeline 渲染任务阶段流水。
+ *
+ * 只渲染**已上报**的阶段，不预留后续步骤：节点是边做边报的，控制面并不知道
+ * 后面还有几步。把未上报的步骤画成灰色的「待执行」看起来更完整，但那是在
+ * 编造——一个任务在第 3 步失败时，界面会显示「第 4、5 步待执行」，而实际上
+ * 那两步根本不存在。
+ */
+function StageTimeline({ stages }: { stages: TaskStage[] }) {
+  return (
+    <ol className="mt-2 flex flex-col">
+      {stages.map((s, i) => {
+        const last = i === stages.length - 1
+        // `local.` 前缀的是控制面自己的步骤。区分开是因为出问题时第一件要
+        // 判断的事就是「指令到底有没有送到节点」，而这两类步骤给出的答案不同。
+        const isLocal = s.key.startsWith('local.')
+        return (
+          <li key={s.seq} className="flex gap-2.5">
+            <div className="flex flex-col items-center pt-1.5">
+              <StageDot status={s.status} />
+              {!last && <span className="mt-1 w-px flex-1 bg-line" />}
+            </div>
+
+            <div className={last ? 'flex-1 pb-0.5' : 'flex-1 pb-3'}>
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="flex items-baseline gap-1.5">
+                  <span className={STAGE_TEXT[s.status]}>{s.name}</span>
+                  {isLocal && <span className="text-xs text-ink-3">控制面</span>}
+                </span>
+                <span className="kc-nums shrink-0 text-xs text-ink-3">
+                  {formatDuration(s.duration_ms)}
+                </span>
+              </div>
+              {s.message && (
+                <p className="mt-0.5 text-sm text-danger">{s.message}</p>
+              )}
+            </div>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
+const STAGE_TEXT: Record<TaskStage['status'], string> = {
+  pending: 'text-ink-3',
+  running: 'text-ink',
+  success: 'text-ink-2',
+  failed: 'text-danger',
+  skipped: 'text-ink-3 line-through',
+}
+
+function StageDot({ status }: { status: TaskStage['status'] }) {
+  const base = 'mt-1 h-2 w-2 shrink-0 rounded-full'
+  switch (status) {
+    case 'running':
+      return <span className={`${base} animate-pulse bg-brand`} />
+    case 'success':
+      return <span className={`${base} bg-success/70`} />
+    case 'failed':
+      return <span className={`${base} bg-danger`} />
+    default:
+      return <span className={`${base} bg-line-strong`} />
+  }
+}
+
+/**
+ * formatDuration 把毫秒换算成可读的时长。
+ *
+ * 不足 1 秒的显示毫秒而不是「0.2 秒」：阶段之间的差异常常就在几十毫秒，
+ * 统一成秒会把它们抹平成同一个数字，而「哪一步特别慢」正是要看的东西。
+ */
+function formatDuration(ms: number): string {
+  if (!ms || ms <= 0) return '—'
+  if (ms < 1000) return `${ms} ms`
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`
+  return `${Math.floor(ms / 60_000)} 分 ${Math.round((ms % 60_000) / 1000)} 秒`
 }
 
 /** JsonBlock 以可读的形式展示一段结构化数据。 */
