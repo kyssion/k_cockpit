@@ -65,6 +65,7 @@ func Register(h *server.Hertz, deps Deps) {
 	storageHandler := handler.NewStorage(deps.Storage, deps.Risk)
 	networkHandler := handler.NewNetwork(deps.Network)
 	settingsHandler := handler.NewSettings(deps.Settings)
+	consoleHandler := handler.NewConsole(deps.VM, deps.Risk)
 
 	authMW := auth.NewMiddleware(deps.Auth)
 	// 认证接口都计为真实用户活动：它们由用户显式操作触发，不是后台轮询。
@@ -131,6 +132,17 @@ func Register(h *server.Hertz, deps Deps) {
 		// 任务队列按资源锁串行（f-2-01 R-005）。
 		v1.POST("/vms/:id/power-actions", requireAuth, vmHandler.Power)
 		v1.DELETE("/vms/:id", requireAuth, vmHandler.Delete)
+
+		// 控制台（F-2-08）。WebSocket 端点同样经过认证中间件：Cookie 随
+		// 握手请求发送，因此**升级前**就完成了鉴权与授权（R-003）——
+		// 升级之后没有 HTTP 状态码可用，那时再拒绝已经没有合适的表达方式。
+		//
+		// 「对外暴露」是受二次验证保护的高危操作，由 handler 按请求内容
+		// 决定是否要求验证（只改暴露状态时才要求）。
+		v1.GET("/vms/:id/console", requireAuth, consoleHandler.GetConfig)
+		v1.PATCH("/vms/:id/console", requireAuth, consoleHandler.Update)
+		v1.GET("/vms/:id/console/screenshot", requireAuth, consoleHandler.Screenshot)
+		v1.GET("/vms/:id/console/ws", requireAuth, consoleHandler.WS)
 
 		// 任务中心：tenant 只能看到自己发起的（同样由归属过滤保证）。
 		v1.GET("/tasks", requireAuth, taskHandler.List)

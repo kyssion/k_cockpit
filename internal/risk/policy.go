@@ -27,6 +27,9 @@ const (
 	ActionStoragePoolCreate Action = "storage.pool.create"
 	// 删除存储池：销毁其中的磁盘。
 	ActionStoragePoolDelete Action = "storage.pool.delete"
+	// 控制台对外暴露：把宿主机端口开放到网络，等于给这台虚拟机开了一扇
+	// 绕过面板的后门（f-2-08 R-004 / Q-007）。
+	ActionConsoleExpose Action = "vm.console.expose"
 )
 
 // Entry 是清单中的一条，用于对外下发（API-034）。
@@ -68,6 +71,11 @@ var policy = []Entry{
 		Action: ActionStoragePoolDelete,
 		Label:  "删除存储池",
 		Reason: "池内的磁盘会被一并销毁",
+	},
+	{
+		Action: ActionConsoleExpose,
+		Label:  "对外暴露控制台",
+		Reason: "将向网络开放宿主机端口，可绕过面板直接接入该虚拟机",
 	},
 }
 

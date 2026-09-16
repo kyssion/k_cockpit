@@ -16,6 +16,7 @@ import (
 	"k_cockpit/internal/audit"
 	"k_cockpit/internal/auth"
 	"k_cockpit/internal/config"
+	"k_cockpit/internal/cryptoutil"
 	"k_cockpit/internal/database"
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/node"
@@ -108,6 +109,11 @@ func main() {
 	// 摆设，而「改了不生效」正是 f-9-01 R-002 要消灭的现象。
 	vmSvc := vm.NewService(db, queue, recorder, mockAgent, settingsSvc)
 	storageSvc := storage.NewService(db, queue, recorder, mockAgent, settingsSvc)
+
+	// 控制台密码需要可逆加密（f-2-08 R-005）：它要交给 agent 参与 VNC 认证，
+	// 因此不能用单向哈希。用途标签与会话签名分开派生。
+	vmSvc.SetEncryptionKey(cryptoutil.DeriveKey(
+		[]byte(cfg.Session.Secret), "k_cockpit/vm/credential/v1"))
 
 	h := server.Default(server.WithHostPorts(cfg.HTTP.Addr()))
 	router.Register(h, router.Deps{
