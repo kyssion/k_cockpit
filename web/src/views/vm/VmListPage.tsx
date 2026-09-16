@@ -4,7 +4,13 @@ import { Link } from 'react-router'
 
 import { ApiError, NetworkError } from '@/api/client'
 import { nodeApi } from '@/api/node'
-import { vmApi, type BatchResult, type PowerAction, type VmView } from '@/api/vm'
+import {
+  vmApi,
+  type BatchResult,
+  type DiskAction,
+  type PowerAction,
+  type VmView,
+} from '@/api/vm'
 import { Button } from '@/components/common/Button'
 import { EmptyState, PageLoading } from '@/components/common/Feedback'
 import { Input } from '@/components/common/Input'
@@ -27,6 +33,10 @@ export function VmListPage() {
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [batchResult, setBatchResult] = useState<BatchResult | null>(null)
   const [batchError, setBatchError] = useState('')
+  // 批量删除的确认框。它承载两件事：让用户选磁盘处理方式（R-009 不给默认
+  // 值），以及提前列出被锁定、将被跳过的那些（R-010 不静默跳过）。
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [diskAction, setDiskAction] = useState<DiskAction>('keep')
 
   // 翻页、搜索时清空选择：选中的项可能已经不在当前页上，留着会让
   // 「N 台已选」与实际看到的对不上——用户会怀疑是不是选错了。
@@ -57,11 +67,21 @@ export function VmListPage() {
   // 用户才能判断这一批里有多少会真正发生变化。
   const runningCount = selectedOnPage.filter((v) => v.status === 'running').length
 
+  // 被锁定的选中项。它们删不掉（F-2-12），因此要在用户点下删除**之前**
+  // 就告诉他（f-2-01 R-010：不静默跳过）。
+  const lockedSelected = selectedOnPage.filter((v) => v.locked)
+  const deletableSelected = selectedOnPage.filter((v) => !v.locked)
+
   const batch = useMutation({
-    mutationFn: (action: PowerAction) => vmApi.batchAction([...selected], action),
+    mutationFn: (vars: {
+      action: PowerAction | 'delete'
+      diskAction?: DiskAction
+      ids?: number[]
+    }) => vmApi.batchAction(vars.ids ?? [...selected], vars.action, vars.diskAction),
     onSuccess: (result) => {
       setBatchError('')
       setBatchResult(result)
+      setDeleteOpen(false)
       // 全部成功时清空选择：用户下一步多半是看结果或换个筛选，
       // 留着选中状态会让操作条一直挡在底部。
       if (result.failed === 0) setSelected(new Set())
@@ -283,6 +303,11 @@ export function VmListPage() {
               {runningCount > 0 && (
                 <span className="ml-1.5 text-ink-3">· {runningCount} 台运行中</span>
               )}
+              {/* 锁定项在**点之前**就要标出来（R-010）：等到点下删除才被
+                  拒绝，用户会以为是系统出了问题。 */}
+              {lockedSelected.length > 0 && (
+                <span className="ml-1.5 text-warning">· {lockedSelected.length} 台已锁定</span>
+              )}
             </span>
 
             <span className="h-4 w-px bg-line" />
@@ -290,26 +315,41 @@ export function VmListPage() {
             <Button
               size="sm"
               variant="secondary"
-              loading={batch.isPending && batch.variables === 'start'}
-              onClick={() => batch.mutate('start')}
+              loading={batch.isPending && batch.variables?.action === 'start'}
+              onClick={() => batch.mutate({ action: 'start' })}
             >
               开机
             </Button>
             <Button
               size="sm"
               variant="secondary"
-              loading={batch.isPending && batch.variables === 'shutdown'}
-              onClick={() => batch.mutate('shutdown')}
+              loading={batch.isPending && batch.variables?.action === 'shutdown'}
+              onClick={() => batch.mutate({ action: 'shutdown' })}
             >
               关机
             </Button>
             <Button
               size="sm"
-              variant="danger"
-              loading={batch.isPending && batch.variables === 'poweroff'}
-              onClick={() => batch.mutate('poweroff')}
+              variant="secondary"
+              loading={batch.isPending && batch.variables?.action === 'poweroff'}
+              onClick={() => batch.mutate({ action: 'poweroff' })}
             >
               强制断电
+            </Button>
+            <Button
+              size="sm"
+              variant="danger"
+              // 全部被锁时直接禁用：点进去只会看到一个「没有可删除项」的
+              // 确认框，那一步没有任何意义。
+              disabled={deletableSelected.length === 0}
+              title={
+                deletableSelected.length === 0
+                  ? '选中的虚拟机全部已锁定，需先解锁才能删除'
+                  : ''
+              }
+              onClick={() => setDeleteOpen(true)}
+            >
+              删除
             </Button>
 
             <button
@@ -321,6 +361,101 @@ export function VmListPage() {
           </div>
         </div>
       )}
+
+      <Modal
+        open={deleteOpen}
+        title={`删除 ${deletableSelected.length} 台虚拟机`}
+        onClose={() => setDeleteOpen(false)}
+        footer={
+          <>
+            <Button variant="secondary" size="sm" onClick={() => setDeleteOpen(false)}>
+              取消
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              loading={batch.isPending && batch.variables?.action === 'delete'}
+              onClick={() =>
+                batch.mutate({
+                  action: 'delete',
+                  diskAction,
+                  // 只提交未被锁定的那些。被锁的即便发出去也必然失败，
+                  // 让用户收到一串注定失败的结果没有意义。
+                  ids: deletableSelected.map((v) => v.id),
+                })
+              }
+            >
+              确认删除
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3.5">
+          {/* 锁定项**整体提示并列出**（R-010），不静默跳过。
+              用户需要知道是哪几台、以及为什么删不掉。 */}
+          {lockedSelected.length > 0 && (
+            <div className="rounded-control border border-warning/40 bg-warning/5 px-3 py-2.5">
+              <p className="text-base font-medium text-warning">
+                {lockedSelected.length} 台已锁定，将被跳过
+              </p>
+              <ul className="mt-1 flex flex-col gap-0.5">
+                {lockedSelected.map((v) => (
+                  <li key={v.id} className="text-sm text-ink-2">
+                    {v.name}
+                    {v.lock_reason && <span className="text-ink-3">（{v.lock_reason}）</span>}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1.5 text-sm text-ink-3">
+                锁定用于防止误删，需先在详情页解锁才能删除。
+              </p>
+            </div>
+          )}
+
+          <div>
+            <p className="text-base text-ink">磁盘处理方式</p>
+            {/* **不给默认值**（R-009）：两种方式的代价完全不同，
+                让界面替用户选一个等于把这个决定藏起来。 */}
+            <div className="mt-1.5 flex flex-col gap-2">
+              <label className="flex cursor-pointer items-start gap-2.5">
+                <input
+                  type="radio"
+                  className="mt-1"
+                  name="disk-action"
+                  checked={diskAction === 'keep'}
+                  onChange={() => setDiskAction('keep')}
+                />
+                <span>
+                  <span className="block text-base text-ink">保留磁盘</span>
+                  <span className="block text-sm text-ink-3">
+                    磁盘会留下并继续占用存储空间，可在存储页手动清理。
+                  </span>
+                </span>
+              </label>
+              <label className="flex cursor-pointer items-start gap-2.5">
+                <input
+                  type="radio"
+                  className="mt-1"
+                  name="disk-action"
+                  checked={diskAction === 'delete'}
+                  onChange={() => setDiskAction('delete')}
+                />
+                <span>
+                  <span className="block text-base text-danger">连同磁盘一起删除</span>
+                  <span className="block text-sm text-ink-3">
+                    <span className="font-medium text-danger">磁盘上的数据将无法恢复。</span>
+                    请确认这几台机器确实不再需要。
+                  </span>
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <p className="text-sm text-ink-3">
+            需要先关机或强制断电才能删除；有任务正在执行的虚拟机会被拒绝并给出原因。
+          </p>
+        </div>
+      </Modal>
 
       <CreateVmModal open={createOpen} onClose={() => setCreateOpen(false)} />
     </div>
@@ -352,6 +487,16 @@ function VmRow({
         <Link to={`/vm/${vm.id}`} className="font-medium text-ink hover:text-brand hover:underline">
           {vm.name}
         </Link>
+        {/* 锁定标记紧跟在名字后面而不是单独一列：它是对这一行的**状态注解**
+            （「这台不能删」），而不是一个需要横向比较的属性。 */}
+        {vm.locked && (
+          <span
+            className="ml-2 rounded-pill bg-warning/10 px-1.5 py-0.5 text-xs text-warning"
+            title={vm.lock_reason ? `已锁定：${vm.lock_reason}` : '已锁定，需先解锁才能删除'}
+          >
+            已锁定
+          </span>
+        )}
         {vm.group_name && <span className="ml-2 text-xs text-ink-3">{vm.group_name}</span>}
       </td>
       <td className="px-4 py-2.5">

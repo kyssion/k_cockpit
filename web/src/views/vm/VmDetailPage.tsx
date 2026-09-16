@@ -98,6 +98,8 @@ export function VmDetailPage() {
   const [tab, setTab] = useState<TabKey>('system')
   const [confirmAction, setConfirmAction] = useState<PowerAction | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [lockOpen, setLockOpen] = useState(false)
+  const [lockReason, setLockReason] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
@@ -140,6 +142,23 @@ export function VmDetailPage() {
     },
     onError: (err) => {
       setConfirmAction(null)
+      setError(describe(err))
+    },
+  })
+
+  // 加锁是同步的（锁只在控制面），解锁需要二次验证——但 428 与重放都在
+  // 请求层处理，这里拿到的是一个普通的 Promise。
+  const setLock = useMutation({
+    mutationFn: (locked: boolean) => vmApi.setLock(vmID, locked, lockReason),
+    onSuccess: (view) => {
+      setLockOpen(false)
+      setLockReason('')
+      setError('')
+      setNotice(view.locked ? '已锁定：删除操作将被拒绝' : '已解锁')
+      refresh()
+    },
+    onError: (err) => {
+      setLockOpen(false)
       setError(describe(err))
     },
   })
@@ -211,12 +230,55 @@ export function VmDetailPage() {
                 </Button>
               </Link>
             )}
-            <Button variant="danger" size="sm" onClick={() => setDeleteOpen(true)}>
+            {/* 锁定的开关。加锁是收紧、解锁是放松——只有后者需要验证，
+                因此这里就是一次普通的调用。 */}
+            {vm.locked ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                loading={setLock.isPending}
+                onClick={() => setLock.mutate(false)}
+              >
+                解锁
+              </Button>
+            ) : (
+              <Button variant="secondary" size="sm" onClick={() => setLockOpen(true)}>
+                锁定
+              </Button>
+            )}
+            <Button
+              variant="danger"
+              size="sm"
+              // 锁定时禁止删除（F-2-12）。按钮禁用 + 说明原因，而不是点下去
+              // 才被后端拒绝——后者会让用户以为是系统出了问题。
+              disabled={vm.locked}
+              title={vm.locked ? '该虚拟机已锁定，需先解锁才能删除' : ''}
+              onClick={() => setDeleteOpen(true)}
+            >
               删除
             </Button>
           </div>
         </div>
       </div>
+
+      {vm.locked && (
+        <div className="rounded-card border border-warning/40 bg-warning/5 px-4 py-3">
+          <p className="text-base font-medium text-warning">此虚拟机已锁定</p>
+          <p className="mt-1 text-base text-ink-2">
+            锁定期间无法删除，也不会被批量删除操作选中执行。
+            {vm.lock_reason ? (
+              <>
+                锁定原因：<span className="text-ink">{vm.lock_reason}</span>
+              </>
+            ) : (
+              <span className="text-ink-3">（未填写原因）</span>
+            )}
+            {vm.locked_at && (
+              <span className="text-ink-3"> · {formatDateTime(vm.locked_at)}</span>
+            )}
+          </p>
+        </div>
+      )}
 
       {vm.available_actions.length === 0 && !vm.stale && (
         <p className="text-base text-ink-3">
@@ -287,6 +349,35 @@ export function VmDetailPage() {
           navigate('/vm')
         }}
       />
+
+      <Modal
+        open={lockOpen}
+        title={`锁定「${vm.name}」`}
+        description="锁定后无法删除该虚拟机，也不会被批量删除选中执行。随时可以解锁——解锁需要一次二次验证。"
+        onClose={() => setLockOpen(false)}
+        footer={
+          <>
+            <Button variant="secondary" size="sm" onClick={() => setLockOpen(false)}>
+              取消
+            </Button>
+            <Button size="sm" loading={setLock.isPending} onClick={() => setLock.mutate(true)}>
+              锁定
+            </Button>
+          </>
+        }
+      >
+        {/* 原因必填与否是一个取舍：要求必填能让「为什么锁着」总有答案，
+            但也可能让人嫌麻烦干脆不加锁。因此它是可选的，但界面上明确
+            说明「会被显示给其他人看」——写不写由用户判断。 */}
+        <Input
+          label="锁定原因（可选）"
+          value={lockReason}
+          maxLength={255}
+          placeholder="例如：生产环境主库，禁止删除"
+          onChange={(e) => setLockReason(e.target.value)}
+          hint="会显示在虚拟机列表与详情页上，让其他人知道为什么不能删。"
+        />
+      </Modal>
     </div>
   )
 }

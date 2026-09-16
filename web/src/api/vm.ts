@@ -7,7 +7,7 @@
  *   - 创建是**异步**的：接口返回任务标识而非创建好的虚拟机，前端据任务进度
  *     跟踪结果（f-7-01 R-001）。
  */
-import { del, get, getPaged, post, type Pagination } from './client'
+import { del, get, getPaged, patch, post, type Pagination } from './client'
 import type { TaskStatus } from './task'
 
 export type VmStatus = 'running' | 'stopped' | 'paused' | 'suspended' | 'error' | 'unknown'
@@ -44,6 +44,18 @@ export interface VmView {
 
   /** 是否有可用控制台（display != none）。为 false 时界面应隐藏入口。 */
   has_console: boolean
+
+  /**
+   * 是否被业务软锁保护（F-2-12）。锁定时禁止删除。
+   *
+   * 由**后端下发**，界面不自行判断：批量操作要提前提示「其中 N 台已锁定」
+   * （f-2-01 R-010），而前端的依据只能来自列表接口本身——各页面各自再查
+   * 一次，迟早会出现「没标锁定、点删除却被拒绝」的不一致。
+   */
+  locked: boolean
+  /** 加锁原因，供界面解释「为什么锁着」。 */
+  lock_reason?: string
+  locked_at?: string
 }
 
 export interface VmListParams {
@@ -125,13 +137,29 @@ export const vmApi = {
     del<TaskRef>(`/api/v1/vms/${id}?disk_action=${diskAction}`),
 
   /**
-   * 批量电源操作（F-2-01）。
+   * 批量操作（F-2-01）：电源与删除。
    *
    * 部分成功语义：某一台失败不影响其它台，因此**不会抛出异常**——
    * 调用方要检查 `failed` 而不是只依赖 catch。
+   *
+   * 删除时 `diskAction` 必填且**不给默认值**（R-009）：连盘删除不可逆、
+   * 保留磁盘会留下孤儿数据，两者代价完全不同，界面上必须让用户自己选。
    */
-  batchAction: (vmIDs: number[], action: PowerAction) =>
-    post<BatchResult>('/api/v1/vms/batch-actions', { vm_ids: vmIDs, action }),
+  batchAction: (vmIDs: number[], action: PowerAction | 'delete', diskAction?: DiskAction) =>
+    post<BatchResult>('/api/v1/vms/batch-actions', {
+      vm_ids: vmIDs,
+      action,
+      disk_action: diskAction,
+    }),
+
+  /**
+   * 加锁 / 解锁（F-2-12）。**同步生效**——锁只在控制面，不需要下发节点。
+   *
+   * 解锁需要二次验证，但这一点对调用方**透明**：请求层收到 428 时会自动
+   * 唤起验证弹框并重放，页面代码不必感知。
+   */
+  setLock: (id: number, locked: boolean, reason?: string) =>
+    patch<VmView>(`/api/v1/vms/${id}/lock`, { locked, reason }),
 
   /** 网卡列表（详情页「网络管理」标签页）。 */
   interfaces: (id: number) => get<{ items: VMInterface[] }>(`/api/v1/vms/${id}/interfaces`),
