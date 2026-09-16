@@ -22,6 +22,7 @@ import (
 	"k_cockpit/internal/node"
 	"k_cockpit/internal/risk"
 	"k_cockpit/internal/router"
+	"k_cockpit/internal/schedule"
 	"k_cockpit/internal/settings"
 	"k_cockpit/internal/storage"
 	"k_cockpit/internal/task"
@@ -117,6 +118,12 @@ func main() {
 	vmSvc := vm.NewService(db, queue, recorder, mockAgent, settingsSvc)
 	storageSvc := storage.NewService(db, queue, recorder, mockAgent, settingsSvc)
 
+	// 定时任务（F-7-05）：调度器到点把**已有的任务类型**入队，自己不做任何
+	// 节点操作，因此不需要新的执行器——这也是它能在 mock 之上完整跑通的原因。
+	scheduleSvc := schedule.NewService(db)
+	scheduler := schedule.New(db, queue, schedule.Options{})
+	scheduler.Start(context.Background())
+
 	// 控制台密码需要可逆加密（f-2-08 R-005）：它要交给 agent 参与 VNC 认证，
 	// 因此不能用单向哈希。用途标签与会话签名分开派生。
 	vmSvc.SetEncryptionKey(cryptoutil.DeriveKey(
@@ -131,6 +138,7 @@ func main() {
 		VM:            vmSvc,
 		Task:          queue,
 		Risk:          riskGuard,
+		Schedule:      scheduleSvc,
 		Storage:       storageSvc,
 		Network:       networkSvc,
 		Settings:      settingsSvc,

@@ -18,6 +18,7 @@ import (
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/node"
 	"k_cockpit/internal/risk"
+	"k_cockpit/internal/schedule"
 	"k_cockpit/internal/settings"
 	"k_cockpit/internal/storage"
 	"k_cockpit/internal/task"
@@ -41,6 +42,8 @@ type Deps struct {
 	// Risk 强制高风险操作的二次验证（f-10-01）。受保护的操作在 handler
 	// 入口调用它，清单本身集中在 internal/risk。
 	Risk *risk.Guard
+	// Schedule 提供虚拟机的定时任务（F-7-05）。
+	Schedule *schedule.Service
 
 	SecureCookie bool
 	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
@@ -62,6 +65,7 @@ func Register(h *server.Hertz, deps Deps) {
 	vmHandler := handler.NewVM(deps.VM, deps.Risk)
 	taskHandler := handler.NewTask(deps.Task)
 	securityHandler := handler.NewSecurity(deps.Risk, deps.Auth)
+	scheduleHandler := handler.NewSchedule(deps.Schedule, deps.Risk)
 	storageHandler := handler.NewStorage(deps.Storage, deps.Risk)
 	networkHandler := handler.NewNetwork(deps.Network)
 	settingsHandler := handler.NewSettings(deps.Settings)
@@ -137,6 +141,14 @@ func Register(h *server.Hertz, deps Deps) {
 		// 需要下发到节点，走任务队列，尚未实现。
 		v1.GET("/vms/:id/interfaces", requireAuth, vmHandler.Interfaces)
 		v1.GET("/vms/:id/static-ips", requireAuth, vmHandler.StaticIPs)
+
+		// 定时任务（F-7-05）。执行时复用已有的 vm.power / vm.delete 任务，
+		// 因此不需要新的执行器。删除类任务在**创建时**走二次验证——它是
+		// 一条将来会自动执行的删除指令，留到执行时再验证就没人可验了。
+		v1.GET("/vms/:id/schedules", requireAuth, scheduleHandler.List)
+		v1.POST("/vms/:id/schedules", requireAuth, scheduleHandler.Create)
+		v1.PATCH("/vms/:id/schedules/:scheduleID", requireAuth, scheduleHandler.SetEnabled)
+		v1.DELETE("/vms/:id/schedules/:scheduleID", requireAuth, scheduleHandler.Delete)
 
 		// 控制台（F-2-08）。WebSocket 端点同样经过认证中间件：Cookie 随
 		// 握手请求发送，因此**升级前**就完成了鉴权与授权（R-003）——
