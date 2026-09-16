@@ -1336,4 +1336,121 @@ func TestNetworkWriteRejectsOthersVM(t *testing.T) {
 	assertAPIError(t, err, 404)
 }
 
+// --- 批量操作 ---
+
+func TestBatchPowerPartiallySucceeds(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+	viewer := authz.Viewer{UserID: 7}
+
+	ok1 := model.VM{NodeID: 1, Name: "vm-b1", Status: model.VMStatusRunning, OwnerID: ptr(int64(7))}
+	ok2 := model.VM{NodeID: 1, Name: "vm-b2", Status: model.VMStatusRunning, OwnerID: ptr(int64(7))}
+	theirs := model.VM{NodeID: 1, Name: "vm-b3", Status: model.VMStatusRunning, OwnerID: ptr(int64(20))}
+	db.Create(&ok1)
+	db.Create(&ok2)
+	db.Create(&theirs)
+
+	resp, err := svc.BatchPower(ctx, vm.BatchPowerRequest{
+		VMIDs:  []int64{ok1.ID, theirs.ID, ok2.ID},
+		Action: "shutdown",
+	}, viewer, "alice", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("批量操作本身不应失败: %v", err)
+	}
+
+	// **部分成功**：一台越权不该影响另外两台。
+	if resp.Succeeded != 2 || resp.Failed != 1 {
+		t.Errorf("成功 %d 台、失败 %d 台，期望 2 与 1（items=%+v）",
+			resp.Succeeded, resp.Failed, resp.Items)
+	}
+
+	// 失败项必须带**原因**：只标一个红叉会让用户去猜是权限、状态还是网络问题。
+	for _, item := range resp.Items {
+		if !item.OK && item.Error == "" {
+			t.Errorf("失败项未给出原因: %+v", item)
+		}
+		if item.OK && item.TaskID == 0 {
+			t.Errorf("成功项未返回任务标识: %+v", item)
+		}
+	}
+}
+
+func TestBatchPowerRejectsWrongStatePerItem(t *testing.T) {
+	// mock 探测固定返回 running，因此 start 会对每一台都失败。
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	a := model.VM{NodeID: 1, Name: "vm-c1", OwnerID: ptr(int64(7))}
+	b := model.VM{NodeID: 1, Name: "vm-c2", OwnerID: ptr(int64(7))}
+	db.Create(&a)
+	db.Create(&b)
+
+	resp, err := svc.BatchPower(ctx, vm.BatchPowerRequest{
+		VMIDs: []int64{a.ID, b.ID}, Action: "start",
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("批量操作本身不应失败: %v", err)
+	}
+
+	// 动作非法 ≠ 请求非法：整个请求在动作拼错时会被拒（见下一个测试），
+	// 而这里是「动作合法但每一台状态都不允许」——响应仍是 200，
+	// 逐台给出原因。
+	if resp.Succeeded != 0 || resp.Failed != 2 {
+		t.Errorf("成功 %d 台、失败 %d 台，期望 0 与 2", resp.Succeeded, resp.Failed)
+	}
+	for _, item := range resp.Items {
+		if !strings.Contains(item.Error, "运行中") {
+			t.Errorf("失败原因未说明当前状态: %q", item.Error)
+		}
+	}
+}
+
+func TestBatchPowerDeduplicates(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	vm1 := model.VM{NodeID: 1, Name: "vm-d1", Status: model.VMStatusRunning, OwnerID: ptr(int64(7))}
+	db.Create(&vm1)
+
+	// 同一个 ID 传两次只应受理一次。重复受理会产生两个任务，而第二个
+	// 必然因为「状态已变」而失败——用户看到一条莫名的失败记录。
+	resp, err := svc.BatchPower(ctx, vm.BatchPowerRequest{
+		VMIDs: []int64{vm1.ID, vm1.ID}, Action: "shutdown",
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("批量操作失败: %v", err)
+	}
+	if len(resp.Items) != 1 || resp.Succeeded != 1 {
+		t.Errorf("重复 ID 未被去重: items=%d succeeded=%d", len(resp.Items), resp.Succeeded)
+	}
+}
+
+func TestBatchPowerRejectsBadRequests(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	vm1 := model.VM{NodeID: 1, Name: "vm-e1", OwnerID: ptr(int64(7))}
+	db.Create(&vm1)
+
+	// 空列表。
+	_, err := svc.BatchPower(ctx, vm.BatchPowerRequest{Action: "shutdown"},
+		authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 400)
+
+	// 动作拼错：整个请求就该被拒，而不是对每一台各失败一次。
+	_, err = svc.BatchPower(ctx, vm.BatchPowerRequest{
+		VMIDs: []int64{vm1.ID}, Action: "explode",
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 400)
+
+	// 超出单次上限。
+	ids := make([]int64, 51)
+	for i := range ids {
+		ids[i] = int64(i + 1)
+	}
+	_, err = svc.BatchPower(ctx, vm.BatchPowerRequest{VMIDs: ids, Action: "shutdown"},
+		authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 400)
+}
+
 func ptr[T any](v T) *T { return &v }

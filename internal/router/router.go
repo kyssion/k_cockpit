@@ -132,6 +132,9 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/vms", requireAuth, vmHandler.List)
 		v1.GET("/vms/:id", requireAuth, vmHandler.Get)
 		v1.POST("/vms", requireAuth, vmHandler.Create)
+		// 批量电源操作（F-2-01）。逐台独立受理、可部分成功，因此始终返回
+		// 200，逐台的结果在响应体里。
+		v1.POST("/vms/batch-actions", requireAuth, vmHandler.BatchAction)
 		// 电源与删除都是异步操作：受理时校验状态并返回任务标识，执行由
 		// 任务队列按资源锁串行（f-2-01 R-005）。
 		v1.POST("/vms/:id/power-actions", requireAuth, vmHandler.Power)

@@ -221,6 +221,36 @@ func (h *VM) Interfaces(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, map[string]any{"items": items})
 }
 
+type batchActionRequest struct {
+	VMIDs  []int64 `json:"vm_ids"`
+	Action string  `json:"action"`
+}
+
+// BatchAction 批量电源操作（API-028）。
+//
+// 响应是**部分成功**语义：逐台给出结果，某一台失败不影响其它台。
+// 因此这个接口始终返回 200（除非整个请求就不合法，比如动作拼错了）——
+// 用 4xx 会让前端把「50 台里第 3 台状态不允许」当成整批失败。
+func (h *VM) BatchAction(ctx context.Context, c *app.RequestContext) {
+	var req batchActionRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	result, err := h.svc.BatchPower(ctx, vm.BatchPowerRequest{
+		VMIDs: req.VMIDs, Action: req.Action,
+	}, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, result)
+}
+
 // EditForm 返回编辑页的表单元数据与当前值（API-056）。
 //
 // 返回值里的 **运行态可改矩阵**是单一事实来源（F-2-05）：界面按它渲染控件与
