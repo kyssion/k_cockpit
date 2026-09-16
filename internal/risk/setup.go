@@ -76,10 +76,21 @@ func (g *Guard) ConfirmTOTPSetup(
 		return nil, api.Internal()
 	}
 
-	if !validateTOTP(secret, code, time.Now()) {
+	// 开发期万能码同样作用于绑定确认，而且**必须**在这里也生效：绑定是
+	// 整个二次验证的前置条件，卡在这一步等于所有高风险操作都做不了。
+	//
+	// 需要说明的是：此码通过时并没有验证「用户真的能算出动态码」——而这
+	// 正是确认步骤本来的目的。因此密钥依然保存，但该账号的 TOTP 是否可用
+	// 是未经验证的。
+	devBypass := g.isDevBypass(code)
+	if !devBypass && !validateTOTP(secret, code, time.Now()) {
 		// 这里的文案可以指出「码不对」：绑定流程不涉及凭据猜测，用户
 		// 就在现场看着验证器，含糊其辞只会让他反复重试。
 		return nil, api.ValidationFailed("验证码不正确，请确认验证器时间准确后重试")
+	}
+	if devBypass {
+		log.Printf("[risk] ⚠ 开发期万能码通过了 TOTP 绑定确认 user=%d —— "+
+			"未验证该账号能否真的算出动态码", user.ID)
 	}
 
 	codes, hashes, err := GenerateRecoveryCodes()
@@ -112,11 +123,20 @@ type SetupInfo struct {
 	PendingSetup    bool `json:"pending_setup"`
 	RecoveryCodes   int  `json:"recovery_code_count"`
 	RecoveryCodesOK bool `json:"has_recovery_codes"`
+	// DevBypass 表示开发期万能码当前是否可用。
+	//
+	// 显式回报给前端，是为了让「当前防护处于什么状态」**看得见**——一个
+	// 只在环境变量里的开关，很容易在某次部署中被忘记，而界面上一直显示
+	// 「已绑定」会让所有人以为防护是完整的。
+	DevBypass bool `json:"dev_bypass"`
 }
 
 // SetupState 返回当前用户的绑定进度。
-func SetupState(user *model.User) SetupInfo {
-	state := SetupInfo{TOTPEnabled: user.TotpEnabled}
+//
+// devBypass 由调用方从 Guard 取：本包内 Guard 才是配置的持有者，而这
+// 个函数是纯函数（不依赖 Guard），便于单独测试。
+func SetupState(user *model.User, devBypass bool) SetupInfo {
+	state := SetupInfo{TOTPEnabled: user.TotpEnabled, DevBypass: devBypass}
 	if user.TotpSecretEnc != nil && *user.TotpSecretEnc != "" && !user.TotpEnabled {
 		state.PendingSetup = true
 	}

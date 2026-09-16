@@ -381,3 +381,110 @@ func TestTOTPVerificationAgainstGeneratedSecret(t *testing.T) {
 		t.Error("空密钥通过了验证")
 	}
 }
+
+// --- 开发期万能验证码 ---
+
+// TestDevBypassMethodOnlyListedWhenEnabled 覆盖「万能码在生产不存在」这条
+// 保证的最后一环：可用方式由配置决定，配置为空时它根本不出现——不是出现
+// 了但被拒绝，而是从一开始就没有这个入口。
+func TestDevBypassMethodOnlyListedWhenEnabled(t *testing.T) {
+	u := &model.User{}
+
+	// 生产环境恒为此状态（config.Validate 保证 DevBypassCode 为空）。
+	off := &Guard{}
+	if off.DevBypassEnabled() {
+		t.Error("未配置万能码时 DevBypassEnabled 应为 false")
+	}
+	if got := off.Methods(u); len(got) != 0 {
+		t.Errorf("未配置万能码时方式列表 = %v, 期望为空", got)
+	}
+
+	on := &Guard{devBypassCode: "123456"}
+	if !on.DevBypassEnabled() {
+		t.Error("配置后 DevBypassEnabled 应为 true")
+	}
+	if got := on.Methods(u); len(got) != 1 || got[0] != MethodDevBypass {
+		t.Errorf("方式列表 = %v, 期望 [%v]", got, MethodDevBypass)
+	}
+}
+
+// TestDevBypassAppendsNotReplaces 确认万能码是**追加**的。
+//
+// 替换会让已经绑好验证器的用户反而只能走万能码——把「多一个开发入口」
+// 变成「真实方式被挤掉」，那是另一种形式的功能退化。
+func TestDevBypassAppendsNotReplaces(t *testing.T) {
+	secret := "JBSWY3DPEHPK3PXP"
+	g := &Guard{devBypassCode: "123456"}
+	u := &model.User{TotpEnabled: true, TotpSecretEnc: &secret}
+
+	got := g.Methods(u)
+	want := []Method{MethodTOTP, MethodDevBypass}
+	if len(got) != len(want) {
+		t.Fatalf("方式列表 = %v, 期望 %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("方式[%d] = %v, 期望 %v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestIsDevBypass(t *testing.T) {
+	// 未配置时任何输入都不匹配——包括看起来像码的值。
+	off := &Guard{}
+	for _, in := range []string{"", "123456", " 123456 ", "0"} {
+		if off.isDevBypass(in) {
+			t.Errorf("未配置时 %q 不应通过", in)
+		}
+	}
+
+	on := &Guard{devBypassCode: "123456"}
+
+	// 前后空白忽略：用户从别处复制粘贴时常带空格，为此报「码不对」
+	// 只会让人反复核对一个其实正确的值。
+	for _, in := range []string{"123456", " 123456", "123456 ", "  123456  "} {
+		if !on.isDevBypass(in) {
+			t.Errorf("%q 应通过（前后空白应被忽略）", in)
+		}
+	}
+
+	// 空输入**必须**拒绝：否则一个未填验证码的请求会意外命中一个配置为
+	// 空串的误配置——那等于把关卡门直接敞开。
+	for _, in := range []string{"", "   ", "12345", "1234567", "123456abc", "abc123456"} {
+		if on.isDevBypass(in) {
+			t.Errorf("%q 不应通过", in)
+		}
+	}
+}
+
+// TestDevBypassIsNotUserSelectable 覆盖一条安全边界：dev_bypass **不能**被
+// 请求方直接指定，只能由 Guard 在开发模式下自行追加到可用列表。
+//
+// 若它进了 valid()，「配置为空」就不再是防线：任何人都能声称自己用的
+// 是开发码，而校验逻辑会跟着走进一个没有配置的分支。
+func TestDevBypassIsNotUserSelectable(t *testing.T) {
+	if MethodDevBypass.valid() {
+		t.Error("MethodDevBypass 不应通过 valid()：它只能由 Guard 主动追加")
+	}
+	// 与之相对，真实方式必须通过——否则会连带把它们也挡掉。
+	for _, m := range []Method{MethodTOTP, MethodRecoveryCode} {
+		if !m.valid() {
+			t.Errorf("%v 应通过 valid()", m)
+		}
+	}
+}
+
+// TestSetupStateReportsDevBypass 确认开关状态会回报给界面。
+//
+// 只在环境变量里的开关很容易在某次部署中被遗忘，而界面上仍显示「已绑定」
+// 会让所有人以为防护是完整的。
+func TestSetupStateReportsDevBypass(t *testing.T) {
+	u := &model.User{}
+
+	if info := SetupState(u, false); info.DevBypass {
+		t.Error("devBypass=false 时 SetupInfo.DevBypass 应为 false")
+	}
+	if info := SetupState(u, true); !info.DevBypass {
+		t.Error("devBypass=true 时 SetupInfo.DevBypass 应为 true")
+	}
+}

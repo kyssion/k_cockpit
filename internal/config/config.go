@@ -32,10 +32,27 @@ type Config struct {
 	Env   string // 运行环境：development / test / production
 	Debug bool   // 调试开关，决定是否输出完整 SQL，生产必须为 false
 
-	HTTP    HTTP
-	DB      DB
-	Session Session
-	Agent   Agent
+	HTTP     HTTP
+	DB       DB
+	Session  Session
+	Agent    Agent
+	Security Security
+}
+
+// Security 是高风险操作防护相关的配置。
+type Security struct {
+	// DevBypassCode 是**开发期万能验证码**。
+	//
+	// 非空时，TOTP 绑定确认与二次验证都额外接受这个固定值。它存在的唯一
+	// 理由是开发阶段不必每 30 秒掏一次手机。
+	//
+	// 生产环境配置它会导致**启动失败**，不是静默忽略：静默忽略会让部署者
+	// 以为自己配的东西没生效（或者更糟——以为生效了但其实没有），而启动
+	// 失败会强制他面对这件事。见 Validate。
+	//
+	// 这不是「弱一点的验证」，而是**没有验证**：任何知道这个值的人都能通过
+	// 高风险操作的门禁。因此它的每一次命中都会写审计，且启动时会打印警告。
+	DevBypassCode string
 }
 
 // 节点 agent 通道的传输方式。
@@ -149,6 +166,15 @@ func (c Config) Validate() error {
 		return fmt.Errorf("AGENT_TRANSPORT 非法: %q，可选 %s 或 %s",
 			c.Agent.Transport, AgentTransportMock, AgentTransportGRPC)
 	}
+	// 开发期万能验证码在生产环境**必须不存在**（f-10-01 R-001 的底线）。
+	//
+	// 这里选择报错而不是清空该值：清空会让服务照常起来，而部署者以为
+	// 「我配置的那个码还能用」——直到某天发现它用不了，或者更糟，直到
+	// 有人把它打开。报错则让这个问题在部署那一刻就暴露。
+	if c.Env == EnvProduction && strings.TrimSpace(c.Security.DevBypassCode) != "" {
+		return fmt.Errorf("生产环境不允许配置 SECURITY_DEV_BYPASS_CODE：它会让二次验证形同虚设，" +
+			"任何知道该值的人都能直接通过高风险操作的门禁")
+	}
 	return nil
 }
 
@@ -204,6 +230,9 @@ func Load() (Config, error) {
 		},
 		Agent: Agent{
 			Transport: env("AGENT_TRANSPORT", AgentTransportMock),
+		},
+		Security: Security{
+			DevBypassCode: env("SECURITY_DEV_BYPASS_CODE", ""),
 		},
 	}
 

@@ -119,6 +119,26 @@ func TestConfig_Validate(t *testing.T) {
 			},
 			wantErr: "SESSION_SECRET",
 		},
+		{
+			// 开发期万能验证码在生产环境**必须拒绝启动**，而不是静默清空：
+			// 它不是「弱一点的验证」，而是没有验证。静默清空会让部署者以为
+			// 「配了但没生效」或是更糟——以为生效了。
+			name: "生产环境配置了开发万能验证码",
+			mutate: func(c *Config) {
+				c.Env = EnvProduction
+				c.Session.Secret = "fixed-secret-for-test"
+				c.Security.DevBypassCode = "123456"
+			},
+			wantErr: "SECURITY_DEV_BYPASS_CODE",
+		},
+		{
+			// 开发环境配置它是允许的——这是它唯一被允许存在的地方。
+			name: "开发环境可配置万能验证码",
+			mutate: func(c *Config) {
+				c.Env = EnvDevelopment
+				c.Security.DevBypassCode = "123456"
+			},
+		},
 	}
 
 	for _, tt := range tests {

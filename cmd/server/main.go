@@ -61,7 +61,14 @@ func main() {
 	// 高风险二次验证的守卫。根密钥复用会话密钥但在内部按用途派生：
 	// 单一密钥配置避免部署时多一个必填项，而用途隔离保证签名与加密
 	// 不会互相影响。
-	riskGuard := risk.NewGuard(db, []byte(cfg.Session.Secret), recorder)
+	riskGuard := risk.NewGuard(db, []byte(cfg.Session.Secret), recorder, cfg.Security.DevBypassCode)
+	if riskGuard.DevBypassEnabled() {
+		// 醒目地打印：一个只在环境变量里的开关很容易被遗忘，而界面上仍
+		// 显示「已绑定验证器」会让所有人以为防护是完整的。
+		log.Printf("[risk] ⚠️  开发期万能验证码已启用（SECURITY_DEV_BYPASS_CODE）：" +
+			"二次验证可被该固定值直接绕过。**部署到生产前必须清除该配置**" +
+			"（生产环境配置它会导致启动失败）。")
+	}
 
 	bootstrap, token, err := auth.NewBootstrap(db, recorder)
 	if err != nil {

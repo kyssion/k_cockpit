@@ -27,6 +27,15 @@ type Method string
 const (
 	MethodTOTP         Method = "totp"
 	MethodRecoveryCode Method = "recovery_code"
+
+	// MethodDevBypass 是**开发期万能验证码**，仅当配置了
+	// SECURITY_DEV_BYPASS_CODE 时才出现在可用方式里。
+	//
+	// 它**不通过 valid() 检查**（见下）——这一点是刻意的：valid 决定
+	// 「用户能否指定这种方式」，而开发模式追加它的路径在 Guard 内部，
+	// 不经过这里。这样即便前端被改坏、硬塞了 `method=dev_bypass`，只要
+	// 开发配置为空，请求仍然会被拒绝。
+	MethodDevBypass Method = "dev_bypass"
 )
 
 // Label 返回验证方式的中文名，用于前端渲染。
@@ -36,12 +45,17 @@ func (m Method) Label() string {
 		return "验证器动态码"
 	case MethodRecoveryCode:
 		return "恢复码"
+	case MethodDevBypass:
+		return "开发万能码"
 	default:
 		return string(m)
 	}
 }
 
-// valid 报告验证方式是否已登记。
+// valid 报告验证方式是否可由用户指定。
+//
+// MethodDevBypass **不在其中**：它只能由 Guard 在开发模式下主动追加，
+// 不能被请求方直接指定（Guard.Verify 另有一处显式判断）。
 func (m Method) valid() bool {
 	switch m {
 	case MethodTOTP, MethodRecoveryCode:

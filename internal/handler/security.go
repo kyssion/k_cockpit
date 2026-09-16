@@ -86,14 +86,17 @@ func (h *Security) SetupStatus(ctx context.Context, c *app.RequestContext) {
 	}
 
 	session := auth.CurrentSession(c)
-	info := risk.SetupState(user)
+	info := risk.SetupState(user, h.guard.DevBypassEnabled())
 	api.OK(c, map[string]any{
 		"totp_enabled":        info.TOTPEnabled,
 		"pending_setup":       info.PendingSetup,
 		"recovery_code_count": info.RecoveryCodes,
 		"has_recovery_codes":  info.RecoveryCodesOK,
-		"methods":             risk.AvailableMethods(user),
-		"session_id":          session.ID,
+		// methods 走 Guard 而非 AvailableMethods：开发模式下会多出万能码，
+		// 与 428 响应里的列表保持同一来源。
+		"methods":    h.guard.Methods(user),
+		"dev_bypass": info.DevBypass,
+		"session_id": session.ID,
 	})
 }
 

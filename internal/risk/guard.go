@@ -2,9 +2,11 @@ package risk
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"log"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -35,22 +37,70 @@ type Guard struct {
 	audit   *audit.Recorder
 	// encKey 用于加解密 TOTP 密钥（列名 totp_secret_enc 即约定加密存储）。
 	encKey []byte
+	// devBypassCode 非空时启用**开发期万能验证码**。
+	//
+	// 它由配置注入，而 config.Validate 会拒绝在生产环境配置它——因此
+	// 「生产环境不会有这个码」这一保证落在配置层，而不是靠这里小心使用。
+	devBypassCode string
 }
 
 // NewGuard 构造验证守卫。
 //
 // secret 是根密钥，内部按用途派生出签名密钥与加密密钥：复用同一把密钥做
 // 签名与加密，会让两者中任一处的弱点波及另一处。
-func NewGuard(db *gorm.DB, secret []byte, recorder *audit.Recorder) *Guard {
+//
+// devBypassCode 为空表示关闭开发期万能码（生产环境恒为空）。
+func NewGuard(db *gorm.DB, secret []byte, recorder *audit.Recorder, devBypassCode string) *Guard {
 	return &Guard{
-		signer:  newSigner(deriveKey(secret, labelSign)),
-		encKey:  deriveKey(secret, labelEnc),
-		grants:  NewStore(),
-		limiter: newAttemptLimiter(),
-		db:      db,
-		audit:   recorder,
+		signer:        newSigner(deriveKey(secret, labelSign)),
+		encKey:        deriveKey(secret, labelEnc),
+		grants:        NewStore(),
+		limiter:       newAttemptLimiter(),
+		db:            db,
+		audit:         recorder,
+		devBypassCode: strings.TrimSpace(devBypassCode),
 	}
 }
+
+// DevBypassEnabled 报告开发期万能码是否启用。
+//
+// 供启动日志与接口展示：让「当前处于什么防护状态」是**可见的**，而不是
+// 需要去翻环境变量才知道。
+func (g *Guard) DevBypassEnabled() bool { return g.devBypassCode != "" }
+
+// isDevBypass 报告输入是否命中开发期万能码。
+//
+// 用常数时间比较：尽管这个值本身是公开写在配置里的，但沿用与真实校验一致
+// 的比较方式可以避免「这个分支的耗时不同」成为一个可被观察的特征——将来
+// 若有人把它改成从数据库取的密钥，不会因为这里而留下一个计时侧信道。
+func (g *Guard) isDevBypass(code string) bool {
+	if g.devBypassCode == "" {
+		return false
+	}
+	c := strings.TrimSpace(code)
+	if c == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(c), []byte(g.devBypassCode)) == 1
+}
+
+// availableMethods 返回可用验证方式，开发模式下追加万能码。
+//
+// 追加而不是替换：真实方式（TOTP / 恢复码）依然列出，用户可以正常走真实验
+// 证。万能码只是多一个入口，不会让原本能用的方式失效。
+func (g *Guard) availableMethods(u *model.User) []Method {
+	methods := AvailableMethods(u)
+	if g.devBypassCode != "" {
+		methods = append(methods, MethodDevBypass)
+	}
+	return methods
+}
+
+// Methods 是 availableMethods 的导出版本，供接口层展示。
+//
+// 与 428 响应里的 methods 用**同一个来源**：两处各算一遍的话，会出现
+// 「弹框里列出的方式，提交时被拒绝」这类自相矛盾的情况。
+func (g *Guard) Methods(u *model.User) []Method { return g.availableMethods(u) }
 
 // RequiredData 是 428 响应中 data 字段的内容。
 type RequiredData struct {
@@ -111,7 +161,7 @@ func (g *Guard) writeRequired(
 	c *app.RequestContext, user *model.User, session *model.Session, action Action,
 ) {
 	now := time.Now()
-	methods := AvailableMethods(user)
+	methods := g.availableMethods(user)
 
 	infos := make([]MethodInfo, 0, len(methods))
 	for _, m := range methods {
@@ -174,9 +224,33 @@ func (g *Guard) Verify(
 		return nil, api.ValidationFailed("验证状态已失效，请重新发起操作")
 	}
 
+	// 用 availableMethods 而非 AvailableMethods：前者会在开发模式下追加
+	// 万能码。用这一个判断就同时覆盖了「方式是否合法」与「当前是否可用」
+	// ——单个可用方式列表即事实来源，不会出现两处判断不一致。
 	method := Method(req.Method)
-	if !method.valid() || !slices.Contains(AvailableMethods(user), method) {
+	if !slices.Contains(g.availableMethods(user), method) {
 		return nil, api.InvalidParameter("不支持的验证方式")
+	}
+
+	// 开发期万能码：命中即签发许可，**不做 TOTP 校验**。
+	//
+	// 位置在限流之后：没有人能用它无限刷；审计也照常写，只是方式记为
+	// dev_bypass——事后追溯必须能一眼看出「这次操作不是靠真实验证通过的」。
+	if g.isDevBypass(req.Code) {
+		log.Printf("[risk] ⚠ 开发期万能码通过了二次验证 user=%d action=%s —— "+
+			"生产环境不应出现此行，若出现说明 SECURITY_DEV_BYPASS_CODE 未清除",
+			user.ID, challenge.Action)
+
+		g.limiter.success(user.ID)
+
+		grant, err := g.grants.Issue(user.ID, session.ID, MethodDevBypass, now)
+		if err != nil {
+			log.Printf("[risk] 签发许可失败: %v", err)
+			return nil, api.Internal()
+		}
+		g.record(ctx, user, session, challenge.Action, string(MethodDevBypass),
+			"risk.verify.dev_bypass", true, 0)
+		return grant, nil
 	}
 
 	// TOTP 密钥在库中是加密存储的（列名 totp_secret_enc），校验前必须解密。

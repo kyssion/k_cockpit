@@ -63,7 +63,7 @@ func newAuthServerWithGuard(t *testing.T) (*server.Hertz, *gorm.DB, *risk.Guard)
 	// guard **必须**接入：nil 会让受保护的操作在调用时 panic。这是刻意的
 	// 快速失败——生产环境漏接 guard 等于全部高风险操作失去保护，而它不会
 	// 以任何显式方式暴露出来。
-	guard := risk.NewGuard(db, []byte(testSecretForHandler), audit.NewRecorder(db))
+	guard := risk.NewGuard(db, []byte(testSecretForHandler), audit.NewRecorder(db), "")
 	router.Register(h, router.Deps{DB: db, Auth: svc, Risk: guard, SecureCookie: false})
 
 	return h, db, guard
