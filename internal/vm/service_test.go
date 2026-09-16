@@ -45,7 +45,7 @@ func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task
 		t.Fatalf("打开测试库失败: %v", err)
 	}
 	if err := db.AutoMigrate(
-		&model.VM{}, &model.Task{}, &model.AuditLog{}, &model.Node{},
+		&model.VM{}, &model.Task{}, &model.TaskStage{}, &model.AuditLog{}, &model.Node{},
 		&model.VMCredential{}, &model.VMInterface{}, &model.StaticIP{},
 		&model.VpcSwitch{}, &model.VMSnapshot{}, &model.SystemSetting{},
 		&model.PortForward{}, &model.VMLock{},
