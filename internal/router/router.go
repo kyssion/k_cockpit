@@ -137,10 +137,19 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/vms/:id/power-actions", requireAuth, vmHandler.Power)
 		v1.DELETE("/vms/:id", requireAuth, vmHandler.Delete)
 
-		// 详情页「网络管理」标签页的数据（F-2-03）。均为只读：网卡的增删改
-		// 需要下发到节点，走任务队列，尚未实现。
+		// 详情页「网络管理」标签页（F-2-03）。读接口直接返回投影；
+		// 写接口全部入队——它们都要下发到节点，且资源锁与电源操作共用
+		// vm:<id>，因此不会出现「改完网卡正好赶上关机」。
 		v1.GET("/vms/:id/interfaces", requireAuth, vmHandler.Interfaces)
 		v1.GET("/vms/:id/static-ips", requireAuth, vmHandler.StaticIPs)
+		v1.POST("/vms/:id/interfaces", requireAuth, vmHandler.AddInterface)
+		v1.PATCH("/vms/:id/interfaces/:nicID", requireAuth, vmHandler.UpdateInterface)
+		v1.DELETE("/vms/:id/interfaces/:nicID", requireAuth, vmHandler.RemoveInterface)
+		v1.POST("/vms/:id/static-ips", requireAuth, vmHandler.BindStaticIP)
+		v1.DELETE("/vms/:id/static-ips/:ipID", requireAuth, vmHandler.UnbindStaticIP)
+		v1.GET("/vms/:id/port-forwards", requireAuth, vmHandler.PortForwards)
+		v1.POST("/vms/:id/port-forwards", requireAuth, vmHandler.AddPortForward)
+		v1.DELETE("/vms/:id/port-forwards/:pfID", requireAuth, vmHandler.RemovePortForward)
 
 		// 编辑配置（F-2-05）。元数据与硬件分开：前者是纯控制面数据，
 		// 同步改库即可；后者要下发到节点，走任务队列。

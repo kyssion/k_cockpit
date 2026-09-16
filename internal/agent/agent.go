@@ -50,6 +50,12 @@ const (
 	// 只有需要下发到节点的改动才走这里：备注、分组是纯控制面元数据，
 	// 虚拟化层不知道它们的存在。
 	OpVMConfigUpdate OpKind = "vm.config.update"
+
+	// 网络变更（F-2-03）。三者都是「把控制面的期望状态同步到节点」，
+	// 因此参数形状一致：action + 资源的完整描述。
+	OpVMInterfaceChange   OpKind = "vm.interface.change"
+	OpVMStaticIPChange    OpKind = "vm.staticip.change"
+	OpVMPortForwardChange OpKind = "vm.portforward.change"
 )
 
 // StatusDataKey 是 OpVMStatus 结果中承载运行态的键。

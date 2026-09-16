@@ -48,6 +48,7 @@ func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task
 		&model.VM{}, &model.Task{}, &model.AuditLog{}, &model.Node{},
 		&model.VMCredential{}, &model.VMInterface{}, &model.StaticIP{},
 		&model.VpcSwitch{}, &model.VMSnapshot{}, &model.SystemSetting{},
+		&model.PortForward{},
 	); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
@@ -71,6 +72,9 @@ func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task
 	queue.Register(vm.NewSnapshotRestoreExecutor(db, client))
 	queue.Register(vm.NewSnapshotDeleteExecutor(db, client))
 	queue.Register(vm.NewConfigUpdateExecutor(db, client))
+	queue.Register(vm.NewInterfaceChangeExecutor(db, client))
+	queue.Register(vm.NewStaticIPChangeExecutor(db, client))
+	queue.Register(vm.NewPortForwardChangeExecutor(db, client))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	queue.Start(ctx)
@@ -1127,6 +1131,209 @@ func TestIOPSLimitsAreMutuallyExclusive(t *testing.T) {
 		Changes: map[string]any{"disk_iops_read": 500},
 	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
 	assertAPIError(t, err, 422)
+}
+
+// --- 网络管理的写操作 ---
+
+func TestAddInterfaceAssignsNextOrder(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-nic-add", OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	// 已有 order 0 与 2（中间那块被删过）。
+	db.Create(&model.VMInterface{VMID: row.ID, NodeID: 1, Order: 0, IsPrimary: true, Model: model.NICModelVirtio})
+	db.Create(&model.VMInterface{VMID: row.ID, NodeID: 1, Order: 2, Model: model.NICModelVirtio})
+
+	tk, err := svc.AddInterface(ctx, row.ID, vm.InterfaceRequest{Model: model.NICModelE1000},
+		authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("新增网卡失败: %v", err)
+	}
+	if tk.Type != model.TaskVMInterfaceChange {
+		t.Errorf("任务类型 = %q", tk.Type)
+	}
+
+	var added model.VMInterface
+	if err := db.Where("vm_id = ? AND model = ?", row.ID, model.NICModelE1000).
+		First(&added).Error; err != nil {
+		t.Fatalf("未写入网卡记录: %v", err)
+	}
+
+	// 新序号取「当前最大 + 1」而不是「已有数量」：数量法会算出 2，
+	// 与已存在的那块冲突，而冲突的表现是唯一约束报错——用户看到的是
+	// 「添加失败」却完全不知道原因。
+	if added.Order != 3 {
+		t.Errorf("新网卡序号 = %d, 期望 3（已有 0 与 2，取最大+1）", added.Order)
+	}
+
+	// MAC 必须在受理时就确定并写入：交给节点随机分配的话，同一块网卡在
+	// 每次重建后会得到不同的 MAC，而来宾里可能已经按它配好了网络。
+	if added.MAC == nil || *added.MAC == "" {
+		t.Error("未分配 MAC 地址")
+	}
+}
+
+func TestInterfaceMACIsStableAcrossRebuild(t *testing.T) {
+	// 同一台虚拟机的同一序号应当拿到同一个 MAC——这是「网卡重建后来宾
+	// 仍然能上网」的前提。
+	a := vm.MACFor(7, 0)
+	b := vm.MACFor(7, 0)
+	if a != b {
+		t.Errorf("同一 (vm, order) 生成了不同的 MAC: %s vs %s", a, b)
+	}
+	// 不同虚拟机或不同序号必须不同，否则同一节点上会出现重复 MAC。
+	if vm.MACFor(7, 0) == vm.MACFor(7, 1) {
+		t.Error("同一虚拟机的不同网卡拿到了相同 MAC")
+	}
+	if vm.MACFor(7, 0) == vm.MACFor(8, 0) {
+		t.Error("不同虚拟机拿到了相同 MAC")
+	}
+}
+
+func TestAddInterfaceRejectsBadModel(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-nic-model", OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	// 型号取值同时出现在迁移、模型与界面三处，因此校验要在服务端做一次。
+	for _, bad := range []string{"", "vmxnet3", "VIRTIO"} {
+		_, err := svc.AddInterface(ctx, row.ID, vm.InterfaceRequest{Model: bad},
+			authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+		assertAPIError(t, err, 400)
+	}
+
+	_, err := svc.AddInterface(ctx, row.ID, vm.InterfaceRequest{
+		Model: model.NICModelVirtio, RateLimitMbps: -1,
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 400)
+}
+
+func TestRemoveInterfaceRejectsPrimary(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-nic-rm", OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	primary := model.VMInterface{
+		VMID: row.ID, NodeID: 1, Order: 0, IsPrimary: true, Model: model.NICModelVirtio,
+	}
+	db.Create(&primary)
+
+	// 主网卡不可删除：重装系统（f-2-11）依赖它保持网络可达，
+	// 删掉它就没有恢复路径了。
+	_, err := svc.RemoveInterface(ctx, row.ID, primary.ID,
+		authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 422)
+
+	var count int64
+	db.Model(&model.VMInterface{}).Where("id = ?", primary.ID).Count(&count)
+	if count != 1 {
+		t.Error("被拒绝的删除不应移除记录")
+	}
+}
+
+func TestBindStaticIPRejectsTakenAddress(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	mine := model.VM{NodeID: 1, Name: "vm-ip-mine", OwnerID: ptr(int64(7))}
+	other := model.VM{NodeID: 1, Name: "vm-ip-other", OwnerID: ptr(int64(7))}
+	db.Create(&mine)
+	db.Create(&other)
+
+	db.Create(&model.StaticIP{
+		NodeID: 1, VMID: &other.ID, IP: "10.0.0.5",
+		AddressFamily: model.AddressFamilyIPv4,
+	})
+
+	// 同一地址不能分配给两台虚拟机：只有一台能真正用上它，而另一台会
+	// 表现为「网络时通时断」——这类问题极难排查。
+	_, err := svc.BindStaticIP(ctx, mine.ID, vm.BindStaticIPRequest{IP: "10.0.0.5"},
+		authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 409)
+
+	// 未被占用的地址应通过。
+	if _, err := svc.BindStaticIP(ctx, mine.ID, vm.BindStaticIPRequest{IP: "10.0.0.6"},
+		authz.Viewer{UserID: 7}, "alice", "10.0.0.1"); err != nil {
+		t.Errorf("未被占用的地址应被接受: %v", err)
+	}
+}
+
+func TestAddPortForwardRejectsTakenPort(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	a := model.VM{NodeID: 1, Name: "vm-pf-a", OwnerID: ptr(int64(7))}
+	b := model.VM{NodeID: 1, Name: "vm-pf-b", OwnerID: ptr(int64(7))}
+	db.Create(&a)
+	db.Create(&b)
+
+	if _, err := svc.AddPortForward(ctx, a.ID, vm.AddPortForwardRequest{
+		Protocol: model.PortProtocolTCP, HostPort: 8080, TargetPort: 80,
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1"); err != nil {
+		t.Fatalf("首次新增失败: %v", err)
+	}
+
+	// 端口在节点内独占。两个转发抢同一个端口只会让其中一个静默失效，
+	// 而用户会以为两条规则都在工作。
+	_, err := svc.AddPortForward(ctx, b.ID, vm.AddPortForwardRequest{
+		Protocol: model.PortProtocolTCP, HostPort: 8080, TargetPort: 80,
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 409)
+
+	// 换协议或换端口都应通过——独占的粒度是 (协议, 端口)。
+	if _, err := svc.AddPortForward(ctx, b.ID, vm.AddPortForwardRequest{
+		Protocol: model.PortProtocolUDP, HostPort: 8080, TargetPort: 80,
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1"); err != nil {
+		t.Errorf("不同协议的同号端口应被接受: %v", err)
+	}
+}
+
+func TestAddPortForwardValidatesPort(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-pf-port", OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	for _, p := range []int{0, -1, 70000} {
+		_, err := svc.AddPortForward(ctx, row.ID, vm.AddPortForwardRequest{
+			Protocol: model.PortProtocolTCP, HostPort: p, TargetPort: 80,
+		}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+		if err == nil {
+			t.Errorf("端口 %d 应被拒绝", p)
+		}
+	}
+}
+
+func TestNetworkWriteRejectsOthersVM(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	theirs := model.VM{NodeID: 1, Name: "vm-nic-theirs", OwnerID: ptr(int64(20))}
+	db.Create(&theirs)
+	nic := model.VMInterface{VMID: theirs.ID, NodeID: 1, Order: 0, Model: model.NICModelVirtio}
+	db.Create(&nic)
+
+	// 归属校验要落在**每一项资源**上，而不只是虚拟机上：只查网卡 ID
+	// 会让知道 ID 的人改掉别人的网卡。
+	_, err := svc.AddInterface(ctx, theirs.ID, vm.InterfaceRequest{Model: model.NICModelVirtio},
+		authz.Viewer{UserID: 10}, "bob", "10.0.0.2")
+	assertAPIError(t, err, 404)
+
+	_, err = svc.UpdateInterface(ctx, theirs.ID, nic.ID, vm.InterfaceRequest{Model: model.NICModelVirtio},
+		authz.Viewer{UserID: 10}, "bob", "10.0.0.2")
+	assertAPIError(t, err, 404)
+
+	_, err = svc.AddPortForward(ctx, theirs.ID, vm.AddPortForwardRequest{
+		Protocol: model.PortProtocolTCP, HostPort: 9000, TargetPort: 80,
+	}, authz.Viewer{UserID: 10}, "bob", "10.0.0.2")
+	assertAPIError(t, err, 404)
 }
 
 func ptr[T any](v T) *T { return &v }

@@ -168,3 +168,55 @@ type StaticIP struct {
 
 // TableName 固定表名。
 func (StaticIP) TableName() string { return "static_ip" }
+
+// 端口转发协议。
+const (
+	PortProtocolTCP = "tcp"
+	PortProtocolUDP = "udp"
+)
+
+// PortForward 对应 port_forward 表：把宿主机上的一个端口转发到虚拟机。
+//
+// 它是**安全敏感资源**：一个误开的转发等于把来宾的服务直接暴露到外部网络，
+// 而用户往往在很久之后才发现。因此：
+//
+//   - 唯一约束是 (node_id, protocol, host_port) —— 端口在节点内独占，
+//     两个转发抢同一个端口只会让其中一个静默失效；
+//   - 界面应把「允许的来源」放在显眼位置，全放开是一个需要用户明确选择的
+//     状态，而不是默认。
+type PortForward struct {
+	ID     int64  `gorm:"primaryKey"`
+	NodeID int64  `gorm:"not null;uniqueIndex:uniq_port_forward_node_proto_port,priority:1;index:idx_port_forward_vm_id,priority:2"`
+	VMID   *int64 `gorm:"index:idx_port_forward_vm_id,priority:1"`
+
+	Protocol string `gorm:"size:8;not null;default:tcp;uniqueIndex:uniq_port_forward_node_proto_port,priority:2"`
+	HostPort int    `gorm:"not null;uniqueIndex:uniq_port_forward_node_proto_port,priority:3"`
+
+	// TargetIP 与 TargetPort 是转发到虚拟机内部的哪个地址与端口。
+	// TargetIP 为空时由节点按虚拟机的实际地址决定。
+	TargetIP   *string `gorm:"size:64"`
+	TargetPort int     `gorm:"not null"`
+
+	// StaticIPID 指向分配给的静态地址；与 TargetIP 二选一。
+	StaticIPID *int64
+
+	// AllowedIPs 是允许访问的来源地址（逗号分隔）。
+	// 为空表示**不限制**——这是一个安全性上的重要默认，界面必须显式提示。
+	AllowedIPs *string `gorm:"type:text"`
+	// AllowedRegions 是允许的来源地区。当前**尚未生效**：它需要节点侧具备
+	// GeoIP 能力，而那一层还没实现。保留字段是为了让界面能诚实地显示
+	// 「该功能尚未生效」，而不是把它藏起来。
+	AllowedRegions *string `gorm:"size:255"`
+
+	Enabled bool `gorm:"not null;default:true"`
+
+	// LastAppliedAt 为空表示规则尚未下发到节点，即**当前并不生效**。
+	LastAppliedAt *time.Time
+
+	CreatedBy *int64
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// TableName 固定表名。
+func (PortForward) TableName() string { return "port_forward" }

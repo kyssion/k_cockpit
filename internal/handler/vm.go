@@ -431,6 +431,240 @@ func (h *VM) DeleteSnapshot(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
 }
 
+// --- 网络管理的写操作（API-059 ~ API-064）---
+//
+// 三者都不需要关机（网卡支持热插拔、地址与转发规则是配置层的事），
+// 因此受理时不探测运行态——让用户为了加一块网卡去停机是不必要的。
+// 全部走任务队列，资源锁键为 vm:<id>，与电源操作串行。
+
+type interfaceRequest struct {
+	Model            string `json:"model"`
+	SwitchID         *int64 `json:"switch_id"`
+	RateLimitMbps    int    `json:"rate_limit_mbps"`
+	AllowedAddresses string `json:"allowed_addresses"`
+}
+
+// AddInterface 新增网卡（API-059）。
+func (h *VM) AddInterface(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	var req interfaceRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.AddInterface(ctx, id, vm.InterfaceRequest{
+		Model: req.Model, SwitchID: req.SwitchID,
+		RateLimitMbps: req.RateLimitMbps, AllowedAddresses: req.AllowedAddresses,
+	}, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
+// UpdateInterface 修改网卡（API-060）。
+func (h *VM) UpdateInterface(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	nicID, err := namedPathID(c, "nicID", "网卡 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	var req interfaceRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.UpdateInterface(ctx, id, nicID, vm.InterfaceRequest{
+		Model: req.Model, SwitchID: req.SwitchID,
+		RateLimitMbps: req.RateLimitMbps, AllowedAddresses: req.AllowedAddresses,
+	}, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
+// RemoveInterface 删除网卡（API-061）。
+func (h *VM) RemoveInterface(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	nicID, err := namedPathID(c, "nicID", "网卡 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.RemoveInterface(ctx, id, nicID, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
+type bindStaticIPRequest struct {
+	IP                string `json:"ip"`
+	InterfaceOrder    *int   `json:"interface_order"`
+	IsDHCPReservation bool   `json:"is_dhcp_reservation"`
+}
+
+// BindStaticIP 绑定静态地址（API-062）。
+func (h *VM) BindStaticIP(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	var req bindStaticIPRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.BindStaticIP(ctx, id, vm.BindStaticIPRequest{
+		IP:                req.IP,
+		InterfaceOrder:    req.InterfaceOrder,
+		IsDHCPReservation: req.IsDHCPReservation,
+	}, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
+// UnbindStaticIP 解绑静态地址（API-063）。
+func (h *VM) UnbindStaticIP(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	ipID, err := namedPathID(c, "ipID", "静态地址 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.UnbindStaticIP(ctx, id, ipID, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
+// PortForwards 返回端口转发列表（API-064）。
+func (h *VM) PortForwards(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	items, err := h.svc.PortForwards(ctx, id, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"items": items})
+}
+
+type addPortForwardRequest struct {
+	Protocol   string `json:"protocol"`
+	HostPort   int    `json:"host_port"`
+	TargetIP   string `json:"target_ip"`
+	TargetPort int    `json:"target_port"`
+	AllowedIPs string `json:"allowed_ips"`
+}
+
+// AddPortForward 新增端口转发（API-065）。
+func (h *VM) AddPortForward(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	var req addPortForwardRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.AddPortForward(ctx, id, vm.AddPortForwardRequest{
+		Protocol: req.Protocol, HostPort: req.HostPort,
+		TargetIP: req.TargetIP, TargetPort: req.TargetPort,
+		AllowedIPs: req.AllowedIPs,
+	}, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
+// RemovePortForward 删除端口转发（API-066）。
+func (h *VM) RemovePortForward(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	pfID, err := namedPathID(c, "pfID", "转发规则 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.RemovePortForward(ctx, id, pfID, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
 // StaticIPs 返回虚拟机的静态地址列表。
 func (h *VM) StaticIPs(ctx context.Context, c *app.RequestContext) {
 	id, err := namedPathID(c, "id", "虚拟机 ID")

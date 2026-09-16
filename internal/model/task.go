@@ -46,6 +46,19 @@ const (
 	// 与元数据修改（备注、分组）区分开：后者只存在于控制面，直接改库即可，
 	// 不需要任务；只有需要**下发到节点**的改动才走这条路。
 	TaskVMConfigUpdate = "vm.config.update"
+
+	// 网络变更（F-2-03「网络管理」）。
+	//
+	// 每种资源一个任务类型而不是每个动作一个：同一资源的增删改**执行逻辑
+	// 相同**（下发 → 回写投影），具体动作放在参数的 action 字段里。
+	// 这与电源操作的处理方式一致。
+	//
+	// 资源锁键都是 vm:<id>，因此网卡、静态地址、端口转发的变更彼此串行，
+	// 也不会与电源操作交错——「改完网卡正好赶上关机」会让下发落在错误的
+	// 状态下。
+	TaskVMInterfaceChange   = "vm.interface.change"
+	TaskVMStaticIPChange    = "vm.staticip.change"
+	TaskVMPortForwardChange = "vm.portforward.change"
 )
 
 // Task 对应 task 表。

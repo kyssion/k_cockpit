@@ -111,6 +111,10 @@ func main() {
 	queue.Register(vm.NewSnapshotRestoreExecutor(db, mockAgent))
 	queue.Register(vm.NewSnapshotDeleteExecutor(db, mockAgent))
 	queue.Register(vm.NewConfigUpdateExecutor(db, mockAgent))
+	// 网络变更（F-2-03）：三种资源各一个执行器，共用 vm:<id> 资源锁。
+	queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
+	queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))
+	queue.Register(vm.NewPortForwardChangeExecutor(db, mockAgent))
 	queue.Register(storage.NewCreateExecutor(db, mockAgent))
 	queue.Register(storage.NewDeleteExecutor(db, mockAgent))
 	queue.Start(context.Background())
