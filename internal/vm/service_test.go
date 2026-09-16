@@ -45,6 +45,7 @@ func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task
 	}
 	if err := db.AutoMigrate(
 		&model.VM{}, &model.Task{}, &model.AuditLog{}, &model.Node{},
+		&model.VMCredential{},
 	); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}

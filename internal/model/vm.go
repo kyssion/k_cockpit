@@ -52,8 +52,42 @@ type VM struct {
 	// LastSyncedAt 是最近一次与虚拟化层对账的时间，用于计算数据新鲜度。
 	LastSyncedAt *time.Time
 
+	// --- 控制台配置（f-2-08）---
+
+	// VNCEnabled 表示控制台是否开启。
+	VNCEnabled bool `gorm:"not null;default:false"`
+	// VNCPort 是宿主上的 VNC 端口。它**只监听 VNCBind 指定的地址**。
+	VNCPort *int
+	// VNCBind 是监听地址，默认 127.0.0.1（R-001）。
+	//
+	// 宿主机上不开放对外端口是默认状态；改变它需要显式开启「对外暴露」，
+	// 而那是一个需要二次验证的高危操作（R-004）。
+	VNCBind string `gorm:"size:64;not null;default:127.0.0.1"`
+	// VNCExposed 表示控制台端口是否已对外暴露。
+	//
+	// 与 VNCBind 分开记录，而不是从监听地址推断：让「曾经暴露过」这件事
+	// 在界面上与审计里都留下明确痕迹。
+	VNCExposed bool `gorm:"not null;default:false"`
+	// DisplayDevice 是显示设备类型；取值 `none` 表示该虚拟机**没有控制台**
+	// （R-011）。界面据此隐藏入口，而不是给用户一个点了打不开的按钮。
+	DisplayDevice string `gorm:"size:16;not null;default:vnc"`
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+// 显示设备类型。
+const (
+	// DisplayVNC 有图形控制台。
+	DisplayVNC = "vnc"
+	// DisplayNone 无控制台：虚拟机以串口或纯命令行方式运行，
+	// 没有可显示的画面（R-011）。
+	DisplayNone = "none"
+)
+
+// HasConsole 报告该虚拟机是否有可用的控制台。
+func (v *VM) HasConsole() bool {
+	return v.DisplayDevice != DisplayNone
 }
 
 // TableName 固定表名。

@@ -12,6 +12,7 @@ import (
 	"log"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -45,6 +46,18 @@ type Service struct {
 	// settings 用于读取可调整的运行参数（f-9-01）。为 nil 时使用内置默认值，
 	// 这样单测与轻量部署不必先装配设置模块。
 	settings settings.Provider
+	// encKey 用于加解密控制台密码等可逆凭据（f-2-08）。
+	encKey []byte
+
+	// sessions 是控制台会话注册表。惰性创建：不用控制台的服务实例
+	// 不必为此分配内存。
+	sessions     *sessionRegistry
+	sessionsOnce sync.Once
+}
+
+// SetEncryptionKey 设置可逆凭据的加密密钥。
+func (s *Service) SetEncryptionKey(key []byte) {
+	s.encKey = key
 }
 
 // NewService 构造虚拟机服务。
