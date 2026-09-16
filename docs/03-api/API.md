@@ -193,9 +193,9 @@
 | API-008 | GET | `/api/v1/auth/session` | 当前会话与用户信息 | 是 | 已实现 | F-1-02 |
 | API-009 | GET | `/api/v1/auth/sessions` | 会话与登录记录列表（含当前会话标记，响应不含 session_id） | 是 | 已实现 | F-1-02 |
 | API-010 | DELETE | `/api/v1/auth/sessions/:id` | 撤销指定会话（越权与不存在均返回 404）；**高风险操作，需二次验证** | 是 | 已实现 | F-1-02 |
-| API-011 | GET | `/api/v1/tasks` | 任务列表（按状态 / 类型 / 资源 / 时间筛选，归属过滤） | 是 | 规划中 | F-7-02 |
-| API-012 | GET | `/api/v1/tasks/:id` | 任务详情（含参数、结果与阶段时间线） | 是 | 规划中 | F-7-02 |
-| API-013 | POST | `/api/v1/tasks/:id/cancel` | 请求取消任务 | 是 | 规划中 | F-7-02 |
+| API-011 | GET | `/api/v1/tasks` | 任务列表（按状态 / 类型 / 资源筛选，归属过滤） | 是 | 已实现 | F-7-02 |
+| API-012 | GET | `/api/v1/tasks/:id` | 任务详情（含参数、结果与阶段时间线） | 是 | 已实现 | F-7-02 |
+| API-013 | POST | `/api/v1/tasks/:id/cancel` | 请求取消任务（下发给执行方，**已产生的副作用不回滚**） | 是 | 已实现 | F-7-02 |
 | API-014 | DELETE | `/api/v1/tasks` | 清理终态任务（拒绝含非终态） | 是 | 规划中 | F-7-02 |
 | API-015 | GET | `/api/v1/events/{channel}` | **SSE 实时通道**（`vm-list` / `vm-detail` / `tasks` / `host-metrics`） | 是 | 规划中 | F-7-03 |
 | API-016 | GET | `/api/v1/nodes/:id/disks` | 块设备清单（容量、状态标签、是否系统盘、是否含数据）；由 agent **实时探测**，不缓存 | 是（管理员） | 已实现 | F-5-01 |
@@ -227,6 +227,7 @@
 | API-042 | POST | `/api/v1/auth/totp/setup` | 生成 TOTP 密钥并返回 otpauth URI（**未启用**，需确认） | 是 | 已实现 | F-10-01 |
 | API-043 | POST | `/api/v1/auth/totp/confirm` | 提交动态码启用绑定，并返回恢复码（**只返回一次**） | 是 | 已实现 | F-10-01 |
 | API-044 | GET | `/api/v1/storage-pools/:id` | 单个存储池详情（配置、容量与新鲜度） | 是（管理员） | 已实现 | F-5-01 |
+| API-045 | POST | `/api/v1/dev/agent-register` | 开发期模拟 agent 注册；**仅在 `AGENT_TRANSPORT=mock` 时注册该路由**，接入真实 agent 后不存在 | 否（开发期） | 已实现（开发期专用） | F-6-01 |
 
 > **公开接口共 4 个**（`/health`、`/api/v1/setup/*`、`/api/v1/auth/login`）。前两个的公开理由是「系统尚无可用凭据时的自举需要」：初始化接口靠**只能从服务端日志获取**的一次性令牌保护（[ADR-0008](../06-decisions/0008-first-admin-bootstrap.md)），登录接口是获取凭据的入口本身。新增公开接口必须在此说明理由。
 
