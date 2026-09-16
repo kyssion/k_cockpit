@@ -33,6 +33,13 @@ const (
 	// 一个存储池变更任务运行，因此它们共用同一个资源锁键。
 	TaskStoragePoolCreate = "storage.pool.create"
 	TaskStoragePoolDelete = "storage.pool.delete"
+
+	// 快照（F-2-07）。三者共用资源锁键 vm:<id>，因此与电源操作天然互斥：
+	// 恢复快照时不会有并发的开机请求插进来——那会让恢复出来的磁盘状态
+	// 立刻被一次开机覆盖掉一半。
+	TaskVMSnapshotCreate  = "vm.snapshot.create"
+	TaskVMSnapshotRestore = "vm.snapshot.restore"
+	TaskVMSnapshotDelete  = "vm.snapshot.delete"
 )
 
 // Task 对应 task 表。

@@ -221,6 +221,119 @@ func (h *VM) Interfaces(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, map[string]any{"items": items})
 }
 
+// Snapshots 返回虚拟机的快照列表与配额（API-052）。
+func (h *VM) Snapshots(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	list, err := h.svc.Snapshots(ctx, id, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, list)
+}
+
+type createSnapshotRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	// IncludeMemory 表示是否保存运行现场（含内存）。**不做默认值猜测**：
+	// 含内存的快照体积可能数倍于磁盘，是否值得由用户判断。
+	IncludeMemory bool `json:"include_memory"`
+}
+
+// CreateSnapshot 创建快照（API-053）。
+//
+// 返回任务标识而非执行结果：创建要复制整个磁盘镜像，可能耗时数分钟，
+// 同步等待会让请求超时（f-7-01 R-001）。
+func (h *VM) CreateSnapshot(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	var req createSnapshotRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.CreateSnapshot(ctx, id, vm.CreateSnapshotRequest{
+		Name:          req.Name,
+		Description:   req.Description,
+		IncludeMemory: req.IncludeMemory,
+	}, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
+// RestoreSnapshot 恢复快照（API-054）。
+//
+// 恢复会**丢弃快照之后的所有磁盘改动**，属于不可逆操作。当前未纳入高风险
+// 清单（f-10-02 的清单集中在 internal/risk），因此没有二次验证——这一点
+// 是已知缺口，登记在 API.md 中。
+func (h *VM) RestoreSnapshot(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	snapshotID, err := namedPathID(c, "snapshotID", "快照 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.RestoreSnapshot(ctx, id, snapshotID,
+		authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
+// DeleteSnapshot 删除快照（API-055）。
+func (h *VM) DeleteSnapshot(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	snapshotID, err := namedPathID(c, "snapshotID", "快照 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.DeleteSnapshot(ctx, id, snapshotID,
+		authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
 // StaticIPs 返回虚拟机的静态地址列表。
 func (h *VM) StaticIPs(ctx context.Context, c *app.RequestContext) {
 	id, err := namedPathID(c, "id", "虚拟机 ID")

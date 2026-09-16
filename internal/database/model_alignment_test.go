@@ -36,6 +36,7 @@ func TestModelColumnsExistInMigrations(t *testing.T) {
 		&model.AuditLog{}, &model.VMCredential{}, &model.VpcSwitch{},
 		&model.Node{}, &model.Session{}, &model.SystemSetting{},
 		&model.StoragePool{}, &model.Task{}, &model.User{}, &model.VM{},
+		&model.VMSnapshot{}, &model.VMSchedule{},
 	}
 
 	var cache sync.Map

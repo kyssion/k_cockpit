@@ -38,6 +38,12 @@ const (
 	// OpVMReset 是硬重置，仅对暂停态可用（f-2-01 R-007）。
 	OpVMReset  OpKind = "vm.reset"
 	OpVMDelete OpKind = "vm.delete"
+
+	// 快照操作（F-2-07）。三个动作**都是耗时操作**：创建与恢复要复制或
+	// 回滚整个磁盘镜像，因此全部走任务队列，接口不同步等待。
+	OpVMSnapshotCreate  OpKind = "vm.snapshot.create"
+	OpVMSnapshotRestore OpKind = "vm.snapshot.restore"
+	OpVMSnapshotDelete  OpKind = "vm.snapshot.delete"
 )
 
 // StatusDataKey 是 OpVMStatus 结果中承载运行态的键。

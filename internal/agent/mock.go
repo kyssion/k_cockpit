@@ -88,6 +88,18 @@ func (m *MockClient) Execute(_ context.Context, op Operation) (*Result, error) {
 		// 会被拒绝），**无法验证「先关机再开机」的完整流转**。要打通完整
 		// 流转需要 mock 维护一份状态，那正是 ADR-0007 明确不做的事。
 		data[StatusDataKey] = "running"
+
+	case OpVMSnapshotCreate:
+		// 回显控制面给的标识，让调用方走完整的「写入 domain_name」路径。
+		//
+		// 不在这里自己生成：真实 agent 会把它实际使用的名字返回，
+		// 而控制面必须能处理「返回的名字与请求的不同」这一情况。
+		if name, ok := op.Params["domain_name"].(string); ok {
+			data["domain_name"] = name
+		}
+		// 给一个非零体积：默认 0 会让界面上的「0 B」看起来像没创建成功，
+		// 而这个模拟值正好用来验证体积的展示与格式化。
+		data["size_bytes"] = float64(256 * 1024 * 1024)
 	}
 
 	return &Result{

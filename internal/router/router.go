@@ -142,6 +142,13 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/vms/:id/interfaces", requireAuth, vmHandler.Interfaces)
 		v1.GET("/vms/:id/static-ips", requireAuth, vmHandler.StaticIPs)
 
+		// 快照（F-2-07）。三个动作全部走任务队列：创建与恢复要复制或回滚
+		// 整个磁盘镜像，同步等待必然超时（f-7-01 R-001）。
+		v1.GET("/vms/:id/snapshots", requireAuth, vmHandler.Snapshots)
+		v1.POST("/vms/:id/snapshots", requireAuth, vmHandler.CreateSnapshot)
+		v1.POST("/vms/:id/snapshots/:snapshotID/restore", requireAuth, vmHandler.RestoreSnapshot)
+		v1.DELETE("/vms/:id/snapshots/:snapshotID", requireAuth, vmHandler.DeleteSnapshot)
+
 		// 定时任务（F-7-05）。执行时复用已有的 vm.power / vm.delete 任务，
 		// 因此不需要新的执行器。删除类任务在**创建时**走二次验证——它是
 		// 一条将来会自动执行的删除指令，留到执行时再验证就没人可验了。

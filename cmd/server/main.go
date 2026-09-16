@@ -105,6 +105,11 @@ func main() {
 	queue.Register(vm.NewCreateExecutor(db, mockAgent))
 	queue.Register(vm.NewPowerExecutor(db, mockAgent))
 	queue.Register(vm.NewDeleteExecutor(db, mockAgent))
+	// 快照（F-2-07）。三个执行器共用资源锁键 vm:<id>，因此与电源操作天然
+	// 互斥——恢复快照时不会有并发的开机请求插进来。
+	queue.Register(vm.NewSnapshotCreateExecutor(db, mockAgent))
+	queue.Register(vm.NewSnapshotRestoreExecutor(db, mockAgent))
+	queue.Register(vm.NewSnapshotDeleteExecutor(db, mockAgent))
 	queue.Register(storage.NewCreateExecutor(db, mockAgent))
 	queue.Register(storage.NewDeleteExecutor(db, mockAgent))
 	queue.Start(context.Background())

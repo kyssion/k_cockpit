@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -46,7 +47,7 @@ func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task
 	if err := db.AutoMigrate(
 		&model.VM{}, &model.Task{}, &model.AuditLog{}, &model.Node{},
 		&model.VMCredential{}, &model.VMInterface{}, &model.StaticIP{},
-		&model.VpcSwitch{},
+		&model.VpcSwitch{}, &model.VMSnapshot{}, &model.SystemSetting{},
 	); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
@@ -66,6 +67,9 @@ func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task
 	queue.Register(vm.NewCreateExecutor(db, client))
 	queue.Register(vm.NewPowerExecutor(db, client))
 	queue.Register(vm.NewDeleteExecutor(db, client))
+	queue.Register(vm.NewSnapshotCreateExecutor(db, client))
+	queue.Register(vm.NewSnapshotRestoreExecutor(db, client))
+	queue.Register(vm.NewSnapshotDeleteExecutor(db, client))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	queue.Start(ctx)
@@ -596,6 +600,196 @@ func TestStaticIPsOnlyReturnsBoundOnes(t *testing.T) {
 	if len(ips) != 1 || ips[0].IP != "10.0.0.20" {
 		t.Errorf("静态地址 = %+v, 期望只含 10.0.0.20", ips)
 	}
+}
+
+// --- 快照 ---
+
+func TestSnapshotListComputesCapabilities(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-snap", Status: model.VMStatusStopped, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	db.Create(&model.VMSnapshot{
+		VMID: row.ID, NodeID: 1, Name: "s-ok",
+		Kind: model.SnapshotKindInternal, Status: model.SnapshotReady,
+	})
+	db.Create(&model.VMSnapshot{
+		VMID: row.ID, NodeID: 1, Name: "s-child",
+		Kind: model.SnapshotKindInternal, Status: model.SnapshotReady, HasChildren: true,
+	})
+	db.Create(&model.VMSnapshot{
+		VMID: row.ID, NodeID: 1, Name: "s-current",
+		Kind: model.SnapshotKindInternal, Status: model.SnapshotReady, IsCurrent: true,
+	})
+	db.Create(&model.VMSnapshot{
+		VMID: row.ID, NodeID: 1, Name: "s-broken",
+		Kind: model.SnapshotKindInternal, Status: model.SnapshotError,
+	})
+
+	list, err := svc.Snapshots(ctx, row.ID, authz.Viewer{UserID: 7})
+	if err != nil {
+		t.Fatalf("查询快照失败: %v", err)
+	}
+	if list.Used != 4 {
+		t.Errorf("已用配额 = %d, 期望 4", list.Used)
+	}
+	if list.Quota <= 0 {
+		t.Error("未返回配额上限，界面无法显示「已用/上限」")
+	}
+
+	byName := map[string]vm.SnapshotView{}
+	for _, s := range list.Items {
+		byName[s.Name] = s
+	}
+
+	// 可删可恢复的正常快照。
+	if !byName["s-ok"].CanDelete || !byName["s-ok"].CanRestore {
+		t.Error("就绪且无子快照的普通快照应可删可恢复")
+	}
+	// 有子快照：删掉它会让子快照失去依赖。
+	if byName["s-child"].CanDelete {
+		t.Error("有子快照的快照不应可删")
+	}
+	// 当前快照：虚拟机正运行在它上面。
+	if byName["s-current"].CanDelete || byName["s-current"].CanRestore {
+		t.Error("当前快照既不应当可删，也不应当可恢复（恢复它没有意义）")
+	}
+	// 失败的快照不能用于恢复——它不可信。
+	if byName["s-broken"].CanRestore {
+		t.Error("创建失败的快照不应可恢复")
+	}
+}
+
+func TestSnapshotCreateEnqueuesAndReservesQuota(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-snap2", Status: model.VMStatusStopped, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	tk, err := svc.CreateSnapshot(ctx, row.ID, vm.CreateSnapshotRequest{
+		Name: "before-upgrade",
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("受理失败: %v", err)
+	}
+	if tk.Type != model.TaskVMSnapshotCreate {
+		t.Errorf("任务类型 = %q, 期望 %q", tk.Type, model.TaskVMSnapshotCreate)
+	}
+	// 资源锁键必须是 vm:<id>：这样快照操作与电源操作天然互斥，
+	// 恢复快照时不会有并发的开机请求插进来。
+	if rt, rid := tk.TaskResource(); rt != "vm" || rid != row.ID {
+		t.Errorf("资源锁键 = %s:%d, 期望 vm:%d", rt, rid, row.ID)
+	}
+
+	// **记录先于执行存在**：执行器需要它的 ID 才能把结果写回来。
+	var count int64
+	db.Model(&model.VMSnapshot{}).Where("vm_id = ?", row.ID).Count(&count)
+	if count != 1 {
+		t.Errorf("快照记录数 = %d, 期望 1（创建期间就必须有一条可被引用的记录）", count)
+	}
+}
+
+func TestSnapshotCreateRejectsDuplicateName(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-dup-snap", Status: model.VMStatusStopped, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	db.Create(&model.VMSnapshot{
+		VMID: row.ID, NodeID: 1, Name: "daily",
+		Kind: model.SnapshotKindInternal, Status: model.SnapshotReady,
+	})
+
+	// 同名冲突给出 409 而不是 500：这是一个用户可以自己解决的问题。
+	_, err := svc.CreateSnapshot(ctx, row.ID, vm.CreateSnapshotRequest{Name: "daily"},
+		authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 409)
+}
+
+func TestSnapshotCreateRejectsOverQuota(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-quota", Status: model.VMStatusStopped, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	// 占满配额。
+	for i := 0; i < 10; i++ {
+		db.Create(&model.VMSnapshot{
+			VMID: row.ID, NodeID: 1, Name: "s" + strconv.Itoa(i),
+			Kind: model.SnapshotKindInternal, Status: model.SnapshotReady,
+		})
+	}
+
+	// 配额在**创建之前**检查：先创建再发现超限，会留下一个需要回滚的快照，
+	// 而回滚本身也可能失败。
+	_, err := svc.CreateSnapshot(ctx, row.ID, vm.CreateSnapshotRequest{Name: "one-more"},
+		authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 409)
+}
+
+func TestSnapshotDeleteReasonsAreSpecific(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-del-snap", Status: model.VMStatusStopped, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	withChild := model.VMSnapshot{
+		VMID: row.ID, NodeID: 1, Name: "with-child",
+		Kind: model.SnapshotKindInternal, Status: model.SnapshotReady, HasChildren: true,
+	}
+	db.Create(&withChild)
+
+	current := model.VMSnapshot{
+		VMID: row.ID, NodeID: 1, Name: "current",
+		Kind: model.SnapshotKindInternal, Status: model.SnapshotReady, IsCurrent: true,
+	}
+	db.Create(&current)
+
+	// 拒绝理由必须**具体**：「有子快照」与「是当前快照」需要用户做的事
+	// 完全不同，笼统的「不能删除」会让他无从下手。
+	_, err := svc.DeleteSnapshot(ctx, row.ID, withChild.ID,
+		authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 422)
+	var apiErr *api.Error
+	if errors.As(err, &apiErr) && !strings.Contains(apiErr.Message, "子快照") {
+		t.Errorf("拒绝文案未说明原因: %q", apiErr.Message)
+	}
+
+	_, err = svc.DeleteSnapshot(ctx, row.ID, current.ID,
+		authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 422)
+	if errors.As(err, &apiErr) && !strings.Contains(apiErr.Message, "当前") {
+		t.Errorf("拒绝文案未说明原因: %q", apiErr.Message)
+	}
+}
+
+func TestSnapshotRejectsOthersVM(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	theirs := model.VM{NodeID: 1, Name: "vm-theirs-snap", OwnerID: ptr(int64(20))}
+	db.Create(&theirs)
+	snap := model.VMSnapshot{
+		VMID: theirs.ID, NodeID: 1, Name: "s",
+		Kind: model.SnapshotKindInternal, Status: model.SnapshotReady,
+	}
+	db.Create(&snap)
+
+	// 404 而非 403：403 会确认「这个 ID 存在」，可被用来枚举他人资源。
+	_, err := svc.Snapshots(ctx, theirs.ID, authz.Viewer{UserID: 10})
+	assertAPIError(t, err, 404)
+
+	// 删除也要走归属校验，而不是只查快照 ID——后者会让知道 ID 的人
+	// 直接删掉别人的快照。
+	_, err = svc.DeleteSnapshot(ctx, theirs.ID, snap.ID,
+		authz.Viewer{UserID: 10}, "bob", "10.0.0.2")
+	assertAPIError(t, err, 404)
 }
 
 func ptr[T any](v T) *T { return &v }
