@@ -166,6 +166,50 @@ export const vmApi = {
 
   /** 静态地址列表。 */
   staticIPs: (id: number) => get<{ items: StaticIP[] }>(`/api/v1/vms/${id}/static-ips`),
+
+  /** 实时运行指标（Hero 资源卡）。只读探测，不入队。 */
+  stats: (id: number) => get<VmStats>(`/api/v1/vms/${id}/stats`),
+
+  /**
+   * 控制台预览画面的地址。
+   *
+   * 返回 URL 而不是一个请求函数：这个接口返回的是 **image/png 字节**，
+   * 直接给 `<img src>` 用最省事——浏览器会带上会话 Cookie（同源），也能
+   * 走它自己的图片解码与缓存。改成 fetch 再转 data URL 等于把这份工作
+   * 重做一遍，还多出一次内存拷贝。
+   *
+   * `stamp` 用于绕过缓存：画面是「此刻的样子」，缓存住会让用户盯着一张
+   * 几分钟前的图，还以为虚拟机画面卡死了。
+   */
+  consoleFrameUrl: (id: number, stamp: number) =>
+    `/api/v1/vms/${id}/console/frame?t=${stamp}`,
+}
+
+/** 虚拟机的实时运行指标。 */
+export interface VmStats {
+  /** 相对**全部 vCPU** 的占用率（0-100）。 */
+  cpu_percent: number
+  /** 配置的核数，用于显示「2 核 · 37%」。 */
+  cpu_cores: number
+
+  mem_total_mb: number
+  mem_used_mb: number
+
+  net_rx_kbps: number
+  net_tx_kbps: number
+  disk_read_kbps: number
+  disk_write_kbps: number
+
+  /** 为 0 表示未运行。 */
+  uptime_seconds: number
+
+  /**
+   * 采集时刻。
+   *
+   * 界面**必须**用它判断新鲜度：轮询失败时会继续显示上一组数字，不标出
+   * 时刻，用户就分不清「当前」与「几分钟前」。
+   */
+  at: string
 }
 
 /**
