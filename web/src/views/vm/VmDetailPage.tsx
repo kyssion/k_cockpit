@@ -42,10 +42,22 @@ import {
 } from '@/api/schedule'
 import { isActive, taskApi, type TaskView } from '@/api/task'
 import {
+  NIC_MODEL_OPTIONS,
+  netApi,
+  type AddPortForwardInput,
+  type BindStaticIPInput,
+  type InterfaceInput,
+  type PortForward,
+} from '@/api/net'
+import {
   NIC_MODEL_LABEL,
   vmApi,
   type DiskAction,
+  type NICModel,
   type PowerAction,
+  type StaticIP,
+  type TaskRef,
+  type VMInterface,
   type VmStatus,
   type VmView,
 } from '@/api/vm'
@@ -376,8 +388,19 @@ function SystemTab({
   )
 }
 
-/** NetworkTab 展示网卡与静态地址（F-2-03「网络管理」）。 */
+/** NetworkTab 管理虚拟机的网络（F-2-03「网络管理」）。 */
 function NetworkTab({ vmID }: { vmID: number }) {
+  const queryClient = useQueryClient()
+  const [editNic, setEditNic] = useState<VMInterface | null>(null)
+  const [deleteNic, setDeleteNic] = useState<VMInterface | null>(null)
+  const [addingNic, setAddingNic] = useState(false)
+  const [bindingIP, setBindingIP] = useState(false)
+  const [deleteIP, setDeleteIP] = useState<StaticIP | null>(null)
+  const [addingPF, setAddingPF] = useState(false)
+  const [deletePF, setDeletePF] = useState<PortForward | null>(null)
+  const [notice, setNotice] = useState('')
+  const [error, setError] = useState('')
+
   const interfaces = useQuery({
     queryKey: ['vm-interfaces', vmID],
     queryFn: () => vmApi.interfaces(vmID),
@@ -386,24 +409,71 @@ function NetworkTab({ vmID }: { vmID: number }) {
     queryKey: ['vm-static-ips', vmID],
     queryFn: () => vmApi.staticIPs(vmID),
   })
+  const forwards = useQuery({
+    queryKey: ['vm-port-forwards', vmID],
+    queryFn: () => netApi.listPortForwards(vmID),
+  })
 
-  if (interfaces.isPending || staticIPs.isPending) return <PageLoading />
+  function refresh() {
+    void queryClient.invalidateQueries({ queryKey: ['vm-interfaces', vmID] })
+    void queryClient.invalidateQueries({ queryKey: ['vm-static-ips', vmID] })
+    void queryClient.invalidateQueries({ queryKey: ['vm-port-forwards', vmID] })
+    void queryClient.invalidateQueries({ queryKey: ['tasks'] })
+  }
+
+  // 所有写操作都是「提交任务」这一个形状，用一个 hook 收口：
+  // 各自写一遍 onSuccess / onError 只会得到五份几乎相同的代码。
+  const submit = useMutation({
+    mutationFn: (fn: () => Promise<TaskRef>) => fn(),
+    onSuccess: (r, _fn, ctx) => {
+      void ctx
+      setNotice(`已提交，任务 #${r.task_id} 正在执行`)
+      setError('')
+      closeAll()
+      refresh()
+    },
+    onError: (err) => {
+      setError(describe(err))
+      closeAll()
+    },
+  })
+
+  function closeAll() {
+    setAddingNic(false)
+    setEditNic(null)
+    setDeleteNic(null)
+    setBindingIP(false)
+    setDeleteIP(null)
+    setAddingPF(false)
+    setDeletePF(null)
+  }
+
+  if (interfaces.isPending || staticIPs.isPending || forwards.isPending) return <PageLoading />
   if (interfaces.isError) return <ErrorBox message={describe(interfaces.error)} />
   if (staticIPs.isError) return <ErrorBox message={describe(staticIPs.error)} />
+  if (forwards.isError) return <ErrorBox message={describe(forwards.error)} />
 
   const nics = interfaces.data.items
   const ips = staticIPs.data.items
+  const pfs = forwards.data.items
 
   return (
     <div className="flex flex-col gap-4">
+      {notice && (
+        <p className="rounded-control bg-success/10 px-3 py-2 text-base text-success">{notice}</p>
+      )}
+      {error && <ErrorBox message={error} />}
+
       <section className="rounded-card border border-line">
-        <h2 className="border-b border-line px-4 py-2.5 text-sm font-medium text-ink-2">网卡</h2>
+        <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
+          <h2 className="text-sm font-medium text-ink-2">网卡</h2>
+          <Button size="sm" onClick={() => setAddingNic(true)}>
+            新增网卡
+          </Button>
+        </div>
 
         {nics.length === 0 ? (
-          <EmptyState
-            title="没有网卡"
-            description="该虚拟机尚未配置网络接口。"
-          />
+          <EmptyState title="没有网卡" description="该虚拟机尚未配置网络接口。" />
         ) : (
           <table className="w-full border-collapse text-base">
             <thead>
@@ -414,6 +484,7 @@ function NetworkTab({ vmID }: { vmID: number }) {
                 <th className="px-4 py-2 text-left font-normal">接入网络</th>
                 <th className="px-4 py-2 text-left font-normal">限速</th>
                 <th className="px-4 py-2 text-left font-normal">下发状态</th>
+                <th className="px-4 py-2 text-right font-normal">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -421,9 +492,7 @@ function NetworkTab({ vmID }: { vmID: number }) {
                 <tr key={n.id} className="border-t border-line">
                   <td className="px-4 py-2.5 text-ink">
                     {n.order}
-                    {n.is_primary && (
-                      <span className="ml-1.5 text-xs text-ink-3">主网卡</span>
-                    )}
+                    {n.is_primary && <span className="ml-1.5 text-xs text-ink-3">主网卡</span>}
                   </td>
                   <td className="px-4 py-2.5 text-ink-2">{NIC_MODEL_LABEL[n.model] ?? n.model}</td>
                   <td className="kc-mono px-4 py-2.5 text-sm text-ink-2">{n.mac || '—'}</td>
@@ -436,6 +505,24 @@ function NetworkTab({ vmID }: { vmID: number }) {
                   <td className="px-4 py-2.5">
                     <AppliedBadge applied={n.applied} at={n.last_applied_at} />
                   </td>
+                  <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                    <button
+                      className="text-sm text-brand hover:underline"
+                      onClick={() => setEditNic(n)}
+                    >
+                      编辑
+                    </button>
+                    <button
+                      className="ml-3 text-sm text-danger hover:underline disabled:text-ink-3 disabled:no-underline"
+                      disabled={n.is_primary}
+                      // 主网卡不可删：重装系统依赖它保持网络可达。
+                      // 禁用而不是隐藏，附上原因让用户知道为什么。
+                      title={n.is_primary ? '主网卡不能删除：重装系统等操作依赖它保持网络可达' : ''}
+                      onClick={() => setDeleteNic(n)}
+                    >
+                      删除
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -444,9 +531,12 @@ function NetworkTab({ vmID }: { vmID: number }) {
       </section>
 
       <section className="rounded-card border border-line">
-        <h2 className="border-b border-line px-4 py-2.5 text-sm font-medium text-ink-2">
-          静态地址
-        </h2>
+        <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
+          <h2 className="text-sm font-medium text-ink-2">静态地址</h2>
+          <Button size="sm" onClick={() => setBindingIP(true)}>
+            绑定地址
+          </Button>
+        </div>
 
         {ips.length === 0 ? (
           <EmptyState
@@ -462,6 +552,7 @@ function NetworkTab({ vmID }: { vmID: number }) {
                 <th className="px-4 py-2 text-left font-normal">MAC</th>
                 <th className="px-4 py-2 text-left font-normal">来源</th>
                 <th className="px-4 py-2 text-left font-normal">下发状态</th>
+                <th className="px-4 py-2 text-right font-normal">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -479,6 +570,74 @@ function NetworkTab({ vmID }: { vmID: number }) {
                   <td className="px-4 py-2.5">
                     <AppliedBadge applied={s.applied} at={s.applied_at} />
                   </td>
+                  <td className="px-4 py-2.5 text-right">
+                    <button
+                      className="text-sm text-danger hover:underline"
+                      onClick={() => setDeleteIP(s)}
+                    >
+                      解绑
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <section className="rounded-card border border-line">
+        <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
+          <h2 className="text-sm font-medium text-ink-2">端口转发</h2>
+          <Button size="sm" onClick={() => setAddingPF(true)}>
+            新增转发
+          </Button>
+        </div>
+
+        {pfs.length === 0 ? (
+          <EmptyState
+            title="没有端口转发"
+            description="端口转发把宿主机上的一个端口指向虚拟机的服务，让外部可以访问。"
+          />
+        ) : (
+          <table className="w-full border-collapse text-base">
+            <thead>
+              <tr className="border-b border-line text-xs text-ink-3">
+                <th className="px-4 py-2 text-left font-normal">宿主机端口</th>
+                <th className="px-4 py-2 text-left font-normal">目标</th>
+                <th className="px-4 py-2 text-left font-normal">允许来源</th>
+                <th className="px-4 py-2 text-left font-normal">下发状态</th>
+                <th className="px-4 py-2 text-right font-normal">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pfs.map((p) => (
+                <tr key={p.id} className="border-t border-line">
+                  <td className="kc-mono px-4 py-2.5 text-ink">
+                    {p.protocol}/{p.host_port}
+                  </td>
+                  <td className="px-4 py-2.5 text-ink-2">
+                    {p.target_ip ? `${p.target_ip}:${p.target_port}` : `:${p.target_port}`}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    {p.allowed_ips ? (
+                      <span className="kc-mono text-sm text-ink-2">{p.allowed_ips}</span>
+                    ) : (
+                      // 空来源意味着**任何地址都能访问**。用 warning 色而不是
+                      // 灰色「—」：这是一个需要用户注意的状态，不是「没填」。
+                      <span className="text-sm text-warning">不限制（任何来源均可访问）</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <AppliedBadge applied={p.applied} at={p.last_applied_at} />
+                  </td>
+                  <td className="px-4 py-2.5 text-right">
+                    <button
+                      className="text-sm text-danger hover:underline"
+                      onClick={() => setDeletePF(p)}
+                    >
+                      删除
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -487,12 +646,456 @@ function NetworkTab({ vmID }: { vmID: number }) {
       </section>
 
       <p className="rounded-card border border-line bg-raised px-4 py-3 text-sm text-ink-3">
-        网卡的增删改需要下发到节点才能生效，尚未实现。当前页面为只读。
-        <br />
         静态地址与「系统信息」里的 IP 可能不一致：前者是我们**期望**的分配，
         后者是从节点**探测到**的实际地址。不一致时以实际地址为准。
+        <br />
+        端口转发会把虚拟机的服务暴露到外部网络，请确认「允许来源」符合预期。
       </p>
+
+      <NicModal
+        // key 让「新增」与「编辑某一块」在使用不同状态时重新挂载：
+        // 表单的初始值取自 props，切换目标就该拿到新的初始值。
+        key={editNic ? `nic-${editNic.id}` : 'nic-new'}
+        open={addingNic || editNic !== null}
+        vmID={vmID}
+        nic={editNic}
+        submitting={submit.isPending}
+        onClose={() => {
+          setAddingNic(false)
+          setEditNic(null)
+        }}
+        onSubmit={(input) =>
+          submit.mutate(() =>
+            editNic
+              ? netApi.updateInterface(vmID, editNic.id, input)
+              : netApi.addInterface(vmID, input),
+          )
+        }
+      />
+
+      <Modal
+        open={deleteNic !== null}
+        title={`删除网卡 #${deleteNic?.order ?? ''}`}
+        description="删除后该网卡的配置与地址都会失效。"
+        onClose={() => setDeleteNic(null)}
+        footer={
+          <>
+            <Button variant="secondary" size="sm" onClick={() => setDeleteNic(null)}>
+              取消
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              loading={submit.isPending}
+              onClick={() => deleteNic && submit.mutate(() => netApi.removeInterface(vmID, deleteNic.id))}
+            >
+              确认删除
+            </Button>
+          </>
+        }
+      >
+        <p className="text-base text-ink-2">
+          删除的是虚拟机的第 {deleteNic?.order} 块网卡（MAC {deleteNic?.mac ?? '—'}）。
+          来宾系统里依赖它的网络配置将失效。
+        </p>
+      </Modal>
+
+      <BindIPModal
+        // 每次打开都重新挂载：关闭再打开不该带着上一次填了一半的地址。
+        key={bindingIP ? 'bind-open' : 'bind-closed'}
+        open={bindingIP}
+        vmID={vmID}
+        nics={nics}
+        submitting={submit.isPending}
+        onClose={() => setBindingIP(false)}
+        onSubmit={(input) => submit.mutate(() => netApi.bindStaticIP(vmID, input))}
+      />
+
+      <Modal
+        open={deleteIP !== null}
+        title={`解绑地址 ${deleteIP?.ip ?? ''}`}
+        description="解绑后虚拟机将回到由 DHCP 分配地址。"
+        onClose={() => setDeleteIP(null)}
+        footer={
+          <>
+            <Button variant="secondary" size="sm" onClick={() => setDeleteIP(null)}>
+              取消
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              loading={submit.isPending}
+              onClick={() => deleteIP && submit.mutate(() => netApi.unbindStaticIP(vmID, deleteIP.id))}
+            >
+              确认解绑
+            </Button>
+          </>
+        }
+      >
+        <p className="text-base text-ink-2">
+          这只解除控制面的分配关系，不会删除来宾系统里已经写好的网络配置。
+        </p>
+      </Modal>
+
+      <PortForwardModal
+        key={addingPF ? 'pf-open' : 'pf-closed'}
+        open={addingPF}
+        vmID={vmID}
+        usedPorts={pfs.map((p) => `${p.protocol}/${p.host_port}`)}
+        submitting={submit.isPending}
+        onClose={() => setAddingPF(false)}
+        onSubmit={(input) => submit.mutate(() => netApi.addPortForward(vmID, input))}
+      />
+
+      <Modal
+        open={deletePF !== null}
+        title={`删除转发 ${deletePF?.protocol}/${deletePF?.host_port ?? ''}`}
+        description="删除后该端口将不再指向这台虚拟机。"
+        onClose={() => setDeletePF(null)}
+        footer={
+          <>
+            <Button variant="secondary" size="sm" onClick={() => setDeletePF(null)}>
+              取消
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              loading={submit.isPending}
+              onClick={() => deletePF && submit.mutate(() => netApi.removePortForward(vmID, deletePF.id))}
+            >
+              确认删除
+            </Button>
+          </>
+        }
+      >
+        <p className="text-base text-ink-2">
+          删除的是宿主机上的转发规则，虚拟机的服务本身不受影响。
+        </p>
+      </Modal>
     </div>
+  )
+}
+
+/** NicModal 新增或编辑网卡。 */
+function NicModal({
+  open,
+  nic,
+  submitting,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean
+  vmID: number
+  nic: VMInterface | null
+  submitting: boolean
+  onClose: () => void
+  onSubmit: (input: InterfaceInput) => void
+}) {
+  // 初始值直接取自 props，切换目标时由调用方通过 `key` 触发重新挂载，
+  // 状态自然重置。在渲染期间用 ref 记录「是否已初始化」是反模式：
+  // ref 的读写在渲染中是不被允许的，而且它改变不了这一次渲染的结果。
+  //
+  // 编辑已有网卡时**不允许改序号与 MAC**：序号是来宾里的设备顺序（改了
+  // 会让 eth0/eth1 对调），MAC 可能已被来宾按它配置过网络。
+  const [model, setModel] = useState<NICModel>(nic?.model ?? 'virtio')
+  const [rateLimit, setRateLimit] = useState(String(nic?.rate_limit_mbps ?? 0))
+  const [allowed, setAllowed] = useState(nic?.allowed_addresses ?? '')
+  const [error, setError] = useState('')
+
+  const limit = Number(rateLimit)
+  const ready = Number.isFinite(limit) && limit >= 0
+
+  return (
+    <Modal
+      open={open}
+      title={nic ? `编辑网卡 #${nic.order}` : '新增网卡'}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            取消
+          </Button>
+          <Button
+            size="sm"
+            disabled={!ready}
+            loading={submitting}
+            onClick={() => {
+              if (!ready) {
+                setError('限速需要是一个不小于 0 的数字')
+                return
+              }
+              onSubmit({
+                model,
+                rate_limit_mbps: limit,
+                allowed_addresses: allowed,
+              })
+            }}
+          >
+            保存
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3.5">
+        <label className="flex flex-col gap-1">
+          <span className="text-base text-ink">型号</span>
+          <select
+            className="rounded-control border border-line-strong bg-surface px-2.5 py-2 text-base text-ink"
+            value={model}
+            onChange={(e) => setModel(e.target.value as NICModel)}
+          >
+            {NIC_MODEL_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <span className="text-sm text-ink-3">
+            装完系统发现没网，原因通常就是这里选了一个来宾没有驱动的型号。
+          </span>
+        </label>
+
+        <Input
+          label="限速上限（Mbps）"
+          type="number"
+          min={0}
+          value={rateLimit}
+          onChange={(e) => setRateLimit(e.target.value)}
+          hint="0 表示不限速。"
+        />
+
+        <Input
+          label="允许的源地址（可选）"
+          value={allowed}
+          placeholder="留空表示不限制"
+          onChange={(e) => setAllowed(e.target.value)}
+          hint="逗号分隔多个地址，用于防止 IP 欺骗。"
+        />
+
+        {error && (
+          <p role="alert" className="rounded-control bg-danger/10 px-3 py-2 text-sm text-danger">
+            {error}
+          </p>
+        )}
+      </div>
+    </Modal>
+  )
+}
+
+/** BindIPModal 绑定静态地址。 */
+function BindIPModal({
+  open,
+  nics,
+  submitting,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean
+  vmID: number
+  nics: VMInterface[]
+  submitting: boolean
+  onClose: () => void
+  onSubmit: (input: BindStaticIPInput) => void
+}) {
+  // 初始值取自当前网卡列表；每次打开由调用方通过 `key` 重新挂载。
+  const [ip, setIP] = useState('')
+  const [order, setOrder] = useState(nics[0] ? String(nics[0].order) : '')
+  const [dhcp, setDHCP] = useState(true)
+
+  return (
+    <Modal
+      open={open}
+      title="绑定静态地址"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            取消
+          </Button>
+          <Button
+            size="sm"
+            disabled={ip.trim() === ''}
+            loading={submitting}
+            onClick={() =>
+              onSubmit({
+                ip: ip.trim(),
+                interface_order: order === '' ? undefined : Number(order),
+                is_dhcp_reservation: dhcp,
+              })
+            }
+          >
+            绑定
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3.5">
+        <Input
+          label="地址"
+          value={ip}
+          placeholder="例如 10.0.0.20"
+          onChange={(e) => setIP(e.target.value)}
+          hint="同一节点上不能有两台虚拟机使用同一个地址。"
+        />
+
+        <label className="flex flex-col gap-1">
+          <span className="text-base text-ink">绑定到网卡</span>
+          <select
+            className="rounded-control border border-line-strong bg-surface px-2.5 py-2 text-base text-ink"
+            value={order}
+            onChange={(e) => setOrder(e.target.value)}
+          >
+            <option value="">不指定</option>
+            {nics.map((n) => (
+              <option key={n.id} value={n.order}>
+                #{n.order}
+                {n.is_primary ? '（主网卡）' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="flex cursor-pointer items-start gap-2.5">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={dhcp}
+            onChange={(e) => setDHCP(e.target.checked)}
+          />
+          <span>
+            <span className="block text-base text-ink">通过 DHCP 静态租约下发</span>
+            <span className="block text-sm text-ink-3">
+              关闭时只记录分配关系，需要你在来宾系统里手工配置地址。
+            </span>
+          </span>
+        </label>
+      </div>
+    </Modal>
+  )
+}
+
+/** PortForwardModal 新增端口转发。 */
+function PortForwardModal({
+  open,
+  usedPorts,
+  submitting,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean
+  vmID: number
+  usedPorts: string[]
+  submitting: boolean
+  onClose: () => void
+  onSubmit: (input: AddPortForwardInput) => void
+}) {
+  // 每次打开由调用方通过 `key` 重新挂载，状态自然是初始值。
+  const [protocol, setProtocol] = useState<'tcp' | 'udp'>('tcp')
+  const [hostPort, setHostPort] = useState('')
+  const [targetIP, setTargetIP] = useState('')
+  const [targetPort, setTargetPort] = useState('')
+  const [allowed, setAllowed] = useState('')
+  const [error, setError] = useState('')
+
+  const h = Number(hostPort)
+  const t = Number(targetPort)
+  const ready =
+    Number.isInteger(h) && h >= 1 && h <= 65535 && Number.isInteger(t) && t >= 1 && t <= 65535
+
+  return (
+    <Modal
+      open={open}
+      title="新增端口转发"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            取消
+          </Button>
+          <Button
+            size="sm"
+            disabled={!ready}
+            loading={submitting}
+            onClick={() => {
+              if (!ready) {
+                setError('端口需要是 1 到 65535 之间的整数')
+                return
+              }
+              onSubmit({
+                protocol,
+                host_port: h,
+                target_ip: targetIP.trim() || undefined,
+                target_port: t,
+                allowed_ips: allowed.trim() || undefined,
+              })
+            }}
+          >
+            创建
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3.5">
+        <div className="flex gap-3">
+          <label className="flex flex-1 flex-col gap-1">
+            <span className="text-base text-ink">协议</span>
+            <select
+              className="rounded-control border border-line-strong bg-surface px-2.5 py-2 text-base text-ink"
+              value={protocol}
+              onChange={(e) => setProtocol(e.target.value as 'tcp' | 'udp')}
+            >
+              <option value="tcp">TCP</option>
+              <option value="udp">UDP</option>
+            </select>
+          </label>
+          <Input
+            label="宿主机端口"
+            type="number"
+            min={1}
+            max={65535}
+            value={hostPort}
+            onChange={(e) => setHostPort(e.target.value)}
+          />
+        </div>
+
+        {usedPorts.length > 0 && (
+          <p className="text-sm text-ink-3">
+            这台虚拟机已占用：<span className="kc-mono">{usedPorts.join('、')}</span>。
+            端口在节点内独占，与其它虚拟机冲突的会被拒绝。
+          </p>
+        )}
+
+        <Input
+          label="目标地址（可选）"
+          value={targetIP}
+          placeholder="留空则按虚拟机的实际地址"
+          onChange={(e) => setTargetIP(e.target.value)}
+        />
+
+        <Input
+          label="目标端口"
+          type="number"
+          min={1}
+          max={65535}
+          value={targetPort}
+          onChange={(e) => setTargetPort(e.target.value)}
+        />
+
+        <Input
+          label="允许的来源（可选）"
+          value={allowed}
+          placeholder="留空表示不限制"
+          onChange={(e) => setAllowed(e.target.value)}
+          hint="留空意味着任何地址都能访问这个端口，请确认这是预期的。"
+        />
+
+        {error && (
+          <p role="alert" className="rounded-control bg-danger/10 px-3 py-2 text-sm text-danger">
+            {error}
+          </p>
+        )}
+      </div>
+    </Modal>
   )
 }
 
