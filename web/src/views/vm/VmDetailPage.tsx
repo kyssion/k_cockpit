@@ -17,6 +17,7 @@ import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 
 import { ApiError, NetworkError } from '@/api/client'
+import { EDIT_GROUP_LABEL, EDIT_GROUP_ORDER, editApi, type EditForm } from '@/api/edit'
 import { nodeApi } from '@/api/node'
 import {
   SNAPSHOT_KIND_LABEL,
@@ -40,6 +41,7 @@ import {
   vmApi,
   type DiskAction,
   type PowerAction,
+  type VmStatus,
   type VmView,
 } from '@/api/vm'
 import { Button } from '@/components/common/Button'
@@ -229,14 +231,7 @@ export function VmDetailPage() {
 
       {tab === 'snapshot' && <SnapshotTab vmID={vm.id} />}
       {tab === 'schedule' && <ScheduleTab vmID={vm.id} />}
-      {tab === 'edit' && (
-        <PlannedTab
-          title="编辑配置"
-          requirement="F-2-05"
-          description="基础配置 / 磁盘与驱动器 / 启动与安全 / 网口 / 硬件直通 / 高级设置；差异提交，运行态可改项与需关机项分别标注。"
-          blocked="当前阻塞：磁盘、引导、直通等配置项尚未在投影中建模，且需要 agent 的改配能力。"
-        />
-      )}
+      {tab === 'edit' && <EditTab vmID={vm.id} onSaved={refresh} />}
 
       <Modal
         open={confirmAction !== null}
@@ -1223,6 +1218,221 @@ function CreateSnapshotModal({
       </div>
     </Modal>
   )
+}
+
+/** EditTab 编辑虚拟机配置（F-2-05）。 */
+function EditTab({ vmID, onSaved }: { vmID: number; onSaved: () => void }) {
+  const [group, setGroup] = useState('basic')
+  const [draft, setDraft] = useState<Record<string, string> | null>(null)
+  const [notice, setNotice] = useState('')
+  const [error, setError] = useState('')
+
+  const form = useQuery({
+    queryKey: ['vm-edit-form', vmID],
+    queryFn: () => editApi.form(vmID),
+  })
+
+  // 表单在**首次渲染时**从接口数据派生一次，之后由本地状态接管（f-2-01 R-012）。
+  //
+  // 用「渲染时派生」而不是 useEffect + setState：后者表达不出「只取第一次」
+  // 这个意图——后台每次刷新都会重新触发 effect，把用户正在输入的内容冲回
+  // 原值，而用户看到的是「我打的字自己消失了」，最难排查的一类问题。
+  const currentDraft = draft ?? (form.data ? buildDraft(form.data.values) : null)
+
+  const changes = form.data && currentDraft ? computeChanges(form.data, currentDraft) : null
+  const dirty = changes !== null && (changes.hasMetadata || changes.hasConfig)
+
+  const save = useMutation({
+    mutationFn: async () => {
+      if (!changes) return
+      // 两类修改走不同接口：元数据同步生效，硬件配置入队执行。
+      // 顺序上先元数据后配置——元数据几乎不会失败，先把它落下来，
+      // 万一配置提交失败，用户至少不用重填备注。
+      if (changes.hasMetadata) {
+        await editApi.updateMetadata(vmID, changes.metadata)
+      }
+      if (changes.hasConfig) {
+        return editApi.updateConfig(vmID, changes.config)
+      }
+      return undefined
+    },
+    onSuccess: (result) => {
+      setError('')
+      setDraft(null) // 重新冻结一次，拿到刚保存后的值
+      void form.refetch()
+      onSaved()
+      setNotice(
+        result
+          ? `已提交硬件配置变更，任务 #${result.task_id} 正在执行`
+          : '已保存',
+      )
+    },
+    onError: (err) => setError(describe(err)),
+  })
+
+  if (form.isPending || currentDraft === null) return <PageLoading />
+  if (form.isError) return <ErrorBox message={describe(form.error)} />
+
+  const data = form.data
+  const groups = EDIT_GROUP_ORDER
+  const fields = data.fields.filter((f) => f.group === group)
+  // 需要关机才能改的项，在当前运行态下不可提交。
+  const blockedByStatus = !data.editable_now
+
+  return (
+    <div className="flex flex-col gap-4">
+      {notice && (
+        <p className="rounded-control bg-success/10 px-3 py-2 text-base text-success">{notice}</p>
+      )}
+      {error && <ErrorBox message={error} />}
+
+      <div className="flex flex-wrap gap-1 border-b border-line">
+        {groups.map((g) => (
+          <button
+            key={g}
+            onClick={() => setGroup(g)}
+            className={[
+              'rounded-t-control px-3.5 py-2 text-base transition-colors',
+              g === group
+                ? 'border-b-2 border-brand font-medium text-brand'
+                : 'border-b-2 border-transparent text-ink-3 hover:text-ink',
+            ].join(' ')}
+          >
+            {EDIT_GROUP_LABEL[g] ?? g}
+          </button>
+        ))}
+      </div>
+
+      {group === 'basic' ? (
+        <section className="rounded-card border border-line">
+          <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
+            <h2 className="text-sm font-medium text-ink-2">基础配置</h2>
+            <div className="flex items-center gap-3">
+              {dirty && <span className="text-sm text-warning">有未保存的修改</span>}
+              <Button
+                size="sm"
+                disabled={!dirty}
+                loading={save.isPending}
+                onClick={() => save.mutate()}
+              >
+                保存
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-4 px-4 py-3.5">
+            {fields.map((f) => {
+              // 运行态下，需要关机的项禁用输入——但**仍然显示**：
+              // 直接隐藏会让用户在关机之后再进来才发现多出几项。
+              const blocked = f.requires_shutdown && blockedByStatus
+              const statusLabel =
+                VM_STATUS_LABEL[data.current_status as VmStatus] ?? data.current_status
+
+              // 生效方式与提示合成一句：用户读的是「这一项改了会怎样」，
+              // 拆成徽标 + 提示两处反而要来回对照。
+              const mode = f.requires_shutdown ? '需关机后修改' : '即时生效，不影响运行'
+              const hint = blocked
+                ? `当前为${statusLabel}，需关机后才能修改`
+                : [mode, f.hint].filter(Boolean).join(' · ')
+
+              return (
+                <Input
+                  key={f.key}
+                  label={f.label}
+                  type={f.kind === 'number' ? 'number' : 'text'}
+                  value={currentDraft[f.key] ?? ''}
+                  min={f.min}
+                  max={f.max}
+                  disabled={blocked || save.isPending}
+                  hint={hint}
+                  onChange={(e) => setDraft({ ...currentDraft, [f.key]: e.target.value })}
+                />
+              )
+            })}
+          </div>
+        </section>
+      ) : (
+        <PlannedTab
+          title={EDIT_GROUP_LABEL[group] ?? group}
+          requirement="F-2-05"
+          description={EDIT_GROUP_DESCRIPTION[group] ?? ''}
+          blocked="当前阻塞：这些配置项尚未在投影中建模，且需要 agent 的改配能力。"
+        />
+      )}
+
+      <p className="rounded-card border border-line bg-raised px-4 py-3 text-sm text-ink-3">
+        「即时生效」的项只记录在控制面，虚拟机运行中也能改；「需关机」的项要下发到
+        节点，关闭电源后才能提交。
+        <br />
+        保存时**只提交改动过的字段**：等值提交会让一次「改内存」顺带触发一次没有
+        理由的重启。
+      </p>
+    </div>
+  )
+}
+
+/** 各子选项卡的说明，用于尚未实现的那些。 */
+const EDIT_GROUP_DESCRIPTION: Record<string, string> = {
+  disk: '磁盘与驱动器：热插拔与槽位、扩容、IOPS 限制、光驱与软盘、宿主机目录共享。',
+  boot: '启动与安全：引导顺序、机器类型、UEFI/BIOS、安全启动、开机自启、Watchdog。',
+  network: '网口：型号与限速、接入网络、MAC 地址、允许的源地址。',
+  passthru: '硬件直通：PCI 设备直通与 USB 设备透传。',
+  advanced: '高级设置：CPU 类型与亲和性、内存策略、APIC/PAE、Guest Agent 与初始化方式。',
+}
+
+/** buildDraft 把当前值转成表单可编辑的字符串。 */
+function buildDraft(values: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(values)) {
+    out[k] = v === null || v === undefined ? '' : String(v)
+  }
+  return out
+}
+
+/**
+ * computeChanges 算出**真正变化**的字段，并按「是否需要下发」分成两组。
+ *
+ * 只提交差异而不是整表：整表提交会让一次「改内存」顺带把没动过的 CPU 一起
+ * 上报，在需要重启的项上就会触发一次没有理由的重启。
+ */
+function computeChanges(form: EditForm, draft: Record<string, string>) {
+  const metadata: { remark?: string; group_name?: string } = {}
+  const config: { vcpu?: number; memory_mb?: number } = {}
+  let hasMetadata = false
+  let hasConfig = false
+
+  for (const f of form.fields) {
+    const before = toStr(form.values[f.key])
+    const after = draft[f.key] ?? ''
+    if (before === after) continue
+
+    if (!f.requires_node) {
+      if (f.key === 'remark') {
+        metadata.remark = after
+        hasMetadata = true
+      } else if (f.key === 'group_name') {
+        metadata.group_name = after
+        hasMetadata = true
+      }
+      continue
+    }
+
+    const n = Number(after)
+    if (!Number.isFinite(n)) continue
+    if (f.key === 'vcpu') {
+      config.vcpu = n
+      hasConfig = true
+    } else if (f.key === 'memory_mb') {
+      config.memory_mb = n
+      hasConfig = true
+    }
+  }
+
+  return { metadata, config, hasMetadata, hasConfig }
+}
+
+function toStr(v: unknown): string {
+  return v === null || v === undefined ? '' : String(v)
 }
 
 /** PlannedTab 说明一个尚未实现的页签。 */
