@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/joho/godotenv"
@@ -91,7 +92,12 @@ func main() {
 	var mockAgent *agent.MockClient
 	switch cfg.Agent.Transport {
 	case config.AgentTransportMock:
-		mockAgent = agent.NewMockClient()
+		// 阶段之间留一点间隔，好让任务时间线能看出推进过程。
+		//
+		// 测试里用的是零间隔（NewMockClient）：**测试需要确定性，不需要
+		// 真实感**——每个用例多等一秒只会让人不愿跑测试。而演示时所有阶段
+		// 落在同一毫秒里，时间线虽然是对的，却看不出它是一条时间线。
+		mockAgent = agent.NewMockClient().WithStageDelay(220 * time.Millisecond)
 		log.Printf("[agent] 通道 = mock：节点运行态与领域操作为假数据，不连接真实节点")
 	default:
 		log.Fatalf("AGENT_TRANSPORT=%s 尚未实现（当前仅支持 %s）",

@@ -88,7 +88,7 @@ func newTestEnv(t *testing.T) (*storage.Service, *task.Queue, *gorm.DB, *diskCli
 		t.Fatalf("打开测试库失败: %v", err)
 	}
 	if err := db.AutoMigrate(
-		&model.StoragePool{}, &model.Task{}, &model.AuditLog{}, &model.Node{},
+		&model.StoragePool{}, &model.Task{}, &model.TaskStage{}, &model.AuditLog{}, &model.Node{},
 	); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
@@ -271,6 +271,14 @@ func TestSecondPoolIsNotDefault(t *testing.T) {
 	if _, err := svc.Create(ctx, req, 7, "admin", "10.0.0.1"); err != nil {
 		t.Fatalf("受理失败: %v", err)
 	}
+
+	// 必须先等两个任务都落地再断言：创建是异步的，直接查会读到「一个池都
+	// 还没有」的状态，而那个状态下的默认池数量同样是 0——用例会失败在一个
+	// 与本例要验证的规则毫无关系的地方。
+	waitFor(t, "两个存储池记录建立", func() bool {
+		pools, err := svc.List(ctx, 1)
+		return err == nil && len(pools) == 2
+	})
 
 	// 每节点至多一个默认池（R-006）。第二个池不应抢走默认标记。
 	pools, err := svc.List(ctx, 1)

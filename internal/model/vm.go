@@ -26,11 +26,18 @@ const (
 // 因此 `status` 显示为 stopped 不代表虚拟机真的停了——它只代表**上次对账时**
 // 它是停止的（见 LastSyncedAt 与 f-2-01 的新鲜度口径）。
 type VM struct {
-	ID     int64 `gorm:"primaryKey"`
-	NodeID int64 `gorm:"not null"`
+	ID int64 `gorm:"primaryKey"`
+	// NodeID 参与两个唯一索引（名称与 UUID 都在节点内唯一），两处都要声明。
+	NodeID int64 `gorm:"not null;uniqueIndex:uniq_vm_node_name,priority:1;uniqueIndex:uniq_vm_node_uuid,priority:1"`
 	// Name 在节点内唯一（uniq_vm_node_name）；跨节点可以重名。
-	Name string  `gorm:"size:63;not null"`
-	UUID *string `gorm:"size:64"`
+	//
+	// 索引**必须在模型上声明**，不能只写在迁移里：模型不声明，测试库就没有
+	// 这条约束，于是「同名虚拟机」在测试里能建两个、真实库上却会失败——
+	// 而这条路径恰恰是最常见的一类冲突。详见 model/storage.go 的同款说明。
+	Name string `gorm:"size:63;not null;uniqueIndex:uniq_vm_node_name,priority:2"`
+	// UUID 同样**在节点内唯一**，但可为空（投影尚未同步到时）。
+	// 空值不参与唯一性判定，因此多台未同步的虚拟机不会互相冲突。
+	UUID *string `gorm:"size:64;uniqueIndex:uniq_vm_node_uuid,priority:2"`
 
 	OwnerID    *int64
 	TemplateID *int64

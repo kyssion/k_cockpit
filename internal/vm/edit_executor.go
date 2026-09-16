@@ -10,6 +10,7 @@ import (
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/task"
 )
 
 // ConfigUpdateExecutor 执行 vm.config.update 任务（F-2-05 的硬件配置变更）。
@@ -41,7 +42,7 @@ func (e *ConfigUpdateExecutor) Run(ctx context.Context, t *model.Task) error {
 		return api.InvalidParameter("没有需要修改的内容")
 	}
 
-	result, err := e.agent.Execute(ctx, agent.Operation{
+	result, err := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, agent.Operation{
 		Kind:   agent.OpVMConfigUpdate,
 		NodeID: *t.NodeID,
 		Target: p.VMName,

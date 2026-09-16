@@ -12,6 +12,7 @@ import (
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/task"
 )
 
 // snapshotCreateParams 是 vm.snapshot.create 任务的参数。
@@ -61,7 +62,7 @@ func (e *SnapshotCreateExecutor) Run(ctx context.Context, t *model.Task) error {
 		params["domain_name"] = domainSnapshotName(p.VMName, p.SnapshotID)
 	}
 
-	result, err := e.agent.Execute(ctx, agent.Operation{
+	result, err := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, agent.Operation{
 		Kind: agent.OpVMSnapshotCreate, NodeID: *t.NodeID,
 		Target: p.VMName, Params: params,
 	})
@@ -151,7 +152,7 @@ func (e *SnapshotRestoreExecutor) Run(ctx context.Context, t *model.Task) error 
 		return api.Internal()
 	}
 
-	result, err := e.agent.Execute(ctx, agent.Operation{
+	result, err := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, agent.Operation{
 		Kind: agent.OpVMSnapshotRestore, NodeID: *t.NodeID,
 		Target: p.VMName,
 		Params: map[string]any{
@@ -241,7 +242,7 @@ func (e *SnapshotDeleteExecutor) Run(ctx context.Context, t *model.Task) error {
 		return api.Internal()
 	}
 
-	result, err := e.agent.Execute(ctx, agent.Operation{
+	result, err := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, agent.Operation{
 		Kind: agent.OpVMSnapshotDelete, NodeID: *t.NodeID,
 		Target: p.VMName,
 		Params: map[string]any{

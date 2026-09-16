@@ -49,6 +49,29 @@ type taskView struct {
 	StartedAt       string `json:"started_at,omitempty"`
 	FinishedAt      string `json:"finished_at,omitempty"`
 	CreatedAt       string `json:"created_at"`
+
+	// Stages 是阶段流水，**仅在详情接口返回**。
+	//
+	// 列表不带它：一页 20 个任务就是 20 次额外查询，而列表上根本显示不下
+	// 一条时间线——它只会被白白查出来再丢掉。
+	Stages []taskStageView `json:"stages,omitempty"`
+}
+
+// taskStageView 是任务阶段的对外视图。
+type taskStageView struct {
+	Seq  int    `json:"seq"`
+	Key  string `json:"key"`
+	Name string `json:"name"`
+	// Status 取值与 task.status 同一套词汇（pending/running/success/failed/skipped）。
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"`
+	// DurationMS 是耗时毫秒。已在界面上做换算会让人疑惑「为什么没有秒」，
+	// 而耗时超过一分钟的任务在这里会得到五位数——可读性由前端负责。
+	DurationMS  int64  `json:"duration_ms"`
+	StartedAt   string `json:"started_at,omitempty"`
+	FinishedAt  string `json:"finished_at,omitempty"`
+	Retryable   bool   `json:"retryable"`
+	RetriedFrom *int64 `json:"retry_of_stage_id,omitempty"`
 }
 
 // List 返回任务列表（含归属过滤）。
@@ -88,7 +111,50 @@ func (h *Task) Get(ctx context.Context, c *app.RequestContext) {
 		api.Fail(c, err)
 		return
 	}
-	api.OK(c, toTaskView(t))
+
+	view := toTaskView(t)
+
+	// 归属校验已经在 Queue.Get 里完成，因此到这里才查阶段——反过来会先
+	// 泄漏「这个任务存在且有多少个阶段」这一信息。
+	stages, err := h.queue.Stages(ctx, id)
+	if err != nil {
+		// 查阶段失败不阻断详情：时间线是排查的辅助信息，让整个详情页报错
+		// 会连任务的状态与结果都看不到，得不偿失。
+		api.Fail(c, err)
+		return
+	}
+	for i := range stages {
+		view.Stages = append(view.Stages, toTaskStageView(&stages[i]))
+	}
+
+	api.OK(c, view)
+}
+
+func toTaskStageView(s *model.TaskStage) taskStageView {
+	view := taskStageView{
+		Seq:         s.Seq,
+		Key:         s.Key,
+		Name:        s.Name,
+		Status:      s.Status,
+		DurationMS:  s.Duration().Milliseconds(),
+		Retryable:   s.Retryable,
+		RetriedFrom: s.RetryOfStageID,
+	}
+	// Name 可能为空（旧数据或节点只给了 key），此时回落到 key——一个空的
+	// 阶段名在时间线上就是一行空白，看起来像渲染坏了。
+	if view.Name == "" {
+		view.Name = s.Key
+	}
+	if s.Message != nil {
+		view.Message = *s.Message
+	}
+	if s.StartedAt != nil {
+		view.StartedAt = s.StartedAt.Format("2006-01-02T15:04:05Z07:00")
+	}
+	if s.FinishedAt != nil {
+		view.FinishedAt = s.FinishedAt.Format("2006-01-02T15:04:05Z07:00")
+	}
+	return view
 }
 
 // Cancel 请求取消任务。

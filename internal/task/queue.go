@@ -251,8 +251,20 @@ func (q *Queue) run(ctx context.Context, t *model.Task) {
 		return
 	}
 
+	// 阶段记录器由**队列**创建并放进 context，而不是每个执行器各自构造：
+	//
+	//   - 终态的收尾只在这里发生一次。若让执行器自己收尾，12 个执行器里
+	//     但凡有一个在错误分支上忘了调，就会留下一个永远停在「执行中」的
+	//     阶段——而那种记录比没有记录更让人困惑；
+	//   - 执行器直接调用（大量单元测试）时没有队列，也就没有记录器，
+	//     此时它的所有方法都是空操作（见 Reporter 的 nil 安全性）。
+	reporter := NewReporter(q.db, t.ID)
+	ctx = WithReporter(ctx, reporter)
+
 	err := exec.Run(ctx, t)
 	if err != nil {
+		// 失败原因同时落到阶段上：任务是整体结果，阶段才回答「卡在哪」。
+		reporter.Fail(ctx, publicMessage(err))
 		q.finish(ctx, t, model.TaskFailed, publicMessage(err))
 		return
 	}
@@ -260,9 +272,12 @@ func (q *Queue) run(ctx context.Context, t *model.Task) {
 	// 执行期间可能收到了取消请求（R-007）：以取消为准，避免显示成成功
 	// 而用户以为自己阻止了它。
 	if q.cancelRequested(ctx, t.ID) {
+		reporter.Fail(ctx, "任务已被取消")
 		q.finish(ctx, t, model.TaskCanceled, "")
 		return
 	}
+
+	reporter.Success(ctx)
 	q.finish(ctx, t, model.TaskSuccess, "")
 }
 
@@ -301,27 +316,21 @@ func (q *Queue) finish(ctx context.Context, t *model.Task, status, message strin
 	})
 }
 
-// ReportProgress 由 Executor 上报进度（mock 与真实 agent 共用）。
-func (q *Queue) ReportProgress(ctx context.Context, taskID int64, progress int, stage string) {
-	if progress < 0 {
-		progress = 0
-	}
-	if progress > 100 {
-		progress = 100
-	}
-	updates := map[string]any{
-		"progress":         progress,
-		"last_reported_at": time.Now(),
-	}
-	if stage != "" {
-		updates["current_stage"] = stage
-	}
-	if err := q.db.WithContext(ctx).Model(&model.Task{}).
-		Where("id = ? AND status = ?", taskID, model.TaskRunning).
-		Updates(updates).Error; err != nil {
-		log.Printf("[task] 上报任务 %d 进度失败: %v", taskID, err)
-	}
+// Stages 返回任务的阶段流水。
+//
+// **不做归属校验**：调用方必须先用 Get 拿到任务（那一步才做校验）。把两件事
+// 分开是因为阶段查询会被高频轮询，而归属校验需要额外一次任务查询——让它在
+// 每次轮询里重复一遍没有意义。
+func (q *Queue) Stages(ctx context.Context, taskID int64) ([]model.TaskStage, error) {
+	return Stages(ctx, q.db, taskID)
 }
+
+// 进度与当前阶段的上报已并入 Reporter（见 stage.go）。
+//
+// 此前这里有一个 ReportProgress，只接受一个字符串，**从未被任何执行器
+// 调用**。它的问题是信息量太少：一个孤立的进度数字无法回答「卡在哪一步」，
+// 而执行器为了调用它还得自己维护「现在到哪一步了」的计数器——那本该是
+// 时间线的职责。
 
 func (q *Queue) hasRunningOn(ctx context.Context, t *model.Task) bool {
 	resourceType, resourceID := t.TaskResource()

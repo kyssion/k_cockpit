@@ -61,6 +61,71 @@ const (
 	TaskVMPortForwardChange = "vm.portforward.change"
 )
 
+// 阶段的执行状态。取值与 task.status 保持同一套词汇，避免界面上出现
+// 两种说法（「执行中」与「running」）指着同一件事。
+const (
+	StagePending = "pending"
+	StageRunning = "running"
+	StageSuccess = "success"
+	StageFailed  = "failed"
+	StageSkipped = "skipped"
+)
+
+// TaskStage 对应 task_stage 表：任务内部的阶段明细。
+//
+// 与 task.current_stage 的分工需要说清楚：后者是**当前正在做什么**的一个
+// 字符串，供列表页显示一行「正在创建磁盘」；本表是**整个过程**的流水，
+// 供详情页还原「每一步各花了多久、卡在了哪一步」。
+//
+// 两者不可互相替代：列表页要的是单值（一行显示不下一条时间线），而排查
+// 时需要的恰恰是被单值覆盖掉的历史——一个任务失败在第 4 步，如果只知道
+// 它当前停在「配置网络」，就看不出前三步是快是慢、哪一步重试过。
+//
+// 阶段**由节点上报**（agent.Operation.OnStage）：控制面不知道一次创建在
+// 宿主机上分了几步、每步多长。控制面自己编一条时间线，在真实 agent 接入
+// 后会立刻对不上号——而那种「看起来对、其实不对」的时间线比没有更糟。
+type TaskStage struct {
+	ID     int64 `gorm:"primaryKey"`
+	TaskID int64 `gorm:"not null;index:idx_task_stage_task_seq,priority:1"`
+	// Seq 是阶段序号，从 1 开始，决定时间线的展示顺序。
+	//
+	// 用显式序号而不是靠 started_at 排序：同一毫秒内开始的阶段（mock 与
+	// 快速操作中很常见）时间戳完全相同，靠时间排序会得到随机顺序，而一条
+	// 顺序错乱的时间线会把人引向错误的结论。
+	Seq int `gorm:"not null;index:idx_task_stage_task_seq,priority:2"`
+
+	// Key 是稳定标识（供程序判断），Name 是中文名（供界面显示）。
+	// 两者都存：只存 Key 会让界面自己去维护一张翻译表，而那表迟早与后端
+	// 新增的阶段对不上；只存 Name 则无法按阶段做统计与告警。
+	Key  string `gorm:"column:key;size:64;not null"`
+	Name string `gorm:"size:64"`
+
+	Status string `gorm:"size:16;not null;default:pending"`
+	// Message 是该阶段的补充说明（失败原因、跳过理由）。
+	Message *string `gorm:"size:512"`
+
+	Retryable bool `gorm:"not null;default:false"`
+	// RetryOfStageID 指向被重试的原始阶段。
+	//
+	// 保留这条链而不是覆盖原记录：「这一步重试过 3 次」本身是排障时最需要
+	// 知道的事实之一，而覆盖会让它看起来像一次就过了。
+	RetryOfStageID *int64
+
+	StartedAt  *time.Time
+	FinishedAt *time.Time
+}
+
+// TableName 固定表名。
+func (TaskStage) TableName() string { return "task_stage" }
+
+// Duration 返回该阶段的耗时；未结束时返回 0。
+func (s *TaskStage) Duration() time.Duration {
+	if s.StartedAt == nil || s.FinishedAt == nil {
+		return 0
+	}
+	return s.FinishedAt.Sub(*s.StartedAt)
+}
+
 // Task 对应 task 表。
 //
 // 这是**异步操作的唯一载体**：任何可能超过数秒的操作都必须入队，

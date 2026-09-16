@@ -13,6 +13,7 @@ import (
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/task"
 )
 
 // createParams 是 storage.pool.create 任务的参数。
@@ -57,7 +58,7 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 		return api.Internal()
 	}
 
-	result, err := e.agent.Execute(ctx, agent.Operation{
+	result, err := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, agent.Operation{
 		Kind:   agent.OpStoragePoolCreate,
 		NodeID: p.NodeID,
 		Target: p.DevicePath,
@@ -94,23 +95,32 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 	}
 
 	if err := e.db.WithContext(ctx).Create(&pool).Error; err != nil {
-		if isDuplicateKey(err) {
-			return api.Conflict("该设备已被存储池占用")
+		if !isDuplicateKey(err) {
+			log.Printf("[storage] 写入存储池记录失败: %v", err)
+			return api.Internal()
 		}
-		// 默认池的唯一索引冲突：并发的两次创建都认为自己该是默认池。
-		// 宿主机上的池已经建好了，此时报失败会让用户以为白干一场——
-		// 退一步，把它建成非默认池。
-		if p.IsDefault && isDefaultConflict(err) {
+
+		// 到这里有两种可能：设备已被占用，或本节点已有默认池。
+		//
+		// 判定方式是用**再试一次非默认**去区分，而不是匹配错误信息里的索引名。
+		// 那个名字依赖驱动：PostgreSQL 会带（duplicate key ... "uniq_storage_pool_default"），
+		// SQLite 只给 "UNIQUE constraint failed: storage_pool.node_id"——
+		// 靠它判定会让退让逻辑在 SQLite 上静默失效，而测试库正是 SQLite，
+		// 于是这条分支永远没被验证过。
+		//
+		// 默认池冲突需要退让：宿主机上的池已经建好了，此时报失败会让用户
+		// 以为白干一场。而设备占用**不能**退让——退了也还是占着，必须报错。
+		if p.IsDefault {
 			pool.IsDefault = false
-			if err := e.db.WithContext(ctx).Create(&pool).Error; err != nil {
-				log.Printf("[storage] 写入存储池记录失败: %v", err)
-				return api.Internal()
+			if retryErr := e.db.WithContext(ctx).Create(&pool).Error; retryErr == nil {
+				log.Printf("[storage] 本节点已有默认池，%s 已创建为非默认池 id=%d",
+					p.DevicePath, pool.ID)
+				return nil
 			}
-			log.Printf("[storage] 默认池冲突，已创建为非默认池 id=%d", pool.ID)
-			return nil
 		}
-		log.Printf("[storage] 写入存储池记录失败: %v", err)
-		return api.Internal()
+		// 非默认仍然冲突，说明是设备被占用——这是用户需要知道的事，
+		// 且换成非默认池也解决不了。
+		return api.Conflict("该设备已被存储池占用")
 	}
 
 	log.Printf("[storage] 已创建存储池 id=%d node=%d device=%s task=%d",
@@ -152,7 +162,7 @@ func (e *DeleteExecutor) Run(ctx context.Context, t *model.Task) error {
 		return api.Internal()
 	}
 
-	result, err := e.agent.Execute(ctx, agent.Operation{
+	result, err := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, agent.Operation{
 		Kind:   agent.OpStoragePoolDelete,
 		NodeID: p.NodeID,
 		Target: p.DevicePath,
@@ -192,10 +202,10 @@ func isDuplicateKey(err error) bool {
 	return strings.Contains(msg, "duplicate") || strings.Contains(msg, "unique constraint")
 }
 
-// isDefaultConflict 判断是否为「同节点已有默认池」的冲突。
+// 这里曾有一个 isDefaultConflict，靠「错误信息里是否含索引名
+// uniq_storage_pool_default」来区分默认池冲突与设备占用。
 //
-// 单独判定它是因为处理方式不同：设备占用要报错，而默认池冲突只需退让——
-// 把新池建成非默认池，比让用户看到一条莫名其妙的约束冲突要好。
-func isDefaultConflict(err error) bool {
-	return isDuplicateKey(err) && strings.Contains(strings.ToLower(err.Error()), "uniq_storage_pool_default")
-}
+// 它已删除：索引名并非各驱动都会返回（SQLite 只给列名），因此那条退让分支
+// 在测试库上从不生效，也就从没被验证过。现在改为**按行为区分**——再试一次
+// 非默认池，能成就是默认池冲突，还冲突就是设备被占用。判断依据从「驱动
+// 怎么措辞」换成了「数据库实际允许什么」，这是唯一跨驱动都成立的依据。

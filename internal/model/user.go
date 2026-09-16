@@ -28,8 +28,10 @@ const (
 
 // User 对应 user 表。
 type User struct {
-	ID                  int64   `gorm:"primaryKey"`
-	Username            string  `gorm:"size:64;not null"`
+	ID int64 `gorm:"primaryKey"`
+	// 索引与迁移一致（uniq_user_username）。用户名唯一是登录的前提：
+	// 没有它，同名用户可以存在两个，「用用户名找用户」就会拿到不确定的一个。
+	Username            string  `gorm:"size:64;not null;uniqueIndex:uniq_user_username"`
 	PasswordHash        string  `gorm:"size:255;not null"`
 	Role                string  `gorm:"size:16;not null;default:tenant"`
 	Status              string  `gorm:"size:16;not null;default:pending"`

@@ -31,14 +31,17 @@ const NetworkDefaultName = "default"
 // M2 只使用 `IsSystem = true` 的系统基础网络记录；VPC 交换机的其余字段
 // （带宽、流量配额等）由 M3 启用（f-4-01 §5.1）。
 type VpcSwitch struct {
-	ID      int64 `gorm:"primaryKey"`
-	NodeID  int64 `gorm:"not null"`
+	ID int64 `gorm:"primaryKey"`
+	// NodeID 参与两个唯一索引：同节点内交换机名唯一、VLAN ID 唯一。
+	NodeID  int64 `gorm:"not null;uniqueIndex:uniq_vpc_switch_node_name,priority:1;uniqueIndex:uniq_vpc_switch_node_vlan,priority:1"`
 	OwnerID *int64
-	Name    string `gorm:"size:64;not null"`
+	Name    string `gorm:"size:64;not null;uniqueIndex:uniq_vpc_switch_node_name,priority:2"`
 	Mode    string `gorm:"size:16;not null;default:empty"`
 	// BridgeName 是宿主机上的网桥名。
 	BridgeName string `gorm:"size:64;not null"`
-	VlanID     *int   `gorm:"column:vlan_id"`
+	// VlanID 在节点内唯一（uniq_vpc_switch_node_vlan），可为空。
+	// 空值不参与唯一性判定，因此多个不划 VLAN 的交换机不会互相冲突。
+	VlanID *int `gorm:"column:vlan_id;uniqueIndex:uniq_vpc_switch_node_vlan,priority:2"`
 	// column 必须显式声明：GORM 的命名策略把 `CIDR` 转成了 `c_id_r`
 	// （`CIDR` 不在它的常见缩写词表里，被按大写边界切开了），而迁移建的列
 	// 叫 `cidr`。详见 model/vm.go 中 VCPU 的同款说明。
@@ -141,8 +144,10 @@ func (VMInterface) TableName() string { return "vm_interface" }
 // （投影），本表是**控制面期望的分配**。两者不一致时界面应以实际为准——
 // 用户需要知道真实情况，而不是我们期望的情况。
 type StaticIP struct {
-	ID     int64 `gorm:"primaryKey"`
-	NodeID int64 `gorm:"not null"`
+	ID int64 `gorm:"primaryKey"`
+	// NodeID 参与 uniq_static_ip_node_ip：**地址在节点内唯一**，
+	// 跨节点可以重复（不同宿主机的网段本就独立）。
+	NodeID int64 `gorm:"not null;uniqueIndex:uniq_static_ip_node_ip,priority:1"`
 
 	// VMID 为空表示地址已分配但尚未绑定到虚拟机（预留给将来使用）。
 	VMID *int64 `gorm:"index:idx_static_ip_vm_id"`
@@ -150,7 +155,10 @@ type StaticIP struct {
 	// InterfaceOrder 对应 VMInterface.Order。
 	InterfaceOrder *int
 
-	IP            string  `gorm:"size:64;not null"`
+	// 索引是同一地址只能被分配一次的依据：没有它，两次分配会各写一行，
+	// 而「这个地址归谁」就没有确定答案了——冲突检测会在受理时通过，
+	// 到实际下发时才以两个网卡抢同一个地址的形式暴露。
+	IP            string  `gorm:"size:64;not null;uniqueIndex:uniq_static_ip_node_ip,priority:2"`
 	MAC           *string `gorm:"size:32"`
 	AddressFamily string  `gorm:"size:8;not null;default:ipv4"`
 

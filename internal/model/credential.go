@@ -15,8 +15,10 @@ const CredentialVNC = "_vnc"
 // 需要能被还原成明文交给 agent 或参与协议认证，因此不能用单向哈希——
 // 但也因此，它是本项目里最需要保护的数据之一。
 type VMCredential struct {
-	ID       int64   `gorm:"primaryKey"`
-	VMID     int64   `gorm:"not null"`
+	ID int64 `gorm:"primaryKey"`
+	// 索引与迁移声明一致（uniq_vm_credential_vm_id）：一台虚拟机一份凭证。
+	// 不声明的话测试库不会有这条约束，而真实库有——两侧分叉。
+	VMID     int64   `gorm:"not null;uniqueIndex:uniq_vm_credential_vm_id"`
 	Username *string `gorm:"size:64"`
 	// PasswordEnc 是 AES-GCM 密文（见 internal/cryptoutil）。
 	PasswordEnc string `gorm:"type:text;not null"`

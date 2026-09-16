@@ -19,11 +19,21 @@ const (
 //
 // 唯一标识是 `(NodeID, DeviceID)` 而不是设备路径：路径会随插入顺序变化，
 // 用它做键会导致同一块盘被识别成两块（f-5-01 R-010）。
+// 索引在这里**显式声明**，而不是只写在迁移里。
+//
+// 测试库由 AutoMigrate 按模型建表：模型不声明，测试库就没有这些约束，于是
+// 「两个池同时成为默认池」在测试里畅通无阻，只在真实库上被拦下；而生产里
+// 那条路径的兜底逻辑（改成非默认池）也就永远没被测试覆盖过。
+//
+// 这与列名那次（VCPU → v_cpu、CIDR → c_id_r）是同一个成因：**模型与迁移
+// 各说各话，而测试库站在模型这一边**。凡是迁移里有的约束，模型都要有。
 type StoragePool struct {
-	ID     int64 `gorm:"primaryKey"`
-	NodeID int64 `gorm:"not null"`
+	ID int64 `gorm:"primaryKey"`
+	// NodeID 参与两个索引，因此两处都要声明；
+	// uniq_storage_pool_node_device 是复合索引，用 priority 指定列序。
+	NodeID int64 `gorm:"not null;index:idx_storage_pool_node_id;uniqueIndex:uniq_storage_pool_node_device,priority:1"`
 	// DeviceID 是设备的稳定标识；DevicePath 仅用于展示。
-	DeviceID   string  `gorm:"size:128;not null"`
+	DeviceID   string  `gorm:"size:128;not null;uniqueIndex:uniq_storage_pool_node_device,priority:2"`
 	DevicePath *string `gorm:"size:255"`
 	// Kind 是存储类型，当前只有 local。
 	Kind   string  `gorm:"size:16;not null;default:local"`
@@ -37,9 +47,12 @@ type StoragePool struct {
 	TotalBytes  int64 `gorm:"not null;default:0"`
 	UsableBytes int64 `gorm:"not null;default:0"`
 
-	// IsDefault 表示该池是该节点的默认池。每节点至多一个，由数据库的
-	// 部分唯一索引 uniq_storage_pool_default 保证。
-	IsDefault bool `gorm:"not null;default:false"`
+	// IsDefault 表示该池是该节点的默认池，每节点至多一个（R-006）。
+	//
+	// where 条件**不能省**：唯一性只针对 is_default = true 的行。少了它，
+	// 唯一约束会落到所有行上，每节点就只能存一个**非默认**池——那显然不对，
+	// 而且会在第二个池创建时以一个看不懂的冲突暴露出来。
+	IsDefault bool `gorm:"not null;default:false;uniqueIndex:uniq_storage_pool_default,where:is_default"`
 
 	Status string  `gorm:"size:16;not null;default:ready"`
 	Remark *string `gorm:"size:255"`

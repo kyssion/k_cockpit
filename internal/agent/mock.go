@@ -13,17 +13,121 @@ import (
 // 它**只保证接口有返回值**，不模拟节点行为：不模拟耗时、进度推进、失败注入
 // 与离线（见 docs/06-decisions/0007-mock-agent-first.md）。接入真实 agent 前，
 // 执行失败、超时、节点离线等分支不会被触发，需在联调时集中验证。
-type MockClient struct{}
+//
+// 有一个例外：**阶段会上报**。阶段不是「节点行为的模拟」，而是节点向控制面
+// 传递信息的一种方式——不上报的话，本项目的任务时间线在接入真实 agent 之前
+// 根本没有任何数据流过，那条链路（模型、写入、查询、渲染）就始终是未验证的。
+// 因此这里按每类操作的真实步骤上报，让整条链路在 mock 下也能被走通和验收。
+type MockClient struct {
+	// StageDelay 是相邻两个阶段之间的等待。
+	//
+	// 零值表示不等待——**测试需要的是确定性，不是真实感**，让每个用例多等
+	// 一秒只会让人不愿跑测试。服务端启动时会设一个非零值，好让演示时能看见
+	// 时间线逐步推进，而不是所有阶段在同一毫秒里一起出现。
+	StageDelay time.Duration
+}
 
-// NewMockClient 构造假实现。
+// NewMockClient 构造假实现（阶段之间不等待）。
 func NewMockClient() *MockClient { return &MockClient{} }
+
+// WithStageDelay 返回一份带阶段等待的副本。
+func (m *MockClient) WithStageDelay(d time.Duration) *MockClient {
+	return &MockClient{StageDelay: d}
+}
+
+// stagePlan 返回某类操作在节点上实际经历的步骤。
+//
+// 步骤写得贴近真实流程而不是「步骤一/步骤二」这类占位名：时间线的全部价值
+// 在于让人看出**卡在哪一步**，而占位名会让这一栏永远没有信息量。
+//
+// 未登记的操作返回 nil，调用方照常执行、只是没有阶段——这比编几个通用步骤
+// 要好：一个显示「执行中 → 完成」的时间线不提供任何定位能力，却会让人以为
+// 阶段是齐全的。
+func stagePlan(kind OpKind) [][2]string {
+	switch kind {
+	case OpVMCreate:
+		return [][2]string{
+			{"resource_check", "校验宿主机资源"},
+			{"disk_allocate", "分配磁盘"},
+			{"domain_define", "生成域配置"},
+			{"domain_start", "定义并启动"},
+		}
+	case OpVMDelete:
+		return [][2]string{
+			{"power_off", "停止虚拟机"},
+			{"disk_detach", "断开磁盘"},
+			{"disk_destroy", "删除磁盘"},
+			{"domain_undefine", "清理域配置"},
+		}
+	case OpVMSnapshotCreate:
+		return [][2]string{
+			{"guest_freeze", "冻结文件系统"},
+			{"disk_snapshot", "创建磁盘快照"},
+			{"guest_thaw", "解冻文件系统"},
+			{"metadata_write", "记录快照元数据"},
+		}
+	case OpVMSnapshotRestore:
+		return [][2]string{
+			{"power_off", "停止虚拟机"},
+			{"disk_rollback", "回滚磁盘"},
+			{"config_restore", "恢复配置"},
+			{"domain_start", "启动虚拟机"},
+		}
+	case OpVMSnapshotDelete:
+		return [][2]string{
+			{"snapshot_remove", "删除快照文件"},
+			{"metadata_remove", "清理元数据"},
+		}
+	case OpStoragePoolCreate:
+		return [][2]string{
+			{"device_format", "格式化设备"},
+			{"pool_mount", "挂载存储池"},
+			{"pool_register", "登记到节点"},
+		}
+	case OpStoragePoolDelete:
+		return [][2]string{
+			{"pool_unmount", "卸载存储池"},
+			{"pool_data_remove", "删除池数据"},
+			{"dir_cleanup", "清理目录"},
+		}
+	case OpVMConfigUpdate:
+		return [][2]string{
+			{"config_write", "写入域配置"},
+			{"config_apply", "应用变更"},
+		}
+	case OpVMInterfaceChange:
+		return [][2]string{
+			{"config_write", "更新域配置"},
+			{"nic_hotplug", "热插拔网卡"},
+		}
+	case OpVMStaticIPChange:
+		return [][2]string{
+			{"lease_write", "写入 DHCP 租约"},
+			{"lease_reload", "重载生效"},
+		}
+	case OpVMPortForwardChange:
+		return [][2]string{
+			{"rule_write", "写入转发规则"},
+			{"firewall_apply", "应用防火墙规则"},
+		}
+	}
+	// 电源类操作是单步的，但仍然会上报一项：否则界面上这类任务的时间线是
+	// 空的，而「空空如也」与「不支持展示」看起来是同一件事。
+	switch kind {
+	case OpVMStart, OpVMShutdown, OpVMPoweroff, OpVMReboot, OpVMReset:
+		return [][2]string{{"node_exec", "节点执行"}}
+	}
+	return nil
+}
 
 // Execute 直接返回成功，不产生任何副作用。
 //
 // 对需要返回值的操作给出形状合理的假数据（如创建虚拟机返回 UUID），
 // 否则上层拿不到它需要的东西，会在业务代码里被迫写 mock 专用的兜底分支
 // ——那正是 ADR-0007 要避免的「业务代码感知 mock」。
-func (m *MockClient) Execute(_ context.Context, op Operation) (*Result, error) {
+func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error) {
+	m.reportStages(ctx, op)
+
 	data := map[string]any{}
 
 	switch op.Kind {
@@ -107,6 +211,37 @@ func (m *MockClient) Execute(_ context.Context, op Operation) (*Result, error) {
 		Message: "mock: " + string(op.Kind) + " 已执行",
 		Data:    data,
 	}, nil
+}
+
+// reportStages 按操作类型上报阶段。
+//
+// 在真正返回之前一次性报完，而不是边做边报：mock 本身不做任何事，把阶段
+// 分散到「执行过程中」需要伪造一套并发时序，而那是 ADR-0007 明确不做的。
+// 调用方按「开始即记录、下一个开始时收尾上一个」处理，因此顺序上报得到的
+// 时间线形状与真实节点一致。
+//
+// ctx 取消时立即停止：任务被取消后还继续报阶段，会让界面在「已取消」之后
+// 又冒出新的步骤。
+func (m *MockClient) reportStages(ctx context.Context, op Operation) {
+	if op.OnStage == nil {
+		return
+	}
+	plan := stagePlan(op.Kind)
+	for i, s := range plan {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		op.OnStage(Stage{Key: s[0], Name: s[1], Index: i + 1, Total: len(plan)})
+		if m.StageDelay > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(m.StageDelay):
+			}
+		}
+	}
 }
 
 // mockUUID 生成稳定且可辨识的假 UUID。

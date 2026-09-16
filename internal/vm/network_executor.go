@@ -11,6 +11,7 @@ import (
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/task"
 )
 
 // InterfaceChangeExecutor 执行 vm.interface.change 任务。
@@ -37,7 +38,7 @@ func (e *InterfaceChangeExecutor) Run(ctx context.Context, t *model.Task) error 
 		return api.Internal()
 	}
 
-	result, err := e.agent.Execute(ctx, agent.Operation{
+	result, err := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, agent.Operation{
 		Kind: agent.OpVMInterfaceChange, NodeID: *t.NodeID,
 		Target: p.VMName, Params: p.Spec,
 	})
@@ -102,7 +103,7 @@ func (e *StaticIPChangeExecutor) Run(ctx context.Context, t *model.Task) error {
 		return api.Internal()
 	}
 
-	result, err := e.agent.Execute(ctx, agent.Operation{
+	result, err := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, agent.Operation{
 		Kind: agent.OpVMStaticIPChange, NodeID: *t.NodeID,
 		Target: p.VMName, Params: p.Spec,
 	})
@@ -151,7 +152,7 @@ func (e *PortForwardChangeExecutor) Run(ctx context.Context, t *model.Task) erro
 		return api.Internal()
 	}
 
-	result, err := e.agent.Execute(ctx, agent.Operation{
+	result, err := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, agent.Operation{
 		Kind: agent.OpVMPortForwardChange, NodeID: *t.NodeID,
 		Target: p.VMName, Params: p.Spec,
 	})

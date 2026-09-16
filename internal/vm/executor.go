@@ -13,6 +13,7 @@ import (
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/task"
 )
 
 // createParams 是 vm.create 任务的参数。
@@ -61,7 +62,7 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 		return api.Internal()
 	}
 
-	result, err := e.agent.Execute(ctx, agent.Operation{
+	result, err := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, agent.Operation{
 		Kind:   agent.OpVMCreate,
 		NodeID: p.NodeID,
 		Target: p.Name,
@@ -162,7 +163,7 @@ func (e *PowerExecutor) Run(ctx context.Context, t *model.Task) error {
 
 	action := PowerAction(p.Action)
 
-	result, err := e.agent.Execute(ctx, agent.Operation{
+	result, err := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, agent.Operation{
 		Kind:   action.Op(),
 		NodeID: *t.NodeID,
 		Target: p.VMName,
@@ -242,7 +243,7 @@ func (e *DeleteExecutor) Run(ctx context.Context, t *model.Task) error {
 		return api.Internal()
 	}
 
-	result, err := e.agent.Execute(ctx, agent.Operation{
+	result, err := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, agent.Operation{
 		Kind:   agent.OpVMDelete,
 		NodeID: *t.NodeID,
 		Target: p.VMName,

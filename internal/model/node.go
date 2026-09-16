@@ -40,7 +40,10 @@ type Node struct {
 	IsMigrationTarget bool   `gorm:"not null;default:true"`
 
 	// agent 注册与信任信息。
-	AgentID         *string `gorm:"size:64"`
+	// 索引与迁移一致（uniq_node_agent_id）：agent 身份唯一，避免同一个
+	// agent 被登记成两个节点。**可为空**，而空值不参与唯一性判定——
+	// 尚未接入的节点 AgentID 为空，不该因为「已有另一个空值」而冲突。
+	AgentID         *string `gorm:"size:64;uniqueIndex:uniq_node_agent_id"`
 	EnrollTokenHash *string `gorm:"size:128"`
 	EnrollExpiresAt *time.Time
 	CertFingerprint *string `gorm:"size:128"`
