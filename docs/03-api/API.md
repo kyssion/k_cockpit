@@ -217,13 +217,13 @@
 | API-032 | GET | `/api/v1/vms/:id/console/screenshot` | 控制台截帧预览；**当前返回 503**——截帧需 agent 侧图形导出能力，该契约尚未定义 | 是 | 已实现（能力待 agent） | F-2-08 |
 | API-033 | GET | `/api/v1/vms/:id/console/ws` | **WebSocket**：VNC 流量代理（经 agent 通道转发，不直连宿主机）；**升级前**完成鉴权与授权，会话数上限 3 | 是 | 已实现 | F-2-08 |
 | API-034 | GET | `/api/v1/security/high-risk-policy` | 高风险操作清单与判定口径（供前端渲染提示；**清单由后端下发，前端不得硬编码第二份**） | 是 | 已实现 | F-10-02 |
-| API-035 | POST | `/api/v1/auth/risk-verification` | 提交验证码，换取一次性高风险许可（2 分钟有效、消费即失效、绑定会话） | 是 | 已实现 | F-10-01 |
+| API-035 | POST | `/api/v1/auth/risk-verification` | 提交验证码，换取一次性高风险许可（2 分钟有效、消费即失效、绑定会话）；`method` 由**后端下发的可用方式列表**决定，其中 `dev_bypass` 仅在开发模式出现 | 是 | 已实现 | F-10-01 |
 | API-036 | GET | `/api/v1/settings` | 设置项清单：**元数据 + 当前生效值 + 来源**（环境变量 / 面板设置 / 默认值）；未交付标签的项不出现 | 是（管理员） | 已实现 | F-9-01 |
 | API-037 | PATCH | `/api/v1/settings` | 批量更新设置；**部分成功**语义，逐项返回「已生效 / 失败 / 已回滚」；被环境变量锁定的项一律拒绝 | 是（管理员） | 已实现 | F-9-01 |
 | API-038 | POST | `/api/v1/settings/rollback` | 将指定设置项回滚到最近一次变更前的值（只保留一次前值，回滚本身也可再回滚） | 是（管理员） | 已实现 | F-9-01 |
 | API-039 | GET | `/api/v1/setup/status` | 系统是否已完成初始化（供前端决定跳初始化页或登录页） | 否（公开，理由见 [ADR-0008](../06-decisions/0008-first-admin-bootstrap.md)） | 已实现 | 首次初始化 |
 | API-040 | POST | `/api/v1/setup/admin` | 用一次性令牌创建首个管理员；成功后自动建立会话 | 否（公开，理由同上） | 已实现 | 首次初始化 |
-| API-041 | GET | `/api/v1/auth/security-setup` | 二次验证方式的绑定进度与可用方式 | 是 | 已实现 | F-10-01 |
+| API-041 | GET | `/api/v1/auth/security-setup` | 二次验证方式的绑定进度与可用方式；`dev_bypass` 回报开发期万能码是否启用（由后端下发，前端不得自行推断，否则会出现「界面说没开、实际开着」） | 是 | 已实现 | F-10-01 |
 | API-042 | POST | `/api/v1/auth/totp/setup` | 生成 TOTP 密钥并返回 otpauth URI（**未启用**，需确认） | 是 | 已实现 | F-10-01 |
 | API-043 | POST | `/api/v1/auth/totp/confirm` | 提交动态码启用绑定，并返回恢复码（**只返回一次**） | 是 | 已实现 | F-10-01 |
 | API-044 | GET | `/api/v1/storage-pools/:id` | 单个存储池详情（配置、容量与新鲜度） | 是（管理员） | 已实现 | F-5-01 |
