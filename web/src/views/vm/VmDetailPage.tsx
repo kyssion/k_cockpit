@@ -125,6 +125,11 @@ export function VmDetailPage() {
                 }}
               />
             ))}
+            <Link to={`/vm/${vm.id}/console`}>
+              <Button variant="secondary" size="sm">
+                控制台
+              </Button>
+            </Link>
             <Button variant="danger" size="sm" onClick={() => setDeleteOpen(true)}>
               删除
             </Button>

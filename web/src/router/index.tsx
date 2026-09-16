@@ -1,6 +1,7 @@
+import { lazy, Suspense } from 'react'
 import { createBrowserRouter } from 'react-router'
 
-import { Placeholder } from '@/components/common/Feedback'
+import { PageLoading, Placeholder } from '@/components/common/Feedback'
 import { AppLayout } from '@/layout/AppLayout'
 import { DashboardPage } from '@/views/dashboard/DashboardPage'
 import { LoginPage } from '@/views/auth/LoginPage'
@@ -12,6 +13,17 @@ import { SettingsPage } from '@/views/settings/SettingsPage'
 import { StoragePoolPage } from '@/views/storage/StoragePoolPage'
 import { TaskListPage } from '@/views/task/TaskListPage'
 import { VmDetailPage } from '@/views/vm/VmDetailPage'
+
+// noVNC 只在控制台页面用得到，但它是主 chunk 里最大的一块（约 60 KB）。
+// 静态导入会让所有用户（包括从不打开控制台的那些）都下载它。
+//
+// react/only-export-components 要求「文件只导出组件」才能启用 Fast Refresh。
+// 本文件是路由配置，导出的是 router 常量而非组件，天然不满足该前提。
+/* oxlint-disable react/only-export-components */
+const LazyConsolePage = lazy(() =>
+  import('@/views/vm/ConsolePage').then((m) => ({ default: m.ConsolePage })),
+)
+/* oxlint-enable react/only-export-components */
 import { VmListPage } from '@/views/vm/VmListPage'
 
 import { RequireAuth } from './RequireAuth'
@@ -40,6 +52,14 @@ export const router = createBrowserRouter([
           { index: true, element: <DashboardPage /> },
           { path: 'vm', element: <VmListPage /> },
           { path: 'vm/:id', element: <VmDetailPage /> },
+          {
+            path: 'vm/:id/console',
+            element: (
+              <Suspense fallback={<PageLoading />}>
+                <LazyConsolePage />
+              </Suspense>
+            ),
+          },
           { path: 'task', element: <TaskListPage /> },
           { path: 'my-storage', element: pending('我的存储', '个人空间与文件管理') },
           { path: 'public-ip', element: pending('公网 IP', '资源池与绑定') },
