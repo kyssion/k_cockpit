@@ -46,6 +46,8 @@ export interface SwitchView {
   dhcp_start?: string
   dhcp_end?: string
   uplink_if?: string
+  /** 为空表示不划 VLAN。**有无是两个不同的配置**，不能用 0 代替。 */
+  vlan_id?: number
   is_system: boolean
   status: string
 }

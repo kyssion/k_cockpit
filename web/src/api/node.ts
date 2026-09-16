@@ -6,7 +6,7 @@
  *   - `status` 是**运行态**，由心跳时间推导。
  * 一个 enrolled 的节点可能处于 offline，一个 pending 的节点则必然是 unknown。
  */
-import { del, get, post } from './client'
+import { del, get, patch, post } from './client'
 
 export type NodeStatus = 'online' | 'offline' | 'unknown'
 export type EnrollState = 'pending' | 'enrolled'
@@ -18,6 +18,16 @@ export interface NodeView {
   enroll_state: EnrollState
   enabled: boolean
   maintenance_mode: boolean
+  /**
+   * 是否可作为迁移目标。
+   *
+   * 进入维护模式时界面要提示这一条：维护中的节点不该继续承接迁移——
+   * 迁移会把新虚拟机放到它上面，而那正是「引入变更」。
+   */
+  is_migration_target: boolean
+  /** 仅在处于维护模式时有值；退出时后端会清空。 */
+  maintenance_reason?: string
+  maintenance_at?: string
   agent_version?: string
   protocol_version: number
   capabilities?: string[]
@@ -49,6 +59,13 @@ export const nodeApi = {
       name,
       ttl_hours: ttlHours,
     }),
+
+  /**
+   * 进入 / 退出维护模式（F-6-05）。**同步生效**——它纯粹是控制面的标志，
+   * 所有拦截都发生在受理请求那一刻，因此没有「等任务跑完才生效」的窗口。
+   */
+  setMaintenance: (id: number, enabled: boolean, reason?: string) =>
+    patch<NodeView>(`/api/v1/nodes/${id}/maintenance`, { enabled, reason }),
 
   remove: (id: number) => del<void>(`/api/v1/nodes/${id}`),
 }

@@ -1,27 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
 
+import { Link } from 'react-router'
+
 import { ApiError, NetworkError } from '@/api/client'
-import { nodeApi, type EnrollTokenResult, type NodeStatus, type NodeView } from '@/api/node'
+import { nodeApi, type EnrollTokenResult, type NodeView } from '@/api/node'
 import { Button } from '@/components/common/Button'
 import { EmptyState, PageLoading } from '@/components/common/Feedback'
 import { Input } from '@/components/common/Input'
 import { Modal } from '@/components/common/Modal'
-import { StatusBadge, type StatusTone } from '@/components/common/StatusBadge'
+import { StatusBadge } from '@/components/common/StatusBadge'
 import { relativeTime } from '@/utils/format'
+import { NODE_STATUS_LABEL, NODE_STATUS_TONE } from '@/utils/labels'
 
-/** 运行态 → 语义色（FRONTEND §4.2：全局统一，不在此处另配色）。 */
-const STATUS_TONE: Record<NodeStatus, StatusTone> = {
-  online: 'success',
-  offline: 'danger',
-  unknown: 'idle',
-}
-
-const STATUS_LABEL: Record<NodeStatus, string> = {
-  online: '在线',
-  offline: '离线',
-  unknown: '未知',
-}
+/** 运行态 → 语义色与中文名统一取自 utils/labels（列表与详情页共用一份）。 */
 
 export function NodeListPage() {
   const queryClient = useQueryClient()
@@ -94,17 +86,22 @@ export function NodeListPage() {
               {nodes.data.map((node) => (
                 <tr key={node.id} className="border-t border-line hover:bg-raised">
                   <td className="px-4 py-2.5">
-                    <span className="font-medium text-ink">{node.name}</span>
+                    <Link
+                      to={`/node/${node.id}`}
+                      className="font-medium text-ink hover:text-brand hover:underline"
+                    >
+                      {node.name}
+                    </Link>
                     {node.enroll_state === 'pending' && (
                       <span className="ml-2 text-xs text-warning">等待接入</span>
                     )}
                   </td>
                   <td className="px-4 py-2.5">
                     <StatusBadge
-                      tone={STATUS_TONE[node.status]}
+                      tone={NODE_STATUS_TONE[node.status]}
                       striped={node.maintenance_mode}
                     >
-                      {node.maintenance_mode ? '维护中' : STATUS_LABEL[node.status]}
+                      {node.maintenance_mode ? '维护中' : NODE_STATUS_LABEL[node.status]}
                     </StatusBadge>
                   </td>
                   <td className="kc-mono px-4 py-2.5 text-ink-2">{node.agent_version || '—'}</td>

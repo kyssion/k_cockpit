@@ -7,6 +7,7 @@ import { DashboardPage } from '@/views/dashboard/DashboardPage'
 import { LoginPage } from '@/views/auth/LoginPage'
 import { SetupPage } from '@/views/auth/SetupPage'
 import { NetworkPage } from '@/views/network/NetworkPage'
+import { NodeDetailPage } from '@/views/node/NodeDetailPage'
 import { NodeListPage } from '@/views/node/NodeListPage'
 import { SecurityPage } from '@/views/security/SecurityPage'
 import { SettingsPage } from '@/views/settings/SettingsPage'
@@ -64,6 +65,7 @@ export const router = createBrowserRouter([
           { path: 'my-storage', element: pending('我的存储', '个人空间与文件管理') },
           { path: 'public-ip', element: pending('公网 IP', '资源池与绑定') },
           { path: 'node', element: <NodeListPage /> },
+          { path: 'node/:id', element: <NodeDetailPage /> },
           { path: 'storage-pool', element: <StoragePoolPage /> },
           { path: 'network', element: <NetworkPage /> },
           { path: 'firewall', element: pending('防火墙', '规则与连接管理') },

@@ -4,6 +4,7 @@
  * 集中在一处：同一状态在不同页面若用了不同措辞，用户会以为是两回事。
  * 颜色语义见 `StatusBadge`（对应 FRONTEND §4.2 的状态色）。
  */
+import type { EnrollState, NodeStatus } from '@/api/node'
 import type { TaskStatus } from '@/api/task'
 import type { VmStatus } from '@/api/vm'
 import type { StatusTone } from '@/components/common/StatusBadge'
@@ -71,4 +72,31 @@ export const POWER_ACTION_DANGEROUS: Record<string, string> = {
 /** 未登记的类型直接显示原值——比显示「未知操作」更有助于排查。 */
 export function taskTypeLabel(type: string): string {
   return TASK_TYPE_LABEL[type] ?? type
+}
+
+/**
+ * 节点的运行态。
+ *
+ * 放在这里而不是各自的页面：列表页与详情页都要用它。两处各写一份的话，
+ * 迟早会出现「列表显示『在线』、详情显示『online』」这种同一状态两种说法的
+ * 情况，而用户会以为它们指的是不同的东西。
+ */
+export const NODE_STATUS_LABEL: Record<NodeStatus, string> = {
+  online: '在线',
+  offline: '离线',
+  unknown: '未知',
+}
+
+export const NODE_STATUS_TONE: Record<NodeStatus, StatusTone> = {
+  online: 'success',
+  // 离线用 danger 而不是 idle：它是**需要有人处理**的状态，
+  // 灰色会让它在一屏节点里被略过去。
+  offline: 'danger',
+  unknown: 'idle',
+}
+
+/** 节点注册状态。 */
+export const ENROLL_STATE_LABEL: Record<EnrollState, string> = {
+  pending: '待接入',
+  enrolled: '已接入',
 }
