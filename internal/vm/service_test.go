@@ -48,7 +48,7 @@ func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task
 		&model.VM{}, &model.Task{}, &model.AuditLog{}, &model.Node{},
 		&model.VMCredential{}, &model.VMInterface{}, &model.StaticIP{},
 		&model.VpcSwitch{}, &model.VMSnapshot{}, &model.SystemSetting{},
-		&model.PortForward{},
+		&model.PortForward{}, &model.VMLock{},
 	); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
@@ -1350,7 +1350,7 @@ func TestBatchPowerPartiallySucceeds(t *testing.T) {
 	db.Create(&ok2)
 	db.Create(&theirs)
 
-	resp, err := svc.BatchPower(ctx, vm.BatchPowerRequest{
+	resp, err := svc.Batch(ctx, vm.BatchRequest{
 		VMIDs:  []int64{ok1.ID, theirs.ID, ok2.ID},
 		Action: "shutdown",
 	}, viewer, "alice", "10.0.0.1")
@@ -1385,7 +1385,7 @@ func TestBatchPowerRejectsWrongStatePerItem(t *testing.T) {
 	db.Create(&a)
 	db.Create(&b)
 
-	resp, err := svc.BatchPower(ctx, vm.BatchPowerRequest{
+	resp, err := svc.Batch(ctx, vm.BatchRequest{
 		VMIDs: []int64{a.ID, b.ID}, Action: "start",
 	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
 	if err != nil {
@@ -1414,7 +1414,7 @@ func TestBatchPowerDeduplicates(t *testing.T) {
 
 	// 同一个 ID 传两次只应受理一次。重复受理会产生两个任务，而第二个
 	// 必然因为「状态已变」而失败——用户看到一条莫名的失败记录。
-	resp, err := svc.BatchPower(ctx, vm.BatchPowerRequest{
+	resp, err := svc.Batch(ctx, vm.BatchRequest{
 		VMIDs: []int64{vm1.ID, vm1.ID}, Action: "shutdown",
 	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
 	if err != nil {
@@ -1433,12 +1433,12 @@ func TestBatchPowerRejectsBadRequests(t *testing.T) {
 	db.Create(&vm1)
 
 	// 空列表。
-	_, err := svc.BatchPower(ctx, vm.BatchPowerRequest{Action: "shutdown"},
+	_, err := svc.Batch(ctx, vm.BatchRequest{Action: "shutdown"},
 		authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
 	assertAPIError(t, err, 400)
 
 	// 动作拼错：整个请求就该被拒，而不是对每一台各失败一次。
-	_, err = svc.BatchPower(ctx, vm.BatchPowerRequest{
+	_, err = svc.Batch(ctx, vm.BatchRequest{
 		VMIDs: []int64{vm1.ID}, Action: "explode",
 	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
 	assertAPIError(t, err, 400)
@@ -1448,9 +1448,230 @@ func TestBatchPowerRejectsBadRequests(t *testing.T) {
 	for i := range ids {
 		ids[i] = int64(i + 1)
 	}
-	_, err = svc.BatchPower(ctx, vm.BatchPowerRequest{VMIDs: ids, Action: "shutdown"},
+	_, err = svc.Batch(ctx, vm.BatchRequest{VMIDs: ids, Action: "shutdown"},
 		authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
 	assertAPIError(t, err, 400)
+}
+
+// --- 业务软锁（F-2-12）---
+
+func TestLockBlocksDeleteAndUnlockRestores(t *testing.T) {
+	// 探测返回 stopped，这样「能不能删」只由锁定决定，不受运行态干扰。
+	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	ctx := context.Background()
+	viewer := authz.Viewer{UserID: 7}
+
+	row := model.VM{NodeID: 1, Name: "vm-lock", Status: model.VMStatusStopped, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	view, err := svc.SetLock(ctx, row.ID,
+		vm.LockRequest{Locked: true, Reason: "生产环境禁止删除"}, viewer, "alice", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("加锁失败: %v", err)
+	}
+	if !view.Locked || view.LockReason != "生产环境禁止删除" {
+		t.Errorf("加锁后视图未反映状态: locked=%v reason=%q", view.Locked, view.LockReason)
+	}
+
+	// 删除被拒，且理由必须说明「怎么解决」而不只是「不能删」。
+	_, err = svc.Delete(ctx, row.ID, vm.DeleteRequest{DiskAction: vm.DiskActionKeep},
+		viewer, "alice", "10.0.0.1")
+	assertAPIError(t, err, 422)
+	var apiErr *api.Error
+	if errors.As(err, &apiErr) {
+		if !strings.Contains(apiErr.Message, "锁定") {
+			t.Errorf("拒绝文案未说明锁定: %q", apiErr.Message)
+		}
+		if !strings.Contains(apiErr.Message, "解锁") {
+			t.Errorf("拒绝文案未说明该怎么办: %q", apiErr.Message)
+		}
+		// 原因要一并带出：一句「已锁定」不告诉用户该找谁、为什么不能删。
+		if !strings.Contains(apiErr.Message, "生产环境禁止删除") {
+			t.Errorf("拒绝文案未带出锁定原因: %q", apiErr.Message)
+		}
+	}
+
+	// 解锁后应能正常删除。
+	after, err := svc.SetLock(ctx, row.ID, vm.LockRequest{Locked: false},
+		viewer, "alice", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("解锁失败: %v", err)
+	}
+	if after.Locked {
+		t.Error("解锁后视图仍显示已锁定")
+	}
+	// 解锁时把 reason 一起清掉：留着会得到「未锁定，但原因是『生产环境禁止删除』」
+	// 这种自相矛盾的记录。
+	if after.LockReason != "" {
+		t.Errorf("解锁后锁定原因未清空: %q", after.LockReason)
+	}
+
+	if _, err := svc.Delete(ctx, row.ID, vm.DeleteRequest{DiskAction: vm.DiskActionKeep},
+		viewer, "alice", "10.0.0.1"); err != nil {
+		t.Errorf("解锁后应可删除: %v", err)
+	}
+}
+
+func TestLockIsIdempotent(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+	viewer := authz.Viewer{UserID: 7}
+
+	row := model.VM{NodeID: 1, Name: "vm-lock-idem", OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	first, err := svc.SetLock(ctx, row.ID, vm.LockRequest{Locked: true, Reason: "第一次"},
+		viewer, "alice", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("首次加锁失败: %v", err)
+	}
+	firstAt := first.LockedAt
+
+	// 重复加锁不刷新 LockedAt：「锁了多久」是排查时第一眼要看的信息，
+	// 被一次重复点击重置成「刚刚」会让它失真。
+	second, err := svc.SetLock(ctx, row.ID, vm.LockRequest{Locked: true, Reason: "第二次"},
+		viewer, "alice", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("重复加锁失败: %v", err)
+	}
+	if firstAt == nil || second.LockedAt == nil || !second.LockedAt.Equal(*firstAt) {
+		t.Errorf("重复加锁刷新了加锁时间: %v → %v", firstAt, second.LockedAt)
+	}
+	if second.LockReason != "第一次" {
+		t.Errorf("重复加锁覆盖了原原因: %q", second.LockReason)
+	}
+
+	// 解锁两次同样不报错。
+	for i := 0; i < 2; i++ {
+		if _, err := svc.SetLock(ctx, row.ID, vm.LockRequest{Locked: false},
+			viewer, "alice", "10.0.0.1"); err != nil {
+			t.Fatalf("第 %d 次解锁失败: %v", i+1, err)
+		}
+	}
+}
+
+// TestLockVisibleInListView 确认列表接口带出锁定状态。
+//
+// 批量操作要**提前**提示「其中 N 台已锁定」（f-2-01 R-010），而前端的判断
+// 依据只能来自列表本身——让每个页面各自再查一次锁定，迟早会出现「界面上
+// 没标锁定、点删除却被拒绝」的不一致。
+func TestLockVisibleInListView(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+	viewer := authz.Viewer{UserID: 7}
+
+	locked := model.VM{NodeID: 1, Name: "vm-l1", OwnerID: ptr(int64(7))}
+	free := model.VM{NodeID: 1, Name: "vm-l2", OwnerID: ptr(int64(7))}
+	db.Create(&locked)
+	db.Create(&free)
+
+	if _, err := svc.SetLock(ctx, locked.ID, vm.LockRequest{Locked: true, Reason: "别删"},
+		viewer, "alice", "10.0.0.1"); err != nil {
+		t.Fatalf("加锁失败: %v", err)
+	}
+
+	views, _, err := svc.List(ctx, vm.ListFilter{Viewer: viewer, PageSize: 50})
+	if err != nil {
+		t.Fatalf("列表查询失败: %v", err)
+	}
+
+	byName := map[string]vm.View{}
+	for _, v := range views {
+		byName[v.Name] = v
+	}
+	if !byName["vm-l1"].Locked {
+		t.Error("已加锁的虚拟机在列表里未标记锁定")
+	}
+	if byName["vm-l1"].LockReason != "别删" {
+		t.Errorf("列表未带出锁定原因: %q", byName["vm-l1"].LockReason)
+	}
+	if byName["vm-l2"].Locked {
+		t.Error("未加锁的虚拟机被标记为锁定")
+	}
+}
+
+// TestBatchDeleteReportsLockedPerItem 覆盖 R-010 的后半句：
+// 批量删除含锁定项时**不静默跳过**——失败项必须出现在结果里。
+func TestBatchDeleteReportsLockedPerItem(t *testing.T) {
+	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	ctx := context.Background()
+	viewer := authz.Viewer{UserID: 7}
+
+	locked := model.VM{NodeID: 1, Name: "vm-bd1", Status: model.VMStatusStopped, OwnerID: ptr(int64(7))}
+	ok1 := model.VM{NodeID: 1, Name: "vm-bd2", Status: model.VMStatusStopped, OwnerID: ptr(int64(7))}
+	ok2 := model.VM{NodeID: 1, Name: "vm-bd3", Status: model.VMStatusStopped, OwnerID: ptr(int64(7))}
+	db.Create(&locked)
+	db.Create(&ok1)
+	db.Create(&ok2)
+
+	if _, err := svc.SetLock(ctx, locked.ID, vm.LockRequest{Locked: true, Reason: "受保护"},
+		viewer, "alice", "10.0.0.1"); err != nil {
+		t.Fatalf("加锁失败: %v", err)
+	}
+
+	resp, err := svc.Batch(ctx, vm.BatchRequest{
+		VMIDs:      []int64{locked.ID, ok1.ID, ok2.ID},
+		Action:     vm.BatchActionDelete,
+		DiskAction: vm.DiskActionKeep,
+	}, viewer, "alice", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("批量操作本身不应失败: %v", err)
+	}
+
+	if resp.Succeeded != 2 || resp.Failed != 1 {
+		t.Errorf("成功 %d 台、失败 %d 台，期望 2 与 1（items=%+v）",
+			resp.Succeeded, resp.Failed, resp.Items)
+	}
+
+	// 被锁的那台必须在结果里**出现**并且带原因——这正是「不静默跳过」。
+	var found bool
+	for _, item := range resp.Items {
+		if item.VMID != locked.ID {
+			continue
+		}
+		found = true
+		if item.OK {
+			t.Error("已锁定的虚拟机不应删除成功")
+		}
+		if !strings.Contains(item.Error, "锁定") {
+			t.Errorf("失败原因未说明锁定: %q", item.Error)
+		}
+	}
+	if !found {
+		t.Error("已锁定的虚拟机未出现在结果里——这属于静默跳过")
+	}
+}
+
+func TestBatchDeleteRequiresDiskAction(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-da", OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	// 磁盘处理方式不给默认值（R-009）：连盘删除不可逆、保留磁盘会留下
+	// 孤儿数据，两者代价完全不同，服务端替用户选一个等于把决定藏起来。
+	for _, bad := range []string{"", "unknown"} {
+		_, err := svc.Batch(ctx, vm.BatchRequest{
+			VMIDs: []int64{row.ID}, Action: vm.BatchActionDelete, DiskAction: bad,
+		}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+		if err == nil {
+			t.Errorf("磁盘处理方式 %q 应被拒绝", bad)
+		}
+	}
+}
+
+func TestLockRejectsOthersVM(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	theirs := model.VM{NodeID: 1, Name: "vm-lock-theirs", OwnerID: ptr(int64(20))}
+	db.Create(&theirs)
+
+	// 404 而非 403：403 会确认「这个 ID 存在」。
+	_, err := svc.SetLock(ctx, theirs.ID, vm.LockRequest{Locked: true},
+		authz.Viewer{UserID: 10}, "bob", "10.0.0.2")
+	assertAPIError(t, err, 404)
 }
 
 func ptr[T any](v T) *T { return &v }

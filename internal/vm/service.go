@@ -118,6 +118,17 @@ type View struct {
 	// 为 false 时界面应隐藏控制台入口，而不是给一个点了打不开的按钮
 	// （f-2-08 R-011）。
 	HasConsole bool `json:"has_console"`
+
+	// Locked 表示该虚拟机被业务软锁保护（F-2-12），此时禁止删除。
+	//
+	// 它由**后端算好下发**，界面不自行判断：批量操作要提前提示「其中 N 台
+	// 已锁定」（f-2-01 R-010），而前端的判断依据只能来自列表接口本身——
+	// 让每个页面各自再查一次锁定状态，迟早会出现「界面上没标锁定、点删除
+	// 却被拒绝」的不一致。
+	Locked bool `json:"locked"`
+	// LockReason 是加锁时填写的原因，供界面解释「为什么锁着」。
+	LockReason string     `json:"lock_reason,omitempty"`
+	LockedAt   *time.Time `json:"locked_at,omitempty"`
 }
 
 // ListFilter 是列表查询条件。
@@ -160,9 +171,21 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]View, int64, error)
 	// 而列表页可能有上百台。
 	threshold := s.staleThreshold()
 
+	// 锁定状态同样**一次查完**：列表页上要标出哪些机器被锁着，
+	// 逐个查会把一次列表请求变成上百次数据库往返。
+	ids := make([]int64, 0, len(vms))
+	for i := range vms {
+		ids = append(ids, vms[i].ID)
+	}
+	locks, err := s.lockMap(ctx, ids)
+	if err != nil {
+		log.Printf("[vm] 查询锁定状态失败: %v", err)
+		return nil, 0, api.Internal()
+	}
+
 	views := make([]View, 0, len(vms))
 	for i := range vms {
-		views = append(views, toView(&vms[i], now, threshold))
+		views = append(views, toView(&vms[i], locks[vms[i].ID], now, threshold))
 	}
 	return views, total, nil
 }
@@ -174,7 +197,12 @@ func (s *Service) Get(ctx context.Context, id int64, v authz.Viewer) (*View, err
 		return nil, err
 	}
 
-	view := toView(vm, time.Now(), s.staleThreshold())
+	lock, err := s.LockOf(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	view := toView(vm, lock, time.Now(), s.staleThreshold())
 	return &view, nil
 }
 
@@ -387,6 +415,15 @@ func (s *Service) Delete(
 		return nil, err
 	}
 
+	// 锁定检查放在最前面（f-2-01 R-010 / f-2-12）。
+	//
+	// 它是所有拒绝理由里**唯一一个持久且可自解**的：在途任务等一会儿就没了、
+	// 运行态关个机就好，而锁必须由用户主动解开。先告诉他能立刻解决的那一条，
+	// 比让他先等任务跑完、再发现还锁着要好。
+	if err := s.ensureNotLocked(ctx, vm); err != nil {
+		return nil, err
+	}
+
 	// 在途任务存在时拒绝删除，而不是排队（f-2-01 边界）。
 	//
 	// 与电源操作不同：电源操作排队是合理的（用户可能连续调整），而删除
@@ -557,7 +594,10 @@ func applyFilter(query *gorm.DB, f ListFilter) *gorm.DB {
 	return query
 }
 
-func toView(vm *model.VM, now time.Time, threshold time.Duration) View {
+// toView 构造对外视图。
+//
+// lock 允许为 nil（未加锁，且多数虚拟机连记录都没有）。
+func toView(vm *model.VM, lock *model.VMLock, now time.Time, threshold time.Duration) View {
 	view := View{
 		ID:           vm.ID,
 		NodeID:       vm.NodeID,
@@ -587,6 +627,13 @@ func toView(vm *model.VM, now time.Time, threshold time.Duration) View {
 	}
 	if vm.GroupName != nil {
 		view.GroupName = *vm.GroupName
+	}
+	// lock 允许为 nil：绝大多数虚拟机没有加过锁，连一行记录都没有。
+	// 让调用方去构造一个空记录只会在每个调用点重复同一段判断。
+	if lock.IsLocked() {
+		view.Locked = true
+		view.LockReason = derefStr(lock.Reason)
+		view.LockedAt = lock.LockedAt
 	}
 	return view
 }

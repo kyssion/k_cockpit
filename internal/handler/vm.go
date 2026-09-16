@@ -224,13 +224,22 @@ func (h *VM) Interfaces(ctx context.Context, c *app.RequestContext) {
 type batchActionRequest struct {
 	VMIDs  []int64 `json:"vm_ids"`
 	Action string  `json:"action"`
+	// DiskAction 仅 action=delete 需要，取值 delete / keep。
+	//
+	// 用指针区分「没传」与「传了空」：批量删除必须显式选择磁盘处理方式
+	// （R-009），而缺失与非法是两种不同的错误，文案也不同。
+	DiskAction string `json:"disk_action"`
 }
 
-// BatchAction 批量电源操作（API-028）。
+// BatchAction 批量操作（API-028）：电源操作与删除。
 //
 // 响应是**部分成功**语义：逐台给出结果，某一台失败不影响其它台。
 // 因此这个接口始终返回 200（除非整个请求就不合法，比如动作拼错了）——
 // 用 4xx 会让前端把「50 台里第 3 台状态不允许」当成整批失败。
+//
+// **批量删除走一次二次验证**（不是每台一次）：用户在确认框里看到的是
+// 「删除选中的 12 台」，一次验证对应这一次意图。若每台各验一次，用户会
+// 被弹十几次框——那时他会开始机械地输码，验证也就失去了意义。
 func (h *VM) BatchAction(ctx context.Context, c *app.RequestContext) {
 	var req batchActionRequest
 	if err := c.Bind(&req); err != nil {
@@ -238,17 +247,73 @@ func (h *VM) BatchAction(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
+	if req.Action == vm.BatchActionDelete {
+		if !h.risk.Require(c, risk.ActionVMDelete) {
+			return
+		}
+	}
+
 	user := auth.CurrentUser(c)
 	info := auth.ClientInfoOf(c)
 
-	result, err := h.svc.BatchPower(ctx, vm.BatchPowerRequest{
-		VMIDs: req.VMIDs, Action: req.Action,
+	result, err := h.svc.Batch(ctx, vm.BatchRequest{
+		VMIDs: req.VMIDs, Action: req.Action, DiskAction: req.DiskAction,
 	}, authz.ViewerOf(c), user.Username, info.IP)
 	if err != nil {
 		api.Fail(c, err)
 		return
 	}
 	api.OK(c, result)
+}
+
+type setLockRequest struct {
+	// Locked 用指针区分「没传」与「传了 false」：后者是明确的解锁意图，
+	// 当成参数缺失忽略掉会让用户以为解锁成功了。
+	Locked *bool  `json:"locked"`
+	Reason string `json:"reason"`
+}
+
+// SetLock 加锁或解锁（API-067）。
+//
+// **同步生效，不入队**：锁只存在于控制面，虚拟化层不知道它的存在，
+// 因此没有「需要下发才能生效」这回事。
+//
+// 只有**解锁**需要二次验证（F-2-12）：加锁是收紧、解锁是放松，让收紧
+// 也走验证只会让人懒得加锁——而这道锁的价值恰恰在于它被普遍使用。
+func (h *VM) SetLock(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	var req setLockRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+	if req.Locked == nil {
+		api.Fail(c, api.InvalidParameter("缺少 locked 字段"))
+		return
+	}
+
+	if !*req.Locked {
+		if !h.risk.Require(c, risk.ActionVMLockRelease) {
+			return
+		}
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	view, err := h.svc.SetLock(ctx, id, vm.LockRequest{
+		Locked: *req.Locked, Reason: req.Reason,
+	}, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, view)
 }
 
 // EditForm 返回编辑页的表单元数据与当前值（API-056）。

@@ -132,9 +132,15 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/vms", requireAuth, vmHandler.List)
 		v1.GET("/vms/:id", requireAuth, vmHandler.Get)
 		v1.POST("/vms", requireAuth, vmHandler.Create)
-		// 批量电源操作（F-2-01）。逐台独立受理、可部分成功，因此始终返回
-		// 200，逐台的结果在响应体里。
+		// 批量操作（F-2-01）：电源与删除。逐台独立受理、可部分成功，
+		// 因此始终返回 200，逐台的结果在响应体里。
+		//
+		// 删除动作在此处走一次二次验证（本文件是角色与验证要求的集中声明处）。
 		v1.POST("/vms/batch-actions", requireAuth, vmHandler.BatchAction)
+
+		// 业务软锁（F-2-12）。同步生效——锁只在控制面，虚拟化层不知道它。
+		// 解锁需要二次验证，因此下面这条路由也受 risk 保护（在 handler 内声明）。
+		v1.PATCH("/vms/:id/lock", requireAuth, vmHandler.SetLock)
 		// 电源与删除都是异步操作：受理时校验状态并返回任务标识，执行由
 		// 任务队列按资源锁串行（f-2-01 R-005）。
 		v1.POST("/vms/:id/power-actions", requireAuth, vmHandler.Power)

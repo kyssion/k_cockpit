@@ -449,7 +449,11 @@ func (s *Service) UpdateMetadata(
 	if err != nil {
 		return nil, err
 	}
-	view := toView(updated, time.Now(), s.staleThreshold())
+	lock, err := s.LockOf(ctx, vmID)
+	if err != nil {
+		return nil, err
+	}
+	view := toView(updated, lock, time.Now(), s.staleThreshold())
 	return &view, nil
 }
 

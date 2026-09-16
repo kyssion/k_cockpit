@@ -30,6 +30,13 @@ const (
 	// 控制台对外暴露：把宿主机端口开放到网络，等于给这台虚拟机开了一扇
 	// 绕过面板的后门（f-2-08 R-004 / Q-007）。
 	ActionConsoleExpose Action = "vm.console.expose"
+
+	// 解除虚拟机的业务软锁（F-2-12）。
+	//
+	// **加锁不需要验证，解锁需要**——这个不对称是刻意的：锁的作用就是让
+	// 「删除」这件事必须先经过一道明确的动作。如果解锁和加锁一样是一次
+	// 普通点击，它就只是减速带，防不住「看错行、顺手删掉」这类事故。
+	ActionVMLockRelease Action = "vm.lock.release"
 )
 
 // Entry 是清单中的一条，用于对外下发（API-034）。
@@ -76,6 +83,11 @@ var policy = []Entry{
 		Action: ActionConsoleExpose,
 		Label:  "对外暴露控制台",
 		Reason: "将向网络开放宿主机端口，可绕过面板直接接入该虚拟机",
+	},
+	{
+		Action: ActionVMLockRelease,
+		Label:  "解锁虚拟机",
+		Reason: "解锁后该虚拟机即可被删除，锁定提供的保护随之消失",
 	},
 }
 
