@@ -236,7 +236,7 @@
 | API-051 | DELETE | `/api/v1/vms/:id/schedules/:scheduleID` | 删除**定时任务定义**，不删除虚拟机。可逆性完全不同，因此不需要二次验证 | 是 | 已实现 | F-7-05 |
 | API-052 | GET | `/api/v1/vms/:id/snapshots` | 快照列表与配额（`used` / `quota`）。每条带后端算好的 `can_delete` / `can_restore`——**界面不得自行拼这套判断**，否则规则存在两份、迟早不一致 | 是 | 已实现 | F-2-07 |
 | API-053 | POST | `/api/v1/vms/:id/snapshots` | 创建快照。快照种类由后端按「是否含内存 + 当前运行态」**推导**，不是用户选的 | 是 | 已实现 | F-2-07 |
-| API-054 | POST | `/api/v1/vms/:id/snapshots/:snapshotID/restore` | 恢复快照。会**丢弃快照之后的所有磁盘改动**，未纳入二次验证清单——已知缺口，见下方说明 | 是 | 已实现（**二次验证待补**） | F-2-07 |
+| API-054 | POST | `/api/v1/vms/:id/snapshots/:snapshotID/restore` | 恢复快照。会**丢弃快照之后的所有磁盘改动**，属于不可逆操作，因此走二次验证。注意与「删除快照」（API-055）的区别：后者只失去一个还原点，当前数据不受影响，**不需要**验证 | 是 | 已实现 | F-2-07 |
 | API-055 | DELETE | `/api/v1/vms/:id/snapshots/:snapshotID` | 删除快照。有子快照或正处于「当前状态」时拒绝，并给出**具体**原因 | 是 | 已实现 | F-2-07 |
 | API-056 | GET | `/api/v1/vms/:id/edit-form` | 编辑页的表单元数据与当前值。含**运行态可改矩阵**（`requires_node` / `requires_shutdown` / `read_only`）与子选项卡定义——两者都是单一事实来源，前端不得硬编码第二份 | 是 | 已实现（覆盖 6 个子选项卡） | F-2-05 |
 | API-057 | PATCH | `/api/v1/vms/:id/metadata` | 修改备注、分组。**同步生效、不入队**：纯控制面数据，虚拟化层不知道它们的存在，因此运行中也能改 | 是 | 已实现 | F-2-05 |

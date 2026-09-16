@@ -472,9 +472,12 @@ func (h *VM) CreateSnapshot(ctx context.Context, c *app.RequestContext) {
 
 // RestoreSnapshot 恢复快照（API-054）。
 //
-// 恢复会**丢弃快照之后的所有磁盘改动**，属于不可逆操作。当前未纳入高风险
-// 清单（f-10-02 的清单集中在 internal/risk），因此没有二次验证——这一点
-// 是已知缺口，登记在 API.md 中。
+// 恢复会**丢弃快照之后的所有磁盘改动**，属于不可逆操作，因此走二次验证
+// （f-10-02 的清单集中在 internal/risk，此处只声明，不自行判断）。
+//
+// 注意它与「删除快照」的区别：删除快照只是失去一个还原点，虚拟机当前的数据
+// 不受影响，因此**不**需要验证；而恢复是一次真实的回滚。两者在界面上相邻，
+// 但危险程度差别很大——这正是清单必须集中管理的原因。
 func (h *VM) RestoreSnapshot(ctx context.Context, c *app.RequestContext) {
 	id, err := namedPathID(c, "id", "虚拟机 ID")
 	if err != nil {
@@ -484,6 +487,10 @@ func (h *VM) RestoreSnapshot(ctx context.Context, c *app.RequestContext) {
 	snapshotID, err := namedPathID(c, "snapshotID", "快照 ID")
 	if err != nil {
 		api.Fail(c, err)
+		return
+	}
+
+	if !h.risk.Require(c, risk.ActionVMSnapshotRestore) {
 		return
 	}
 

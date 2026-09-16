@@ -37,6 +37,13 @@ const (
 	// 「删除」这件事必须先经过一道明确的动作。如果解锁和加锁一样是一次
 	// 普通点击，它就只是减速带，防不住「看错行、顺手删掉」这类事故。
 	ActionVMLockRelease Action = "vm.lock.release"
+
+	// 恢复快照（F-2-07）。
+	//
+	// 它会**丢弃快照之后的所有磁盘改动**，且不可撤销——属于「不可逆结果」
+	// 这一类，与删除同级。用户点下恢复时往往想的是「回到那个时间点」，
+	// 而实际发生的是一次不可逆的回滚。
+	ActionVMSnapshotRestore Action = "vm.snapshot.restore"
 )
 
 // Entry 是清单中的一条，用于对外下发（API-034）。
@@ -88,6 +95,11 @@ var policy = []Entry{
 		Action: ActionVMLockRelease,
 		Label:  "解锁虚拟机",
 		Reason: "解锁后该虚拟机即可被删除，锁定提供的保护随之消失",
+	},
+	{
+		Action: ActionVMSnapshotRestore,
+		Label:  "恢复快照",
+		Reason: "快照之后产生的磁盘改动会被丢弃，且无法撤销",
 	},
 }
 
