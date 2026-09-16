@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { ApiError, NetworkError } from '@/api/client'
 import { isActive, taskApi, type TaskView } from '@/api/task'
@@ -27,6 +27,9 @@ export function TaskListPage() {
   const [page, setPage] = useState(1)
   const [status, setStatus] = useState('')
   const [cancelTarget, setCancelTarget] = useState<TaskView | null>(null)
+  // 详情只记 ID 而不是整条任务：这样打开期间的后台刷新能反映到面板上
+  // （进行中的任务会持续变化），而不是停在被点开那一刻的快照。
+  const [detailID, setDetailID] = useState<number | null>(null)
   const [error, setError] = useState('')
 
   const tasks = useQuery({
@@ -113,7 +116,12 @@ export function TaskListPage() {
               </thead>
               <tbody>
                 {tasks.data.items.map((t) => (
-                  <TaskRow key={t.id} task={t} onCancel={() => setCancelTarget(t)} />
+                  <TaskRow
+                    key={t.id}
+                    task={t}
+                    onOpen={() => setDetailID(t.id)}
+                    onCancel={() => setCancelTarget(t)}
+                  />
                 ))}
               </tbody>
             </table>
@@ -144,6 +152,15 @@ export function TaskListPage() {
           )}
         </>
       )}
+
+      <TaskDetailDrawer
+        taskID={detailID}
+        onClose={() => setDetailID(null)}
+        onCancel={(t) => {
+          setDetailID(null)
+          setCancelTarget(t)
+        }}
+      />
 
       <Modal
         open={cancelTarget !== null}
@@ -181,13 +198,31 @@ export function TaskListPage() {
   )
 }
 
-function TaskRow({ task, onCancel }: { task: TaskView; onCancel: () => void }) {
+function TaskRow({
+  task,
+  onOpen,
+  onCancel,
+}: {
+  task: TaskView
+  onOpen: () => void
+  onCancel: () => void
+}) {
   const active = isActive(task.status)
 
   return (
     <tr className="border-t border-line hover:bg-raised">
-      <td className="kc-mono px-4 py-2.5 text-ink-2">#{task.id}</td>
-      <td className="px-4 py-2.5 text-ink">{taskTypeLabel(task.type)}</td>
+      <td className="kc-mono px-4 py-2.5">
+        {/* ID 本身是入口：任务号是用户在各处会看到的标识（「任务 #12 正在执行」），
+            从这里点进去比在行尾再放一个按钮更自然。 */}
+        <button className="text-ink-2 hover:text-brand hover:underline" onClick={onOpen}>
+          #{task.id}
+        </button>
+      </td>
+      <td className="px-4 py-2.5">
+        <button className="text-ink hover:text-brand hover:underline" onClick={onOpen}>
+          {taskTypeLabel(task.type)}
+        </button>
+      </td>
       <td className="px-4 py-2.5">
         <div className="flex flex-col gap-1">
           <StatusBadge tone={TASK_STATUS_TONE[task.status]}>
@@ -212,8 +247,13 @@ function TaskRow({ task, onCancel }: { task: TaskView; onCancel: () => void }) {
       <td className="px-4 py-2.5 text-ink-2" title={formatDateTime(task.created_at)}>
         {relativeTime(task.created_at)}
       </td>
-      <td className="px-4 py-2.5 text-right">
-        {active ? (
+      <td className="px-4 py-2.5 text-right whitespace-nowrap">
+        {/* 终态任务也保留「详情」入口：失败原因与参数就在面板里，
+            而用户正是在看到一条失败记录时才最需要它。 */}
+        <Button variant="ghost" size="sm" onClick={onOpen}>
+          详情
+        </Button>
+        {active && (
           <Button
             variant="ghost"
             size="sm"
@@ -222,13 +262,175 @@ function TaskRow({ task, onCancel }: { task: TaskView; onCancel: () => void }) {
           >
             {task.cancel_requested ? '取消中' : '取消'}
           </Button>
-        ) : (
-          <Button variant="ghost" size="sm" disabled>
-            已结束
-          </Button>
         )}
       </td>
     </tr>
+  )
+}
+
+/**
+ * TaskDetailDrawer 展示单个任务的完整信息。
+ *
+ * 从右侧滑出而不是弹窗：任务是**列表里的一个条目**，抽屉保留了列表的上下文，
+ * 用户看完一条可以立刻点下一条；弹窗会遮住列表，每次都要先关掉。
+ *
+ * 只持有 ID 而不是整条任务：打开期间进行中的任务会持续变化，
+ * 让面板跟着刷新，而不是停在被点开那一刻的快照。
+ */
+function TaskDetailDrawer({
+  taskID,
+  onClose,
+  onCancel,
+}: {
+  taskID: number | null
+  onClose: () => void
+  onCancel: (t: TaskView) => void
+}) {
+  const open = taskID !== null
+
+  const detail = useQuery({
+    queryKey: ['task', taskID],
+    queryFn: () => taskApi.get(taskID as number),
+    enabled: open,
+    // 进行中的任务会持续变化（进度、阶段、终态），2 秒刷新一次；
+    // 终态时停止——没必要为一个不会再变的东西持续请求。
+    refetchInterval: (q) => (q.state.data && isActive(q.state.data.status) ? 2000 : false),
+  })
+
+  // ESC 关闭：抽屉遮住了部分内容，键盘用户需要一个不依赖鼠标的退路。
+  useEffect(() => {
+    if (!open) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+
+  if (!open) return null
+
+  const t = detail.data
+
+  return (
+    <div className="fixed inset-0 z-40 flex justify-end">
+      {/* 遮罩：点击关闭。半透明而不是全黑——让用户仍然能看到后面的列表，
+          知道自己还在任务中心。 */}
+      <button
+        aria-label="关闭"
+        className="flex-1 cursor-default bg-black/20"
+        onClick={onClose}
+      />
+
+      <aside className="flex w-full max-w-xl flex-col overflow-y-auto border-l border-line bg-surface shadow-lg">
+        <header className="sticky top-0 flex items-center justify-between border-b border-line bg-surface px-4 py-3">
+          <h2 className="text-base font-medium text-ink">
+            任务 #{taskID}
+            {t && <span className="ml-2 text-ink-2">{taskTypeLabel(t.type)}</span>}
+          </h2>
+          <button className="text-sm text-ink-3 hover:text-ink" onClick={onClose}>
+            关闭
+          </button>
+        </header>
+
+        {detail.isPending && <PageLoading />}
+
+        {detail.isError && (
+          <div className="p-4">
+            <p role="alert" className="rounded-control bg-danger/10 px-3 py-2 text-base text-danger">
+              {describe(detail.error)}
+            </p>
+          </div>
+        )}
+
+        {t && (
+          <div className="flex flex-col gap-4 p-4">
+            <div className="flex items-center gap-2">
+              <StatusBadge tone={TASK_STATUS_TONE[t.status]}>
+                {TASK_STATUS_LABEL[t.status]}
+              </StatusBadge>
+              {t.cancel_requested && isActive(t.status) && (
+                <span className="text-xs text-warning">取消请求已下发</span>
+              )}
+            </div>
+
+            <ProgressBar value={t.progress} active={t.status === 'running'} />
+
+            {t.error && (
+              <div className="rounded-control bg-danger/10 px-3 py-2">
+                <p className="text-xs text-ink-3">失败原因</p>
+                <p className="mt-0.5 text-base text-danger">{t.error}</p>
+              </div>
+            )}
+
+            <section>
+              <h3 className="text-sm text-ink-3">基本信息</h3>
+              <dl className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-2 text-base">
+                <Field label="资源">
+                  {t.resource_name || (t.resource_id ? `#${t.resource_id}` : '—')}
+                </Field>
+                <Field label="节点">{t.node_id ? `#${t.node_id}` : '—'}</Field>
+                <Field label="提交时间">{formatDateTime(t.created_at)}</Field>
+                <Field label="开始时间">{t.started_at ? formatDateTime(t.started_at) : '尚未开始'}</Field>
+                <Field label="结束时间">
+                  {t.finished_at ? formatDateTime(t.finished_at) : '—'}
+                </Field>
+                <Field label="当前阶段">{t.current_stage || '—'}</Field>
+              </dl>
+            </section>
+
+            {/* 参数与结果只在有内容时出现：一堆空的 JSON 块会让面板显得
+                比实际信息量更大，用户还得逐个扫过去才能确认「确实没有」。 */}
+            {t.params != null && (
+              <JsonBlock title="参数" value={t.params} hint="已脱敏：口令、密钥等不会出现在这里。" />
+            )}
+            {t.result != null && <JsonBlock title="执行结果" value={t.result} />}
+
+            {isActive(t.status) && (
+              <div>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={t.cancel_requested}
+                  onClick={() => onCancel(t)}
+                >
+                  {t.cancel_requested ? '取消中' : '取消任务'}
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+      </aside>
+    </div>
+  )
+}
+
+/** JsonBlock 以可读的形式展示一段结构化数据。 */
+function JsonBlock({
+  title,
+  value,
+  hint,
+}: {
+  title: string
+  value: unknown
+  hint?: string
+}) {
+  return (
+    <section>
+      <h3 className="text-sm text-ink-3">{title}</h3>
+      {hint && <p className="mt-0.5 text-xs text-ink-3">{hint}</p>}
+      <pre className="kc-mono mt-1.5 max-h-64 overflow-auto rounded-control bg-sunken px-3 py-2 text-sm text-ink-2">
+        {JSON.stringify(value, null, 2)}
+      </pre>
+    </section>
+  )
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <dt className="text-xs text-ink-3">{label}</dt>
+      <dd className="text-ink">{children}</dd>
+    </div>
   )
 }
 
