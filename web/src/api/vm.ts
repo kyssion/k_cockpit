@@ -71,6 +71,24 @@ export interface TaskRef {
   status: TaskStatus
 }
 
+/** 批量操作中单台的结果。 */
+export interface BatchItem {
+  vm_id: number
+  vm_name?: string
+  ok: boolean
+  task_id?: number
+  /** 这一台失败的原因。**必看**：只标一个红叉会让用户去猜是权限、状态还是网络问题。 */
+  error?: string
+}
+
+/** 批量操作的整体结果。 */
+export interface BatchResult {
+  items: BatchItem[]
+  /** 汇总由后端算好，界面不自己数一遍 items——两处各数一遍迟早不一致。 */
+  succeeded: number
+  failed: number
+}
+
 /**
  * 电源动作。
  *
@@ -105,6 +123,15 @@ export const vmApi = {
   // 走 query 更稳妥（服务端两种都接受）。
   remove: (id: number, diskAction: DiskAction) =>
     del<TaskRef>(`/api/v1/vms/${id}?disk_action=${diskAction}`),
+
+  /**
+   * 批量电源操作（F-2-01）。
+   *
+   * 部分成功语义：某一台失败不影响其它台，因此**不会抛出异常**——
+   * 调用方要检查 `failed` 而不是只依赖 catch。
+   */
+  batchAction: (vmIDs: number[], action: PowerAction) =>
+    post<BatchResult>('/api/v1/vms/batch-actions', { vm_ids: vmIDs, action }),
 
   /** 网卡列表（详情页「网络管理」标签页）。 */
   interfaces: (id: number) => get<{ items: VMInterface[] }>(`/api/v1/vms/${id}/interfaces`),

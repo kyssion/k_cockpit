@@ -4,7 +4,7 @@ import { Link } from 'react-router'
 
 import { ApiError, NetworkError } from '@/api/client'
 import { nodeApi } from '@/api/node'
-import { vmApi, type VmView } from '@/api/vm'
+import { vmApi, type BatchResult, type PowerAction, type VmView } from '@/api/vm'
 import { Button } from '@/components/common/Button'
 import { EmptyState, PageLoading } from '@/components/common/Feedback'
 import { Input } from '@/components/common/Input'
@@ -16,10 +16,25 @@ import { VM_STATUS_LABEL, VM_STATUS_TONE } from '@/utils/labels'
 const PAGE_SIZE = 20
 
 export function VmListPage() {
+  const queryClient = useQueryClient()
   const [page, setPage] = useState(1)
   const [keyword, setKeyword] = useState('')
   const [search, setSearch] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
+
+  // 批量操作（F-2-01）。选择状态用 Set 而不是数组：判重与删除都是 O(1)，
+  // 而列表上的每次勾选都会走一次这两件事。
+  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [batchResult, setBatchResult] = useState<BatchResult | null>(null)
+  const [batchError, setBatchError] = useState('')
+
+  // 翻页、搜索时清空选择：选中的项可能已经不在当前页上，留着会让
+  // 「N 台已选」与实际看到的对不上——用户会怀疑是不是选错了。
+  function clearSelection() {
+    setSelected(new Set())
+    setBatchResult(null)
+    setBatchError('')
+  }
 
   const nodes = useQuery({ queryKey: ['nodes'], queryFn: nodeApi.list })
   const vms = useQuery({
@@ -32,10 +47,38 @@ export function VmListPage() {
   const total = vms.data?.pagination.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
+  const pageItems = vms.data?.items ?? []
+  const selectedOnPage = pageItems.filter((v) => selected.has(v.id))
+  const allSelected = pageItems.length > 0 && selectedOnPage.length === pageItems.length
+  const someSelected = selectedOnPage.length > 0 && !allSelected
+
+  // 选中项里有多少台正在运行。规格要求操作条上给出这个数字（f-2-01 §3.2）：
+  // 「开机」对已运行的机器是空操作，「关机」对已关机的也是——提前知道数量，
+  // 用户才能判断这一批里有多少会真正发生变化。
+  const runningCount = selectedOnPage.filter((v) => v.status === 'running').length
+
+  const batch = useMutation({
+    mutationFn: (action: PowerAction) => vmApi.batchAction([...selected], action),
+    onSuccess: (result) => {
+      setBatchError('')
+      setBatchResult(result)
+      // 全部成功时清空选择：用户下一步多半是看结果或换个筛选，
+      // 留着选中状态会让操作条一直挡在底部。
+      if (result.failed === 0) setSelected(new Set())
+      void queryClient.invalidateQueries({ queryKey: ['vms'] })
+      void queryClient.invalidateQueries({ queryKey: ['tasks'] })
+    },
+    onError: (err) => {
+      setBatchResult(null)
+      setBatchError(describe(err))
+    },
+  })
+
   function submitSearch(event: FormEvent) {
     event.preventDefault()
     setPage(1)
     setSearch(keyword)
+    clearSelection()
   }
 
   return (
@@ -110,6 +153,26 @@ export function VmListPage() {
             <table className="w-full border-collapse text-base">
               <thead>
                 <tr className="bg-sunken text-left text-xs text-ink-2">
+                  <th className="w-10 px-4 py-2.5 font-medium">
+                    <input
+                      type="checkbox"
+                      aria-label="全选本页"
+                      checked={allSelected}
+                      ref={(el) => {
+                        // 部分选中时显示为「不确定」：这个中间态比「未选中」
+                        // 更准确地反映了当前情况。
+                        if (el) el.indeterminate = someSelected && !allSelected
+                      }}
+                      onChange={(e) => {
+                        setSelected(
+                          e.target.checked
+                            ? new Set(vms.data.items.map((v) => v.id))
+                            : new Set(),
+                        )
+                        setBatchResult(null)
+                      }}
+                    />
+                  </th>
                   <th className="px-4 py-2.5 font-medium">名称</th>
                   <th className="px-4 py-2.5 font-medium">状态</th>
                   <th className="px-4 py-2.5 font-medium">配置</th>
@@ -120,7 +183,19 @@ export function VmListPage() {
               </thead>
               <tbody>
                 {vms.data.items.map((vm) => (
-                  <VmRow key={vm.id} vm={vm} nodeName={nodeNames.get(vm.node_id)} />
+                  <VmRow
+                    key={vm.id}
+                    vm={vm}
+                    nodeName={nodeNames.get(vm.node_id)}
+                    selected={selected.has(vm.id)}
+                    onToggle={() => {
+                      const next = new Set(selected)
+                      if (next.has(vm.id)) next.delete(vm.id)
+                      else next.add(vm.id)
+                      setSelected(next)
+                      setBatchResult(null)
+                    }}
+                  />
                 ))}
               </tbody>
             </table>
@@ -132,7 +207,10 @@ export function VmListPage() {
                 variant="secondary"
                 size="sm"
                 disabled={page <= 1}
-                onClick={() => setPage((p) => p - 1)}
+                onClick={() => {
+                  setPage((p) => p - 1)
+                  clearSelection()
+                }}
               >
                 上一页
               </Button>
@@ -143,7 +221,10 @@ export function VmListPage() {
                 variant="secondary"
                 size="sm"
                 disabled={page >= totalPages}
-                onClick={() => setPage((p) => p + 1)}
+                onClick={() => {
+                  setPage((p) => p + 1)
+                  clearSelection()
+                }}
               >
                 下一页
               </Button>
@@ -152,14 +233,121 @@ export function VmListPage() {
         </>
       )}
 
+      {batchError && (
+        <p role="alert" className="rounded-control bg-danger/10 px-3 py-2 text-base text-danger">
+          {batchError}
+        </p>
+      )}
+
+      {/* 批量结果：区分成功与失败，失败项**逐条给出原因**（f-2-01 边界）。
+          笼统地说「部分失败」会迫使 50 台逐个点开排查。 */}
+      {batchResult && (
+        <section className="rounded-card border border-line">
+          <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
+            <h2 className="text-sm font-medium text-ink-2">
+              批量操作结果：
+              <span className="ml-1 text-success">{batchResult.succeeded} 台已提交</span>
+              {batchResult.failed > 0 && (
+                <span className="ml-1 text-danger">{batchResult.failed} 台失败</span>
+              )}
+            </h2>
+            <button
+              className="text-sm text-ink-3 hover:text-ink"
+              onClick={() => setBatchResult(null)}
+            >
+              关闭
+            </button>
+          </div>
+          {batchResult.failed > 0 && (
+            <ul className="flex flex-col gap-1.5 px-4 py-3 text-base">
+              {batchResult.items
+                .filter((i) => !i.ok)
+                .map((i) => (
+                  <li key={i.vm_id} className="flex gap-2">
+                    <span className="kc-mono text-ink-3">#{i.vm_id}</span>
+                    <span className="text-danger">{i.error}</span>
+                  </li>
+                ))}
+            </ul>
+          )}
+        </section>
+      )}
+
+      {/* 底部浮出的操作条（f-2-01 §3.2）。固定在视口底部而不是表格下方：
+          列表可能很长，操作条跟着滚动的话用户每次都要先滚到底。 */}
+      {selected.size > 0 && (
+        <div className="fixed bottom-5 left-1/2 z-30 -translate-x-1/2">
+          <div className="flex items-center gap-3 rounded-card border border-line-strong bg-surface px-4 py-2.5 shadow-lg">
+            <span className="text-base text-ink">
+              已选 <span className="kc-nums font-medium">{selected.size}</span> 台
+              {runningCount > 0 && (
+                <span className="ml-1.5 text-ink-3">· {runningCount} 台运行中</span>
+              )}
+            </span>
+
+            <span className="h-4 w-px bg-line" />
+
+            <Button
+              size="sm"
+              variant="secondary"
+              loading={batch.isPending && batch.variables === 'start'}
+              onClick={() => batch.mutate('start')}
+            >
+              开机
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              loading={batch.isPending && batch.variables === 'shutdown'}
+              onClick={() => batch.mutate('shutdown')}
+            >
+              关机
+            </Button>
+            <Button
+              size="sm"
+              variant="danger"
+              loading={batch.isPending && batch.variables === 'poweroff'}
+              onClick={() => batch.mutate('poweroff')}
+            >
+              强制断电
+            </Button>
+
+            <button
+              className="text-sm text-ink-3 hover:text-ink"
+              onClick={clearSelection}
+            >
+              取消选择
+            </button>
+          </div>
+        </div>
+      )}
+
       <CreateVmModal open={createOpen} onClose={() => setCreateOpen(false)} />
     </div>
   )
 }
 
-function VmRow({ vm, nodeName }: { vm: VmView; nodeName?: string }) {
+function VmRow({
+  vm,
+  nodeName,
+  selected,
+  onToggle,
+}: {
+  vm: VmView
+  nodeName?: string
+  selected: boolean
+  onToggle: () => void
+}) {
   return (
-    <tr className="border-t border-line hover:bg-raised">
+    <tr className={selected ? 'border-t border-line bg-brand/5' : 'border-t border-line hover:bg-raised'}>
+      <td className="px-4 py-2.5">
+        <input
+          type="checkbox"
+          aria-label={`选择 ${vm.name}`}
+          checked={selected}
+          onChange={onToggle}
+        />
+      </td>
       <td className="px-4 py-2.5">
         <Link to={`/vm/${vm.id}`} className="font-medium text-ink hover:text-brand hover:underline">
           {vm.name}
