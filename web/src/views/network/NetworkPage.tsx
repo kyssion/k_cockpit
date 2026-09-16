@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 
 import { ApiError, NetworkError } from '@/api/client'
@@ -6,17 +6,49 @@ import {
   CAPABILITY_STATE_LABEL,
   CAPABILITY_STATE_TONE,
   networkApi,
+  SWITCH_MODE_LABEL,
   type Capability,
+  type SwitchView,
 } from '@/api/network'
 import { nodeApi } from '@/api/node'
+import { Button } from '@/components/common/Button'
 import { PageLoading } from '@/components/common/Feedback'
+import { Input } from '@/components/common/Input'
+import { Modal } from '@/components/common/Modal'
 import { StatusBadge } from '@/components/common/StatusBadge'
 
 export function NetworkPage() {
+  const queryClient = useQueryClient()
   const [nodeID, setNodeID] = useState(0)
+  const [formOpen, setFormOpen] = useState(false)
+  const [editTarget, setEditTarget] = useState<SwitchView | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<SwitchView | null>(null)
+  const [notice, setNotice] = useState('')
+  const [error, setError] = useState('')
+
   const nodes = useQuery({ queryKey: ['nodes'], queryFn: nodeApi.list })
 
   const effectiveNodeID = nodeID || nodes.data?.[0]?.id || 0
+
+  const remove = useMutation({
+    mutationFn: (sw: SwitchView) => networkApi.deleteSwitch(sw.id),
+    onSuccess: () => {
+      setDeleteTarget(null)
+      setError('')
+      setNotice('已提交删除，正在下发到节点')
+      // 与创建同理：记录由执行器在节点成功后处理，不能立刻刷新列表。
+      setTimeout(() => {
+        void queryClient.invalidateQueries({ queryKey: ['networks', effectiveNodeID] })
+      }, 2000)
+      void queryClient.invalidateQueries({ queryKey: ['tasks'] })
+    },
+    onError: (err) => {
+      setDeleteTarget(null)
+      setNotice('')
+      // 占用检查是同步的，因此这里能立刻看到「还有 N 块网卡接着」。
+      setError(describe(err))
+    },
+  })
 
   const status = useQuery({
     queryKey: ['network-status', effectiveNodeID],
@@ -114,7 +146,32 @@ export function NetworkPage() {
 
       {networks.data && (
         <section className="flex flex-col gap-2">
-          <h2 className="text-sm font-medium text-ink-2">网络</h2>
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="text-sm font-medium text-ink-2">虚拟交换机</h2>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={effectiveNodeID === 0}
+              onClick={() => {
+                setEditTarget(null)
+                setFormOpen(true)
+              }}
+            >
+              新建交换机
+            </Button>
+          </div>
+
+          {notice && (
+            <p className="rounded-control bg-success/10 px-3 py-2 text-base text-success">
+              {notice}
+            </p>
+          )}
+          {error && (
+            <p className="rounded-control border border-danger/30 bg-danger/10 px-3 py-2 text-base text-danger">
+              {error}
+            </p>
+          )}
+
           <div className="overflow-x-auto rounded-card border border-line">
             <table className="w-full border-collapse text-base">
               <thead>
@@ -123,7 +180,7 @@ export function NetworkPage() {
                   <th className="px-4 py-2.5 font-medium">网桥</th>
                   <th className="px-4 py-2.5 font-medium">模式</th>
                   <th className="px-4 py-2.5 font-medium">网段</th>
-                  <th className="px-4 py-2.5 font-medium">说明</th>
+                  <th className="px-4 py-2.5 font-medium">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -132,12 +189,38 @@ export function NetworkPage() {
                     <td className="px-4 py-2.5">
                       <span className="text-ink">{nw.name}</span>
                       {nw.is_system && <span className="ml-2 text-xs text-brand">系统</span>}
+                      {nw.vlan_id != null && (
+                        <span className="ml-2 text-xs text-ink-3">VLAN {nw.vlan_id}</span>
+                      )}
                     </td>
                     <td className="kc-mono px-4 py-2.5 text-ink-2">{nw.bridge_name}</td>
                     <td className="px-4 py-2.5 text-ink-2">{modeLabel(nw.mode)}</td>
                     <td className="kc-mono px-4 py-2.5 text-ink-2">{nw.cidr || '—'}</td>
-                    <td className="px-4 py-2.5 text-xs text-ink-3">
-                      {nw.is_system ? '未指定网络时的默认落点，不可删除' : '—'}
+                    <td className="px-4 py-2.5">
+                      {/* 系统基础网络不给操作按钮，并说明原因：它是未指定
+                          网络时的默认落点，改网段或删掉会让该节点上所有虚拟
+                          机立刻失去网络。给一个点了必然被拒的按钮没有意义。 */}
+                      {nw.is_system ? (
+                        <span className="text-xs text-ink-3">未指定网络时的默认落点</span>
+                      ) : (
+                        <span className="flex gap-2">
+                          <button
+                            className="text-sm text-brand hover:underline"
+                            onClick={() => {
+                              setEditTarget(nw)
+                              setFormOpen(true)
+                            }}
+                          >
+                            编辑
+                          </button>
+                          <button
+                            className="text-sm text-danger hover:underline"
+                            onClick={() => setDeleteTarget(nw)}
+                          >
+                            删除
+                          </button>
+                        </span>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -146,7 +229,211 @@ export function NetworkPage() {
           </div>
         </section>
       )}
+
+      <SwitchFormModal
+        key={editTarget?.id ?? 'new'}
+        open={formOpen}
+        nodeID={effectiveNodeID}
+        target={editTarget}
+        onClose={() => setFormOpen(false)}
+        onDone={(msg) => {
+          setFormOpen(false)
+          setError('')
+          setNotice(msg)
+          // 记录由执行器在节点成功后写入，因此要刷新列表；但**不能立刻**，
+          // 那时任务还没跑完——2 秒足以覆盖 mock 的模拟耗时，真实环境里
+          // 用户可以自己再刷新。
+          setTimeout(() => {
+            void queryClient.invalidateQueries({ queryKey: ['networks', effectiveNodeID] })
+          }, 2000)
+          void queryClient.invalidateQueries({ queryKey: ['tasks'] })
+        }}
+        onError={(msg) => {
+          setFormOpen(false)
+          setNotice('')
+          setError(msg)
+        }}
+      />
+
+      <Modal
+        open={deleteTarget != null}
+        title={`删除交换机「${deleteTarget?.name ?? ''}」`}
+        description="删除会移除宿主机上的网桥。仍有网卡接在上面时会被拒绝，并告诉你还有几块。"
+        onClose={() => setDeleteTarget(null)}
+        footer={
+          <>
+            <Button variant="secondary" size="sm" onClick={() => setDeleteTarget(null)}>
+              取消
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              loading={remove.isPending}
+              onClick={() => deleteTarget && remove.mutate(deleteTarget)}
+            >
+              确认删除
+            </Button>
+          </>
+        }
+      >
+        <p className="text-base text-ink-2">
+          删除后无法恢复。接在该网络上的虚拟机会失去网络连通，因此请先确认它们
+          已经改接到其它网络。
+        </p>
+      </Modal>
     </div>
+  )
+}
+
+/**
+ * SwitchFormModal 是交换机的新建 / 编辑表单。
+ *
+ * 新建与编辑共用一个表单：两者的字段完全一致（后端也把「让网桥变成这样」
+ * 当作同一件事），拆成两个组件只会让校验规则抄一份、然后慢慢分叉。
+ *
+ * `name` 作为 key 由调用方传入，切换目标时整个表单重新挂载——输入框与
+ * 错误提示随之重置，不必在 effect 里同步 setState（那更容易把上一次的
+ * 值带进这一次）。
+ */
+function SwitchFormModal({
+  open,
+  nodeID,
+  target,
+  onClose,
+  onDone,
+  onError,
+}: {
+  open: boolean
+  nodeID: number
+  target: SwitchView | null
+  onClose: () => void
+  onDone: (message: string) => void
+  onError: (message: string) => void
+}) {
+  const editing = target != null
+  const [name, setName] = useState(target?.name ?? '')
+  const [mode, setMode] = useState(target?.mode ?? 'nat')
+  const [vlan, setVlan] = useState(target?.vlan_id != null ? String(target.vlan_id) : '')
+  const [cidr, setCidr] = useState(target?.cidr ?? '')
+  const [gateway, setGateway] = useState(target?.gateway_ip ?? '')
+  const [dhcpStart, setDhcpStart] = useState(target?.dhcp_start ?? '')
+  const [dhcpEnd, setDhcpEnd] = useState(target?.dhcp_end ?? '')
+  const [uplink, setUplink] = useState(target?.uplink_if ?? '')
+
+  const save = useMutation({
+    mutationFn: () => {
+      const input = {
+        name: name.trim(),
+        mode,
+        vlan_id: vlan.trim() === '' ? undefined : Number(vlan),
+        cidr: cidr.trim(),
+        gateway_ip: gateway.trim(),
+        dhcp_start: dhcpStart.trim(),
+        dhcp_end: dhcpEnd.trim(),
+        uplink_if: uplink.trim(),
+      }
+      return editing
+        ? networkApi.updateSwitch(target.id, input)
+        : networkApi.createSwitch(nodeID, input)
+    },
+    onSuccess: () =>
+      onDone(editing ? '已提交修改，正在下发到节点' : '已提交创建，正在下发到节点'),
+    onError: (err) => onError(describe(err)),
+  })
+
+  return (
+    <Modal
+      open={open}
+      title={editing ? `编辑「${target?.name}」` : '新建虚拟交换机'}
+      description="变更会下发到节点创建或调整网桥，因此是异步的——提交后可在任务中心跟踪进度。"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            取消
+          </Button>
+          <Button size="sm" loading={save.isPending} onClick={() => save.mutate()}>
+            {editing ? '保存' : '创建'}
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3">
+        <Input
+          label="名称"
+          value={name}
+          maxLength={64}
+          placeholder="例如：prod-net"
+          onChange={(e) => setName(e.target.value)}
+          hint="在节点内唯一。网桥名由系统按名称生成——Linux 的接口名上限是 15 个字符，用名称直接做网桥名会被内核静默截断。"
+        />
+
+        <div className="flex flex-col gap-1">
+          <label className="text-sm text-ink-2">网络模式</label>
+          <select
+            value={mode}
+            onChange={(e) => setMode(e.target.value)}
+            className="h-8 rounded-control border border-line-strong bg-sunken px-2 text-base text-ink focus:outline-none focus-visible:border-brand"
+          >
+            {Object.entries(SWITCH_MODE_LABEL).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <Input
+          label="VLAN ID（可选）"
+          value={vlan}
+          placeholder="1-4094，留空表示不划分"
+          onChange={(e) => setVlan(e.target.value.replace(/[^\d]/g, ''))}
+          hint="在节点内唯一。0 与 4095 是保留值，配上去不会报错但行为未定义，因此不接受。"
+        />
+
+        <Input
+          label="网段"
+          value={cidr}
+          placeholder="192.168.10.0/24"
+          onChange={(e) => setCidr(e.target.value)}
+          hint="必须填写。至少 /30——/31 与 /32 没有可用主机地址，网关与虚拟机都放不下。"
+        />
+        <Input
+          label="网关地址（可选）"
+          value={gateway}
+          placeholder="192.168.10.1"
+          onChange={(e) => setGateway(e.target.value)}
+          hint="必须落在上面配置的网段内，否则 dnsmasq 照样会起来但不发地址。"
+        />
+
+        <div className="grid grid-cols-2 gap-3">
+          <Input
+            label="DHCP 起始"
+            value={dhcpStart}
+            placeholder="192.168.10.100"
+            onChange={(e) => setDhcpStart(e.target.value)}
+          />
+          <Input
+            label="DHCP 结束"
+            value={dhcpEnd}
+            placeholder="192.168.10.200"
+            onChange={(e) => setDhcpEnd(e.target.value)}
+          />
+        </div>
+
+        <Input
+          label={mode === 'physical' ? '上行物理网卡' : '上行网卡（可选）'}
+          value={uplink}
+          placeholder="例如：eth0"
+          onChange={(e) => setUplink(e.target.value)}
+          hint={
+            mode === 'physical'
+              ? '桥接到这块物理网卡。选错会让该节点的管理地址短暂不可达，请确认口位。'
+              : '出网走这块网卡；留空表示由系统选择。'
+          }
+        />
+      </div>
+    </Modal>
   )
 }
 
