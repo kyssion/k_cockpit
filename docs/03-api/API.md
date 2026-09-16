@@ -238,6 +238,9 @@
 | API-053 | POST | `/api/v1/vms/:id/snapshots` | 创建快照。快照种类由后端按「是否含内存 + 当前运行态」**推导**，不是用户选的 | 是 | 已实现 | F-2-07 |
 | API-054 | POST | `/api/v1/vms/:id/snapshots/:snapshotID/restore` | 恢复快照。会**丢弃快照之后的所有磁盘改动**，未纳入二次验证清单——已知缺口，见下方说明 | 是 | 已实现（**二次验证待补**） | F-2-07 |
 | API-055 | DELETE | `/api/v1/vms/:id/snapshots/:snapshotID` | 删除快照。有子快照或正处于「当前状态」时拒绝，并给出**具体**原因 | 是 | 已实现 | F-2-07 |
+| API-056 | GET | `/api/v1/vms/:id/edit-form` | 编辑页的表单元数据与当前值。含**运行态可改矩阵**（`requires_node` / `requires_shutdown`）——这是单一事实来源，前端不得硬编码第二份 | 是 | 已实现 | F-2-05 |
+| API-057 | PATCH | `/api/v1/vms/:id/metadata` | 修改备注、分组。**同步生效、不入队**：纯控制面数据，虚拟化层不知道它们的存在，因此运行中也能改 | 是 | 已实现 | F-2-05 |
+| API-058 | POST | `/api/v1/vms/:id/config-changes` | 硬件配置变更（CPU、内存）。**只接受真正变化的字段**；需关机的项在运行态下拒绝。走任务队列 | 是 | 已实现（仅 CPU 与内存） | F-2-05 |
 
 > **公开接口共 4 个**（`/health`、`/api/v1/setup/*`、`/api/v1/auth/login`）。前两个的公开理由是「系统尚无可用凭据时的自举需要」：初始化接口靠**只能从服务端日志获取**的一次性令牌保护（[ADR-0008](../06-decisions/0008-first-admin-bootstrap.md)），登录接口是获取凭据的入口本身。新增公开接口必须在此说明理由。
 
