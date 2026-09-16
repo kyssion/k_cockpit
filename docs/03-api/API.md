@@ -212,10 +212,10 @@
 | API-027 | POST | `/api/v1/vms/:id/power-actions` | 电源操作（`start` / `shutdown` / `reboot` / `poweroff` / `reset`）；受理时**基于实时探测校验状态**，返回任务标识 | 是 | 已实现 | F-2-04 |
 | API-028 | POST | `/api/v1/vms/batch-actions` | 批量操作（逐台独立任务，可部分成功） | 是 | 规划中 | F-2-01 |
 | API-029 | DELETE | `/api/v1/vms/:id` | 删除虚拟机（`disk_action` 必填：`delete` / `keep`，服务端不设默认值；走 query 或 body 均可）；**高风险操作，需二次验证** | 是 | 已实现 | F-2-04 |
-| API-030 | GET | `/api/v1/vms/:id/console` | 控制台配置与状态（开启状态、端口、暴露状态、显示设备） | 是 | 规划中 | F-2-08 |
-| API-031 | PATCH | `/api/v1/vms/:id/console` | 开启/关闭、设置密码、切换对外暴露（暴露需二次验证） | 是 | 规划中 | F-2-08 |
-| API-032 | GET | `/api/v1/vms/:id/console/screenshot` | 控制台截帧预览（服务端短时缓存） | 是 | 规划中 | F-2-08 |
-| API-033 | GET | `/api/v1/vms/:id/console/ws` | **WebSocket**：VNC 流量代理（经 agent 通道转发，不直连宿主机） | 是 | 规划中 | F-2-08 |
+| API-030 | GET | `/api/v1/vms/:id/console` | 控制台配置与状态（开启、端口、**监听地址**、暴露状态、显示设备、会话数与上限、流支持）；**不含密码** | 是 | 已实现 | F-2-08 |
+| API-031 | PATCH | `/api/v1/vms/:id/console` | 开启/关闭、设置密码、切换对外暴露；**仅在变更暴露状态时**要求二次验证；密码最长 8 位且只写不读 | 是 | 已实现 | F-2-08 |
+| API-032 | GET | `/api/v1/vms/:id/console/screenshot` | 控制台截帧预览；**当前返回 503**——截帧需 agent 侧图形导出能力，该契约尚未定义 | 是 | 已实现（能力待 agent） | F-2-08 |
+| API-033 | GET | `/api/v1/vms/:id/console/ws` | **WebSocket**：VNC 流量代理（经 agent 通道转发，不直连宿主机）；**升级前**完成鉴权与授权，会话数上限 3 | 是 | 已实现 | F-2-08 |
 | API-034 | GET | `/api/v1/security/high-risk-policy` | 高风险操作清单与判定口径（供前端渲染提示；**清单由后端下发，前端不得硬编码第二份**） | 是 | 已实现 | F-10-02 |
 | API-035 | POST | `/api/v1/auth/risk-verification` | 提交验证码，换取一次性高风险许可（2 分钟有效、消费即失效、绑定会话） | 是 | 已实现 | F-10-01 |
 | API-036 | GET | `/api/v1/settings` | 设置项清单：**元数据 + 当前生效值 + 来源**（环境变量 / 面板设置 / 默认值）；未交付标签的项不出现 | 是（管理员） | 已实现 | F-9-01 |

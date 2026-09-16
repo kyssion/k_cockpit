@@ -660,6 +660,7 @@ erDiagram
 | 2026-09-15 | 按 [ADR-0005](../06-decisions/0005-control-plane-node-agent-architecture.md) 修订：§0 新增「节点接入」差异行；`node` 表去掉 API/SSH 双通道与远程探测字段（9 个），改为 agent 注册与信任字段（注册令牌哈希、证书指纹、注册状态）、agent 与协议版本、心跳与最后通信时间、能力上报时间与最近错误；同步 §2.2、§4.3、§5 枚举与 §2.10；迁移 `0002_node_agent_fields` 已执行 | `0002_node_agent_fields` |
 | 2026-09-15 | 全表复核（按 agent 架构逐表检查 43 张表）后的补充：`task` 表新增 `idempotency_key`（同一意图只允许一个任务）、`dispatched_at`、`last_reported_at`，`task.status` 增加 `unknown`；§0 异步任务差异行与 §5 枚举同步；`task_stage` 标注"由 agent 上报"；迁移 `0003_task_agent_fields` 已执行 | `0003_task_agent_fields` |
 | 2026-09-15 | 按 [`f-9-01-system-settings.md`](../07-specs/f-9-01-system-settings.md) 补充 `system_setting.previous_value`（最近一次变更前的值，供设置回滚，见该规格 §9 Q-007）；§2.1 实体说明同步 | `0004_settings_previous_value` |
+| 2026-09-16 | 按 [`f-2-08-vnc-console.md`](../07-specs/f-2-08-vnc-console.md) 为 `vm` 表补充控制台字段：`vnc_enabled`、`vnc_port`、`vnc_bind`（默认 `127.0.0.1`）、`vnc_exposed`、`display_device`。该规格 §5.1 声明「复用 vm 表的配置投影」，但写入时这些列并不存在——本迁移为上轮全量核对之外的又一处规格与实现的偏差。密码存于既有 `vm_credential` 表（`username = '_vnc'`） | `0005_vm_console` |
 
 ---
 
