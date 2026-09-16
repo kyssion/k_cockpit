@@ -44,6 +44,12 @@ const (
 	OpVMSnapshotCreate  OpKind = "vm.snapshot.create"
 	OpVMSnapshotRestore OpKind = "vm.snapshot.restore"
 	OpVMSnapshotDelete  OpKind = "vm.snapshot.delete"
+
+	// OpVMConfigUpdate 修改虚拟机硬件配置（F-2-05）。
+	//
+	// 只有需要下发到节点的改动才走这里：备注、分组是纯控制面元数据，
+	// 虚拟化层不知道它们的存在。
+	OpVMConfigUpdate OpKind = "vm.config.update"
 )
 
 // StatusDataKey 是 OpVMStatus 结果中承载运行态的键。

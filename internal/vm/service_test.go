@@ -70,6 +70,7 @@ func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task
 	queue.Register(vm.NewSnapshotCreateExecutor(db, client))
 	queue.Register(vm.NewSnapshotRestoreExecutor(db, client))
 	queue.Register(vm.NewSnapshotDeleteExecutor(db, client))
+	queue.Register(vm.NewConfigUpdateExecutor(db, client))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	queue.Start(ctx)
@@ -788,6 +789,198 @@ func TestSnapshotRejectsOthersVM(t *testing.T) {
 	// 删除也要走归属校验，而不是只查快照 ID——后者会让知道 ID 的人
 	// 直接删掉别人的快照。
 	_, err = svc.DeleteSnapshot(ctx, theirs.ID, snap.ID,
+		authz.Viewer{UserID: 10}, "bob", "10.0.0.2")
+	assertAPIError(t, err, 404)
+}
+
+// --- 编辑配置 ---
+
+func TestEditFormCarriesTheMatrix(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-edit", VCPU: 2, MemoryMB: 2048, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	form, err := svc.EditFormOf(ctx, row.ID, authz.Viewer{UserID: 7})
+	if err != nil {
+		t.Fatalf("获取编辑表单失败: %v", err)
+	}
+
+	byKey := map[string]vm.EditField{}
+	for _, f := range form.Fields {
+		byKey[f.Key] = f
+	}
+
+	// 纯控制面元数据**不需要下发**，因此也**不受运行态限制**——
+	// 虚拟机开着也能改备注，这一点必须在矩阵里体现出来。
+	for _, key := range []string{vm.EditFieldRemark, vm.EditFieldGroupName} {
+		f, ok := byKey[key]
+		if !ok {
+			t.Fatalf("矩阵缺少 %s", key)
+		}
+		if f.RequiresNode {
+			t.Errorf("%s 是纯控制面元数据，不应要求下发到节点", key)
+		}
+		if f.RequiresShutdown {
+			t.Errorf("%s 不应要求关机", key)
+		}
+	}
+
+	// 硬件配置需要下发且需要关机。
+	for _, key := range []string{vm.EditFieldVCPU, vm.EditFieldMemoryMB} {
+		f := byKey[key]
+		if !f.RequiresNode || !f.RequiresShutdown {
+			t.Errorf("%s 应标记为需下发且需关机（实际 %+v）", key, f)
+		}
+	}
+
+	// mock 探测固定返回 running，因此当前不可提交需要关机的改动。
+	if form.EditableNow {
+		t.Error("运行态下 EditableNow 应为 false")
+	}
+	if form.CurrentStatus != model.VMStatusRunning {
+		t.Errorf("当前状态 = %q, 期望 running", form.CurrentStatus)
+	}
+}
+
+func TestUpdateMetadataWorksWhileRunning(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-meta", Status: model.VMStatusRunning, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	// 运行中也能改：这是纯控制面数据，没有「运行中不能改」这回事。
+	view, err := svc.UpdateMetadata(ctx, row.ID, vm.UpdateMetadataRequest{
+		Remark: ptr("生产环境主库"), GroupName: ptr("prod"),
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("修改元数据失败: %v", err)
+	}
+	if view.Remark != "生产环境主库" || view.GroupName != "prod" {
+		t.Errorf("元数据未生效: remark=%q group=%q", view.Remark, view.GroupName)
+	}
+}
+
+func TestUpdateMetadataCanClearField(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-clear", Status: model.VMStatusRunning, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	if _, err := svc.UpdateMetadata(ctx, row.ID, vm.UpdateMetadataRequest{
+		Remark: ptr("临时"),
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1"); err != nil {
+		t.Fatalf("首次修改失败: %v", err)
+	}
+
+	// 提交空字符串 = 用户明确要清空。这与「没提交这一项」是两件事，
+	// 因此请求用指针区分（见 UpdateMetadataRequest 的说明）。
+	view, err := svc.UpdateMetadata(ctx, row.ID, vm.UpdateMetadataRequest{
+		Remark: ptr(""),
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("清空备注失败: %v", err)
+	}
+	if view.Remark != "" {
+		t.Errorf("备注未被清空: %q", view.Remark)
+	}
+}
+
+func TestUpdateConfigRejectsWhileRunning(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{
+		NodeID: 1, Name: "vm-cfg", VCPU: 2, MemoryMB: 2048,
+		Status: model.VMStatusStopped, OwnerID: ptr(int64(7)),
+	}
+	db.Create(&row)
+
+	// 探测（mock）返回 running，所以需要关机的改动必须被拒绝——
+	// 注意投影写的是 stopped，判定必须基于实时探测（f-2-01 R-002）。
+	_, err := svc.UpdateConfig(ctx, row.ID, vm.ConfigChangeRequest{
+		VCPU: ptr(4),
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 422)
+
+	var apiErr *api.Error
+	if errors.As(err, &apiErr) && !strings.Contains(apiErr.Message, "关机") {
+		t.Errorf("拒绝文案未说明需要关机: %q", apiErr.Message)
+	}
+}
+
+func TestUpdateConfigRejectsNoopChange(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-noop", VCPU: 2, MemoryMB: 2048, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	// 等值提交要拒绝，而不是照样入队：它会白白触发一次节点往返，
+	// 在更复杂的场景下（需要重启的项）还会引发一次没有理由的重启。
+	_, err := svc.UpdateConfig(ctx, row.ID, vm.ConfigChangeRequest{
+		VCPU: ptr(2),
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 400)
+}
+
+func TestUpdateConfigValidatesRange(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-range", VCPU: 2, MemoryMB: 2048, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	// 范围来自矩阵，与界面上的控件约束同源。
+	for _, v := range []int{0, -1, 999} {
+		_, err := svc.UpdateConfig(ctx, row.ID, vm.ConfigChangeRequest{
+			VCPU: ptr(v),
+		}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+		if err == nil {
+			t.Errorf("CPU=%d 应被拒绝", v)
+		}
+	}
+}
+
+func TestUpdateConfigEnqueuesWhenStopped(t *testing.T) {
+	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	ctx := context.Background()
+
+	row := model.VM{
+		NodeID: 1, Name: "vm-cfg2", VCPU: 2, MemoryMB: 2048,
+		Status: model.VMStatusStopped, OwnerID: ptr(int64(7)),
+	}
+	db.Create(&row)
+
+	tk, err := svc.UpdateConfig(ctx, row.ID, vm.ConfigChangeRequest{
+		VCPU: ptr(8), MemoryMB: ptr(8192),
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("关机态下应受理: %v", err)
+	}
+	if tk.Type != model.TaskVMConfigUpdate {
+		t.Errorf("任务类型 = %q, 期望 %q", tk.Type, model.TaskVMConfigUpdate)
+	}
+	// 与电源操作共用资源锁键，因此不会出现「边改配置边开机」。
+	if rt, rid := tk.TaskResource(); rt != "vm" || rid != row.ID {
+		t.Errorf("资源锁键 = %s:%d, 期望 vm:%d", rt, rid, row.ID)
+	}
+}
+
+func TestEditFormRejectsOthersVM(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	theirs := model.VM{NodeID: 1, Name: "vm-theirs-edit", OwnerID: ptr(int64(20))}
+	db.Create(&theirs)
+
+	_, err := svc.EditFormOf(ctx, theirs.ID, authz.Viewer{UserID: 10})
+	assertAPIError(t, err, 404)
+
+	_, err = svc.UpdateMetadata(ctx, theirs.ID, vm.UpdateMetadataRequest{Remark: ptr("x")},
 		authz.Viewer{UserID: 10}, "bob", "10.0.0.2")
 	assertAPIError(t, err, 404)
 }

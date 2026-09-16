@@ -142,6 +142,12 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/vms/:id/interfaces", requireAuth, vmHandler.Interfaces)
 		v1.GET("/vms/:id/static-ips", requireAuth, vmHandler.StaticIPs)
 
+		// 编辑配置（F-2-05）。元数据与硬件分开：前者是纯控制面数据，
+		// 同步改库即可；后者要下发到节点，走任务队列。
+		v1.GET("/vms/:id/edit-form", requireAuth, vmHandler.EditForm)
+		v1.PATCH("/vms/:id/metadata", requireAuth, vmHandler.UpdateMetadata)
+		v1.POST("/vms/:id/config-changes", requireAuth, vmHandler.UpdateConfig)
+
 		// 快照（F-2-07）。三个动作全部走任务队列：创建与恢复要复制或回滚
 		// 整个磁盘镜像，同步等待必然超时（f-7-01 R-001）。
 		v1.GET("/vms/:id/snapshots", requireAuth, vmHandler.Snapshots)

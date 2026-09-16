@@ -221,6 +221,100 @@ func (h *VM) Interfaces(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, map[string]any{"items": items})
 }
 
+// EditForm 返回编辑页的表单元数据与当前值（API-056）。
+//
+// 返回值里的 **运行态可改矩阵**是单一事实来源（F-2-05）：界面按它渲染控件与
+// 「可热改 / 需关机」标记，后端按它校验提交。前端不得硬编码第二份——两份
+// 规则漂移的表现是「界面上能改、提交后被拒」，而只有真正动手的用户才会碰到。
+func (h *VM) EditForm(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	form, err := h.svc.EditFormOf(ctx, id, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, form)
+}
+
+type updateMetadataRequest struct {
+	// 用指针区分「没提交这一项」与「提交了空值」：后者是用户明确要清空备注。
+	Remark    *string `json:"remark"`
+	GroupName *string `json:"group_name"`
+}
+
+// UpdateMetadata 修改备注、分组（API-057）。
+//
+// **同步返回，不入队**：这两项是纯控制面元数据，虚拟化层不知道它们的存在，
+// 因此没有「运行中不能改」这回事。让它们和硬件配置走同一条路径，会让改个
+// 备注也要等一次节点往返。
+func (h *VM) UpdateMetadata(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	var req updateMetadataRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	view, err := h.svc.UpdateMetadata(ctx, id, vm.UpdateMetadataRequest{
+		Remark:    req.Remark,
+		GroupName: req.GroupName,
+	}, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, view)
+}
+
+type updateConfigRequest struct {
+	VCPU     *int `json:"vcpu"`
+	MemoryMB *int `json:"memory_mb"`
+}
+
+// UpdateConfig 提交硬件配置变更（API-058）。
+//
+// 返回任务标识：修改 CPU / 内存需要下发到节点，且可能要求先关机。
+func (h *VM) UpdateConfig(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	var req updateConfigRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.UpdateConfig(ctx, id, vm.ConfigChangeRequest{
+		VCPU:     req.VCPU,
+		MemoryMB: req.MemoryMB,
+	}, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
 // Snapshots 返回虚拟机的快照列表与配额（API-052）。
 func (h *VM) Snapshots(ctx context.Context, c *app.RequestContext) {
 	id, err := namedPathID(c, "id", "虚拟机 ID")

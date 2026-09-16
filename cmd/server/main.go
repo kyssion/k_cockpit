@@ -110,6 +110,7 @@ func main() {
 	queue.Register(vm.NewSnapshotCreateExecutor(db, mockAgent))
 	queue.Register(vm.NewSnapshotRestoreExecutor(db, mockAgent))
 	queue.Register(vm.NewSnapshotDeleteExecutor(db, mockAgent))
+	queue.Register(vm.NewConfigUpdateExecutor(db, mockAgent))
 	queue.Register(storage.NewCreateExecutor(db, mockAgent))
 	queue.Register(storage.NewDeleteExecutor(db, mockAgent))
 	queue.Start(context.Background())

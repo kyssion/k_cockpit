@@ -40,6 +40,12 @@ const (
 	TaskVMSnapshotCreate  = "vm.snapshot.create"
 	TaskVMSnapshotRestore = "vm.snapshot.restore"
 	TaskVMSnapshotDelete  = "vm.snapshot.delete"
+
+	// TaskVMConfigUpdate 修改硬件配置（F-2-05）。
+	//
+	// 与元数据修改（备注、分组）区分开：后者只存在于控制面，直接改库即可，
+	// 不需要任务；只有需要**下发到节点**的改动才走这条路。
+	TaskVMConfigUpdate = "vm.config.update"
 )
 
 // Task 对应 task 表。
