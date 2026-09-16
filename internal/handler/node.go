@@ -56,6 +56,47 @@ func (h *Node) Get(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, view)
 }
 
+type maintenanceRequest struct {
+	// Enabled 用指针区分「没传」与「传了 false」：后者是明确的**退出**
+	// 维护模式，当成参数缺失忽略掉会给出一个「设置成功但什么都没变」的反馈。
+	Enabled *bool  `json:"enabled"`
+	Reason  string `json:"reason"`
+}
+
+// SetMaintenance 进入或退出维护模式（API-042 / F-6-05）。
+//
+// **不需要二次验证**，与删除、移除节点这类不可逆操作不同：进入维护模式
+// 是收紧（拒绝新变更），退出是恢复，两者都不会造成不可逆的结果，而且
+// 随时可以反向操作。给可逆操作加验证只会稀释验证本身的分量。
+func (h *Node) SetMaintenance(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "节点 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	var req maintenanceRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+	if req.Enabled == nil {
+		api.Fail(c, api.InvalidParameter("缺少 enabled 字段"))
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	view, err := h.svc.SetMaintenance(ctx, id, *req.Enabled, req.Reason,
+		user.ID, user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, view)
+}
+
 // Remove 移除节点。
 func (h *Node) Remove(ctx context.Context, c *app.RequestContext) {
 	// 高风险操作：移除节点后其上的虚拟机将失去管控（f-10-02）。

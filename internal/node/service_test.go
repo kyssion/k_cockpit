@@ -270,6 +270,141 @@ func TestListToleratesRuntimeFailure(t *testing.T) {
 	}
 }
 
+// enrolledNode 建一个已接入的节点，供维护模式用例使用。
+//
+// 维护模式只对已接入的节点有意义：未接入的节点上跑不了虚拟机，
+// 允许切换会给出一个「设置成功但没有任何效果」的反馈。
+func enrolledNode(t *testing.T, svc *node.Service, db *gorm.DB) int64 {
+	t.Helper()
+	row := model.Node{
+		Name:        "node-m",
+		EnrollState: model.NodeEnrollEnrolled,
+		Enabled:     true,
+	}
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+	return row.ID
+}
+
+func TestSetMaintenanceTogglesFlag(t *testing.T) {
+	svc, db := newTestService(t, &fakeRuntime{})
+	ctx := context.Background()
+	id := enrolledNode(t, svc, db)
+
+	view, err := svc.SetMaintenance(ctx, id, true, "升级内核", 1, "admin", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("进入维护模式失败: %v", err)
+	}
+	if !view.MaintenanceMode {
+		t.Error("视图未反映维护模式")
+	}
+	if view.MaintenanceReason != "升级内核" {
+		t.Errorf("维护原因 = %q, 期望「升级内核」", view.MaintenanceReason)
+	}
+	if view.MaintenanceAt == nil {
+		t.Error("未记录进入维护的时间")
+	}
+
+	stored, err := svc.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("查询节点失败: %v", err)
+	}
+	if !stored.MaintenanceMode {
+		t.Error("数据库未写入维护模式")
+	}
+
+	// 退出：原因与时刻必须一起清掉。
+	//
+	// 只翻标志会留下「已退出维护，但原因是『升级内核』」这种自相矛盾的
+	// 记录——界面要么显示一个不生效的理由，要么得写额外判断忽略它。
+	view, err = svc.SetMaintenance(ctx, id, false, "", 1, "admin", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("退出维护模式失败: %v", err)
+	}
+	if view.MaintenanceMode {
+		t.Error("退出后仍显示维护中")
+	}
+	if view.MaintenanceReason != "" || view.MaintenanceAt != nil {
+		t.Errorf("退出维护后原因/时刻未清空: %q / %v", view.MaintenanceReason, view.MaintenanceAt)
+	}
+}
+
+// TestSetMaintenanceDoesNotTouchUserRemark 覆盖一条**曾经写错**的行为。
+//
+// 最初把维护原因写进了 node.remark。那个字段属于用户自己——写进去会把
+// 他的备注悄悄覆盖掉，而他通常要到维护结束、发现备注变成一句已经不成立的
+// 「升级内核」时才会注意到。两个不同用途的文本共用一列，代价总在事后才显现。
+func TestSetMaintenanceDoesNotTouchUserRemark(t *testing.T) {
+	svc, db := newTestService(t, &fakeRuntime{})
+	ctx := context.Background()
+	id := enrolledNode(t, svc, db)
+
+	const userRemark = "机架 B12，上联交换机 3 号口"
+	if err := db.Model(&model.Node{}).Where("id = ?", id).
+		Update("remark", userRemark).Error; err != nil {
+		t.Fatalf("写入备注失败: %v", err)
+	}
+
+	if _, err := svc.SetMaintenance(ctx, id, true, "升级内核", 1, "admin", ""); err != nil {
+		t.Fatalf("进入维护失败: %v", err)
+	}
+	if _, err := svc.SetMaintenance(ctx, id, false, "", 1, "admin", ""); err != nil {
+		t.Fatalf("退出维护失败: %v", err)
+	}
+
+	after, err := svc.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("查询节点失败: %v", err)
+	}
+	if after.Remark != userRemark {
+		t.Errorf("用户备注被改动: %q → %q", userRemark, after.Remark)
+	}
+}
+
+// TestSetMaintenanceIsIdempotent 覆盖重复切换。
+//
+// 不重复写库、也不重复记审计：事后追查「什么时候进的维护模式」时，
+// 一串同一分钟的记录反而说不清是哪一次真正生效的。
+func TestSetMaintenanceIsIdempotent(t *testing.T) {
+	svc, db := newTestService(t, &fakeRuntime{})
+	ctx := context.Background()
+	id := enrolledNode(t, svc, db)
+
+	for i := 0; i < 3; i++ {
+		if _, err := svc.SetMaintenance(ctx, id, true, "", 1, "admin", "10.0.0.1"); err != nil {
+			t.Fatalf("第 %d 次进入维护失败: %v", i+1, err)
+		}
+	}
+
+	var count int64
+	db.Model(&model.AuditLog{}).
+		Where("action = ?", "node.maintenance.enter").
+		Count(&count)
+	if count != 1 {
+		t.Errorf("审计记录 = %d 条, 期望 1 条（重复切换不应重复记账）", count)
+	}
+}
+
+func TestSetMaintenanceRejectsPendingNode(t *testing.T) {
+	svc, db := newTestService(t, &fakeRuntime{})
+	ctx := context.Background()
+
+	row := model.Node{Name: "node-pending", EnrollState: model.NodeEnrollPending}
+	db.Create(&row)
+
+	// 未接入的节点上跑不了虚拟机，维护模式对它没有意义。
+	_, err := svc.SetMaintenance(ctx, row.ID, true, "", 1, "admin", "10.0.0.1")
+	assertAPIError(t, err, 422)
+}
+
+func TestSetMaintenanceOnMissingNode(t *testing.T) {
+	svc, _ := newTestService(t, &fakeRuntime{})
+
+	_, err := svc.SetMaintenance(context.Background(), 9999, true, "", 1, "admin", "")
+	assertAPIError(t, err, 404)
+}
+
 func TestRemoveIsSoftDelete(t *testing.T) {
 	svc, db := newTestService(t, &fakeRuntime{})
 	ctx := context.Background()

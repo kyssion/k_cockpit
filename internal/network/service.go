@@ -87,8 +87,12 @@ type SwitchView struct {
 	DHCPStart  string `json:"dhcp_start,omitempty"`
 	DHCPEnd    string `json:"dhcp_end,omitempty"`
 	UplinkIf   string `json:"uplink_if,omitempty"`
-	IsSystem   bool   `json:"is_system"`
-	Status     string `json:"status"`
+	// VlanID 可为空，表示不划 VLAN。**有无是两个不同的配置**，
+	// 因此用指针而不是把「未设置」压成 0——VLAN 0 本身是有含义的取值
+	// （表示优先级标记但不划分），与「没配」不能混为一谈。
+	VlanID   *int   `json:"vlan_id,omitempty"`
+	IsSystem bool   `json:"is_system"`
+	Status   string `json:"status"`
 }
 
 // capabilityMeta 是能力清单的**静态部分**。
@@ -331,6 +335,7 @@ func toSwitchView(sw *model.VpcSwitch) SwitchView {
 		DHCPStart:  derefStr(sw.DHCPStart),
 		DHCPEnd:    derefStr(sw.DHCPEnd),
 		UplinkIf:   derefStr(sw.UplinkIf),
+		VlanID:     sw.VlanID,
 		IsSystem:   sw.IsSystem,
 		Status:     sw.Status,
 	}

@@ -39,6 +39,16 @@ type Node struct {
 	MaintenanceMode   bool   `gorm:"not null;default:false"`
 	IsMigrationTarget bool   `gorm:"not null;default:true"`
 
+	// MaintenanceReason / MaintenanceAt 描述**当前这次**维护。
+	//
+	// 退出维护时与 MaintenanceMode 一同清空（见 node.Service.SetMaintenance）：
+	// 保留一个「未在维护、但原因是『升级内核』」的记录，界面要么显示一个
+	// 不生效的理由，要么得写额外判断去忽略它。
+	//
+	// 与业务软锁的 vm_lock.reason / locked_at 是同一套口径。
+	MaintenanceReason *string `gorm:"size:255"`
+	MaintenanceAt     *time.Time
+
 	// agent 注册与信任信息。
 	// 索引与迁移一致（uniq_node_agent_id）：agent 身份唯一，避免同一个
 	// agent 被登记成两个节点。**可为空**，而空值不参与唯一性判定——

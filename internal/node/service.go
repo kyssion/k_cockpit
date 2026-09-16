@@ -68,6 +68,16 @@ type View struct {
 	LastHeartbeatAt *time.Time `json:"last_heartbeat_at,omitempty"`
 	LastError       string     `json:"last_error,omitempty"`
 
+	// IsMigrationTarget 表示是否可作为迁移目标节点。
+	//
+	// 进入维护模式时界面要提示这一条：维护中的节点**不该**继续作为迁移
+	// 目标——迁移会把新虚拟机放到它上面，而那正是「引入变更」。
+	IsMigrationTarget bool `json:"is_migration_target"`
+
+	// MaintenanceReason / MaintenanceAt 仅在处于维护模式时有值。
+	MaintenanceReason string     `json:"maintenance_reason,omitempty"`
+	MaintenanceAt     *time.Time `json:"maintenance_at,omitempty"`
+
 	Remark    string    `json:"remark,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -277,6 +287,97 @@ func (s *Service) Remove(ctx context.Context, id int64, operatorID int64, operat
 	return nil
 }
 
+// SetMaintenance 进入或退出维护模式（F-6-05）。
+//
+// **同步生效，不进任务队列。**
+//
+// 这一点与 PRD 里那句「进入与退出均为任务」不同，理由值得写清楚：
+// 维护模式**纯粹是控制面的一个标志**（f-2-01 Q-009：它的意义是「不再引入
+// 变更」，而非「停止业务」），节点根本不需要知道自己的这个状态——所有拦截
+// 都发生在控制面受理请求的那一刻（ensureNodeUsable）。
+//
+// 把它做成任务会制造一个**危险的窗口**：用户在界面上看到「维护中」、
+// 以为操作已经被拦住，而队列里的标志还没翻转，此时的操作依然会被受理并
+// 下发到节点。这类「界面说拦住了、实际没拦住」的不一致，比多等两秒严重得多。
+//
+// 反过来，纯元数据的改动（备注、分组、软锁）在本项目里都是同步的，
+// 这条与它们保持一致。
+func (s *Service) SetMaintenance(
+	ctx context.Context, id int64, enabled bool, reason string,
+	operatorID int64, operatorName, clientIP string,
+) (*View, error) {
+	var node model.Node
+	err := s.db.WithContext(ctx).Where("id = ?", id).First(&node).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return nil, api.NotFound("节点不存在")
+	case err != nil:
+		log.Printf("[node] 查询节点失败: %v", err)
+		return nil, api.Internal()
+	}
+
+	// 未接入的节点没有维护模式可言：它上面一个虚拟机都跑不了。
+	// 允许切换会给出一个「设置成功但没有任何效果」的反馈。
+	if !node.IsEnrolled() {
+		return nil, api.ValidationFailed("节点尚未接入，无法设置维护模式")
+	}
+
+	// 已经是目标状态就直接返回，不写库也不记审计。
+	//
+	// 与软锁的幂等处理一致：重复点击不是错误，但重复写一条**状态未变**的
+	// 审计记录会污染流水——事后追查「什么时候进的维护模式」时，看到一串
+	// 同一分钟的记录，反而说不清是哪一次真正生效的。
+	if node.MaintenanceMode == enabled {
+		return s.Get(ctx, id)
+	}
+
+	// 原因与时刻随状态同进同退，退出时一起清空——与业务软锁（vm_lock）
+	// 同一套口径：留一个「未在维护、但原因是『升级内核』」的记录，界面
+	// 要么显示一个不生效的理由，要么得写额外判断去忽略它。
+	//
+	// **不写进 node.remark**：那是用户自己的备注，覆盖它会让人在维护结束后
+	// 发现备注已被悄悄改掉。两个不同用途的文本共用一列，代价总在事后才显现。
+	updates := map[string]any{
+		"maintenance_mode":   enabled,
+		"maintenance_reason": nil,
+		"maintenance_at":     nil,
+	}
+	if enabled {
+		// 空原因存 NULL 而不是空串：空串在界面上会渲染成一个空的「原因：」，
+		// 看起来像原因丢了；NULL 让界面能明确显示「未填写原因」。
+		if r := strings.TrimSpace(reason); r != "" {
+			updates["maintenance_reason"] = r
+		}
+		updates["maintenance_at"] = time.Now()
+	}
+	if err := s.db.WithContext(ctx).Model(&model.Node{}).
+		Where("id = ?", id).Updates(updates).Error; err != nil {
+		log.Printf("[node] 更新维护模式失败: %v", err)
+		return nil, api.Internal()
+	}
+
+	action := "node.maintenance.exit"
+	if enabled {
+		action = "node.maintenance.enter"
+	}
+	s.record(ctx, audit.Entry{
+		OperatorID:   operatorID,
+		OperatorName: operatorName,
+		NodeID:       node.ID,
+		ResourceType: "node",
+		ResourceID:   node.ID,
+		ResourceName: node.Name,
+		Action:       action,
+		Params:       map[string]any{"reason": reason},
+		BeforeState:  map[string]any{"maintenance_mode": node.MaintenanceMode},
+		AfterState:   map[string]any{"maintenance_mode": enabled},
+		Success:      true,
+		ClientIP:     clientIP,
+	})
+
+	return s.Get(ctx, id)
+}
+
 // toView 组装节点视图：元数据取自数据库，运行态取自 agent。
 func (s *Service) toView(ctx context.Context, node *model.Node) View {
 	snap, err := s.runtime.Snapshot(ctx, node.ID)
@@ -291,16 +392,25 @@ func (s *Service) toView(ctx context.Context, node *model.Node) View {
 
 func (s *Service) viewOf(node *model.Node, snap *agent.Snapshot) View {
 	view := View{
-		ID:              node.ID,
-		Name:            node.Name,
-		EnrollState:     node.EnrollState,
-		Enabled:         node.Enabled,
-		MaintenanceMode: node.MaintenanceMode,
-		Status:          deriveStatus(node, snap, time.Now()),
-		CreatedAt:       node.CreatedAt,
+		ID:                node.ID,
+		Name:              node.Name,
+		EnrollState:       node.EnrollState,
+		Enabled:           node.Enabled,
+		MaintenanceMode:   node.MaintenanceMode,
+		IsMigrationTarget: node.IsMigrationTarget,
+		Status:            deriveStatus(node, snap, time.Now()),
+		CreatedAt:         node.CreatedAt,
 	}
 	if node.Remark != nil {
 		view.Remark = *node.Remark
+	}
+	// 只在**确实处于维护模式**时带出原因：一个「未在维护但原因是……」
+	// 的响应会让界面把它显示在错误的语境里。
+	if node.MaintenanceMode {
+		if node.MaintenanceReason != nil {
+			view.MaintenanceReason = *node.MaintenanceReason
+		}
+		view.MaintenanceAt = node.MaintenanceAt
 	}
 
 	// 运行态字段优先取 agent 上报；取不到时回退到数据库里缓存的上一次值，
