@@ -19,7 +19,9 @@ import (
 
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/api"
+	"k_cockpit/internal/audit"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/task"
 )
 
 // CapabilityState 是能力的三态。
@@ -149,11 +151,21 @@ var capabilityCatalog = []capabilityMeta{
 type Service struct {
 	db    *gorm.DB
 	agent agent.Client
+	// queue 仅用于交换机变更：建网桥要下发到节点，因此必须走任务队列。
+	queue *task.Queue
+	// audit 记录谁在什么时候改了哪台节点的哪一个交换机。
+	audit *audit.Recorder
 }
 
 // NewService 构造网络服务。
-func NewService(db *gorm.DB, client agent.Client) *Service {
-	return &Service{db: db, agent: client}
+//
+// queue 与 recorder 用于交换机的增删改：建网桥是宿主机上的实际操作，
+// 因此走任务队列；两者的关系是「受理时入队、执行时落库」，与存储池一致。
+// 只读的探测（状态、网络列表）不需要它们。
+func NewService(
+	db *gorm.DB, client agent.Client, queue *task.Queue, recorder *audit.Recorder,
+) *Service {
+	return &Service{db: db, agent: client, queue: queue, audit: recorder}
 }
 
 // Status 返回节点的网络后端状态与能力清单。

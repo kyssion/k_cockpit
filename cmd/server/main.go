@@ -123,10 +123,12 @@ func main() {
 	queue.Register(vm.NewPortForwardChangeExecutor(db, mockAgent))
 	queue.Register(storage.NewCreateExecutor(db, mockAgent))
 	queue.Register(storage.NewDeleteExecutor(db, mockAgent))
+	// 交换机变更要建网桥，因此与存储池一样走队列。
+	queue.Register(network.NewSwitchChangeExecutor(db, mockAgent))
 	queue.Start(context.Background())
 
 	settingsSvc := settings.NewService(db, recorder)
-	networkSvc := network.NewService(db, mockAgent)
+	networkSvc := network.NewService(db, mockAgent, queue, recorder)
 
 	// vm 与 storage 都要读设置里的陈旧阈值：把 settingsSvc 作为 Provider
 	// 注入，让「面板上改的阈值」真的影响业务行为——否则那两个设置项就是

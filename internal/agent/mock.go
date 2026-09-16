@@ -112,6 +112,13 @@ func stagePlan(kind OpKind) [][2]string {
 			{"rule_write", "写入转发规则"},
 			{"firewall_apply", "应用防火墙规则"},
 		}
+	case OpVPCSwitchChange:
+		return [][2]string{
+			{"bridge_create", "创建网桥"},
+			{"vlan_config", "配置 VLAN 与地址"},
+			{"dhcp_config", "配置 DHCP 服务"},
+			{"nat_config", "配置出网转发"},
+		}
 	}
 	// 电源类操作是单步的，但仍然会上报一项：否则界面上这类任务的时间线是
 	// 空的，而「空空如也」与「不支持展示」看起来是同一件事。

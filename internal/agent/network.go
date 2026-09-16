@@ -7,6 +7,13 @@ package agent
 // 「通常都有」去假定，结果是功能报错而不是优雅降级。
 const OpNodeNetwork OpKind = "node.network"
 
+// OpVPCSwitchChange 在节点上建立 / 修改 / 删除虚拟交换机（F-4-02）。
+//
+// 一个操作承载三种动作，与 vm.interface.change 同一形状：对节点而言，
+// 「让这个网桥变成这个样子」是同一件事，拆分只会让节点侧多三条几乎相同的
+// 分支。动作由 Params["action"] 指定（create / update / delete）。
+const OpVPCSwitchChange OpKind = "vpc.switch.change"
+
 // NetworkKey 是 OpNodeNetwork 结果中承载网络后端信息的键。
 const NetworkKey = "network"
 

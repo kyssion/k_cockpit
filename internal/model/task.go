@@ -59,6 +59,14 @@ const (
 	TaskVMInterfaceChange   = "vm.interface.change"
 	TaskVMStaticIPChange    = "vm.staticip.change"
 	TaskVMPortForwardChange = "vm.portforward.change"
+
+	// TaskVPCSwitchChange 修改节点上的虚拟交换机（F-4-02）。
+	//
+	// 资源锁键是 node:<id> 而不是 vm:<id>：交换机属于节点，同一次改动会
+	// 影响该节点上所有接入它的虚拟机，因此它与同节点的其它交换机变更必须
+	// 串行——两个并发改动会各自基于「当前状态」计算，后落地的那个覆盖掉
+	// 前一个，而前一个的下发结果已经生效在宿主机上了。
+	TaskVPCSwitchChange = "vpc.switch.change"
 )
 
 // 阶段的执行状态。取值与 task.status 保持同一套词汇，避免界面上出现

@@ -126,6 +126,15 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/nodes/:id/network", requireAuth, adminOnly, networkHandler.Status)
 		v1.GET("/nodes/:id/networks", requireAuth, adminOnly, networkHandler.Networks)
 
+		// 虚拟交换机（F-4-02）。写操作走任务队列——建网桥是宿主机上的实际
+		// 操作，接口不同步等待；记录由执行器在节点成功后写入。
+		//
+		// 不需要二次验证：交换机变更**可逆**（改回去即可），而它影响的是
+		// 网络连通性而非数据。给可逆操作加验证只会稀释验证本身的分量。
+		v1.POST("/nodes/:id/vpc-switches", requireAuth, adminOnly, networkHandler.CreateSwitch)
+		v1.PATCH("/vpc-switches/:id", requireAuth, adminOnly, networkHandler.UpdateSwitch)
+		v1.DELETE("/vpc-switches/:id", requireAuth, adminOnly, networkHandler.DeleteSwitch)
+
 		// 系统设置（F-9-01）：**仅管理员**（R-014）。设置变更不得成为
 		// 绕过权限的通道，因此 tenant 连可见性都没有。
 		v1.GET("/settings", requireAuth, adminOnly, settingsHandler.List)

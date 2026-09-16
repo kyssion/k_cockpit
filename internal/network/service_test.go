@@ -5,15 +5,18 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"gorm.io/gorm"
 
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/api"
+	"k_cockpit/internal/audit"
 	"k_cockpit/internal/config"
 	"k_cockpit/internal/database"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/network"
+	"k_cockpit/internal/task"
 )
 
 // backendClient 用可控的能力上报替换 mock。
@@ -52,14 +55,31 @@ func newTestEnv(t *testing.T, client agent.Client) (*network.Service, *gorm.DB) 
 	if err != nil {
 		t.Fatalf("打开测试库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.VpcSwitch{}, &model.Node{}); err != nil {
+	if err := db.AutoMigrate(
+		&model.VpcSwitch{}, &model.Node{}, &model.Task{}, &model.TaskStage{},
+		&model.AuditLog{}, &model.VMInterface{},
+	); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
 	if err := db.Create(&model.Node{ID: 1, Name: "node-1"}).Error; err != nil {
 		t.Fatalf("创建测试节点失败: %v", err)
 	}
 
-	return network.NewService(db, client), db
+	recorder := audit.NewRecorder(db)
+	queue := task.NewQueue(db, recorder, task.Options{
+		MaxConcurrent: 2,
+		PollInterval:  20 * time.Millisecond,
+	})
+	queue.Register(network.NewSwitchChangeExecutor(db, client))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	queue.Start(ctx)
+	t.Cleanup(func() {
+		cancel()
+		queue.Stop()
+	})
+
+	return network.NewService(db, client, queue, recorder), db
 }
 
 func fullBackend() *agent.NetworkBackend {
