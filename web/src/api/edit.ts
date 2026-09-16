@@ -10,6 +10,15 @@
 import { get, patch, post } from './client'
 import type { TaskRef, VmView } from './vm'
 
+/** 控件类型。 */
+export type EditKind = 'text' | 'number' | 'boolean' | 'select'
+
+/** 枚举字段的一个可选值。 */
+export interface EditOption {
+  value: string
+  label: string
+}
+
 /**
  * 一个可编辑的配置项。
  *
@@ -19,16 +28,34 @@ import type { TaskRef, VmView } from './vm'
 export interface EditField {
   key: string
   label: string
-  kind: 'number' | 'text'
+  /** 决定用什么控件渲染。 */
+  kind: EditKind
   /** 所属的子选项卡。 */
   group: string
   /** 修改是否需要下发到节点。为 false 的是纯控制面元数据。 */
   requires_node: boolean
   /** 是否需要先关机（仅在 requires_node 为 true 时有意义）。 */
   requires_shutdown: boolean
+  /**
+   * 只展示、不可编辑。
+   *
+   * 用于**探测结果**（如 Guest Agent 是否在运行）：它不是用户能设定的东西，
+   * 做成可编辑的输入框会让人以为「勾上它就能让它跑起来」。
+   */
+  read_only: boolean
+  options?: EditOption[]
   min?: number
   max?: number
   hint?: string
+}
+
+/** 一个子选项卡。 */
+export interface EditGroupInfo {
+  key: string
+  label: string
+  /** 内容尚未实现。界面据此显示说明而不是一个空表格。 */
+  planned: boolean
+  note?: string
 }
 
 export interface EditForm {
@@ -38,6 +65,8 @@ export interface EditForm {
   /** 以当前运行态能否提交需要下发的修改。 */
   editable_now: boolean
   current_status: string
+  /** 子选项卡的顺序与名称，同样由后端下发。 */
+  groups: EditGroupInfo[]
 }
 
 export const editApi = {
@@ -46,19 +75,12 @@ export const editApi = {
   updateMetadata: (vmID: number, input: { remark?: string; group_name?: string }) =>
     patch<VmView>(`/api/v1/vms/${vmID}/metadata`, input),
 
-  updateConfig: (vmID: number, input: { vcpu?: number; memory_mb?: number }) =>
-    post<TaskRef>(`/api/v1/vms/${vmID}/config-changes`, input),
+  /**
+   * 提交配置变更。
+   *
+   * 传 `changes` 而不是具名参数：接口形状由**矩阵**决定，新增一个可编辑项
+   * 时只需要改后端矩阵，这里不用动。逐个字段的写法会让新增一项变成三处修改。
+   */
+  updateConfig: (vmID: number, changes: Record<string, unknown>) =>
+    post<TaskRef>(`/api/v1/vms/${vmID}/config-changes`, { changes }),
 }
-
-/** 子选项卡的中文名，与后端 `EditGroup*` 常量对应。 */
-export const EDIT_GROUP_LABEL: Record<string, string> = {
-  basic: '基础配置',
-  disk: '磁盘与驱动器',
-  boot: '启动与安全',
-  network: '网口',
-  passthru: '硬件直通',
-  advanced: '高级设置',
-}
-
-/** 子选项卡的展示顺序（与 FRONTEND.md §5.3.3 一致）。 */
-export const EDIT_GROUP_ORDER = ['basic', 'disk', 'boot', 'network', 'passthru', 'advanced']

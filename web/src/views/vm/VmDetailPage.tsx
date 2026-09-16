@@ -17,7 +17,12 @@ import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 
 import { ApiError, NetworkError } from '@/api/client'
-import { EDIT_GROUP_LABEL, EDIT_GROUP_ORDER, editApi, type EditForm } from '@/api/edit'
+import {
+  editApi,
+  type EditField,
+  type EditForm,
+  type EditGroupInfo,
+} from '@/api/edit'
 import { nodeApi } from '@/api/node'
 import {
   SNAPSHOT_KIND_LABEL,
@@ -1239,20 +1244,20 @@ function EditTab({ vmID, onSaved }: { vmID: number; onSaved: () => void }) {
   // 原值，而用户看到的是「我打的字自己消失了」，最难排查的一类问题。
   const currentDraft = draft ?? (form.data ? buildDraft(form.data.values) : null)
 
-  const changes = form.data && currentDraft ? computeChanges(form.data, currentDraft) : null
-  const dirty = changes !== null && (changes.hasMetadata || changes.hasConfig)
+  const diff = form.data && currentDraft ? computeChanges(form.data, currentDraft) : null
+  const dirty = diff !== null && diff.keys.length > 0
 
   const save = useMutation({
     mutationFn: async () => {
-      if (!changes) return
-      // 两类修改走不同接口：元数据同步生效，硬件配置入队执行。
+      if (!diff) return
+      // 两类修改走不同接口：元数据同步生效，其余配置入队执行。
       // 顺序上先元数据后配置——元数据几乎不会失败，先把它落下来，
       // 万一配置提交失败，用户至少不用重填备注。
-      if (changes.hasMetadata) {
-        await editApi.updateMetadata(vmID, changes.metadata)
+      if (diff.hasMetadata) {
+        await editApi.updateMetadata(vmID, diff.metadata)
       }
-      if (changes.hasConfig) {
-        return editApi.updateConfig(vmID, changes.config)
+      if (diff.hasConfig) {
+        return editApi.updateConfig(vmID, diff.config)
       }
       return undefined
     },
@@ -1261,11 +1266,7 @@ function EditTab({ vmID, onSaved }: { vmID: number; onSaved: () => void }) {
       setDraft(null) // 重新冻结一次，拿到刚保存后的值
       void form.refetch()
       onSaved()
-      setNotice(
-        result
-          ? `已提交硬件配置变更，任务 #${result.task_id} 正在执行`
-          : '已保存',
-      )
+      setNotice(result ? `已提交配置变更，任务 #${result.task_id} 正在执行` : '已保存')
     },
     onError: (err) => setError(describe(err)),
   })
@@ -1274,8 +1275,11 @@ function EditTab({ vmID, onSaved }: { vmID: number; onSaved: () => void }) {
   if (form.isError) return <ErrorBox message={describe(form.error)} />
 
   const data = form.data
-  const groups = EDIT_GROUP_ORDER
-  const fields = data.fields.filter((f) => f.group === group)
+  // 兜底：后端总会下发 groups，但一个空列表不该让整页崩掉。
+  const active: EditGroupInfo =
+    data.groups.find((g) => g.key === group) ??
+    data.groups[0] ?? { key: 'basic', label: '基础配置', planned: false }
+  const fields = data.fields.filter((f) => f.group === active.key)
   // 需要关机才能改的项，在当前运行态下不可提交。
   const blockedByStatus = !data.editable_now
 
@@ -1286,27 +1290,34 @@ function EditTab({ vmID, onSaved }: { vmID: number; onSaved: () => void }) {
       )}
       {error && <ErrorBox message={error} />}
 
+      {/* 子选项卡由后端下发：新增一个只需要改后端矩阵一处，界面自动跟上。 */}
       <div className="flex flex-wrap gap-1 border-b border-line">
-        {groups.map((g) => (
+        {data.groups.map((g) => (
           <button
-            key={g}
-            onClick={() => setGroup(g)}
+            key={g.key}
+            onClick={() => setGroup(g.key)}
             className={[
               'rounded-t-control px-3.5 py-2 text-base transition-colors',
-              g === group
+              g.key === active.key
                 ? 'border-b-2 border-brand font-medium text-brand'
                 : 'border-b-2 border-transparent text-ink-3 hover:text-ink',
             ].join(' ')}
           >
-            {EDIT_GROUP_LABEL[g] ?? g}
+            {g.label}
           </button>
         ))}
       </div>
 
-      {group === 'basic' ? (
+      {active.planned ? (
+        <section className="rounded-card border border-line bg-raised px-4 py-5">
+          <p className="text-base font-medium text-ink">{active.label}</p>
+          <p className="mt-1.5 text-base text-ink-2">{active.note}</p>
+          <p className="mt-3 text-sm text-ink-3">对应需求 F-2-05 / F-2-06。</p>
+        </section>
+      ) : (
         <section className="rounded-card border border-line">
           <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
-            <h2 className="text-sm font-medium text-ink-2">基础配置</h2>
+            <h2 className="text-sm font-medium text-ink-2">{active.label}</h2>
             <div className="flex items-center gap-3">
               {dirty && <span className="text-sm text-warning">有未保存的修改</span>}
               <Button
@@ -1321,43 +1332,40 @@ function EditTab({ vmID, onSaved }: { vmID: number; onSaved: () => void }) {
           </div>
 
           <div className="flex flex-col gap-4 px-4 py-3.5">
+            {fields.length === 0 && (
+              <p className="text-base text-ink-3">这个选项卡暂时没有可编辑的项。</p>
+            )}
             {fields.map((f) => {
               // 运行态下，需要关机的项禁用输入——但**仍然显示**：
               // 直接隐藏会让用户在关机之后再进来才发现多出几项。
-              const blocked = f.requires_shutdown && blockedByStatus
+              const blocked = (f.requires_shutdown && blockedByStatus) || f.read_only
               const statusLabel =
                 VM_STATUS_LABEL[data.current_status as VmStatus] ?? data.current_status
 
               // 生效方式与提示合成一句：用户读的是「这一项改了会怎样」，
               // 拆成徽标 + 提示两处反而要来回对照。
-              const mode = f.requires_shutdown ? '需关机后修改' : '即时生效，不影响运行'
-              const hint = blocked
+              const mode = f.read_only
+                ? '由节点上报，不可修改'
+                : f.requires_shutdown
+                  ? '需关机后修改'
+                  : '即时生效，不影响运行'
+              const hint = f.requires_shutdown && blockedByStatus && !f.read_only
                 ? `当前为${statusLabel}，需关机后才能修改`
                 : [mode, f.hint].filter(Boolean).join(' · ')
 
               return (
-                <Input
+                <FieldControl
                   key={f.key}
-                  label={f.label}
-                  type={f.kind === 'number' ? 'number' : 'text'}
+                  field={f}
                   value={currentDraft[f.key] ?? ''}
-                  min={f.min}
-                  max={f.max}
                   disabled={blocked || save.isPending}
                   hint={hint}
-                  onChange={(e) => setDraft({ ...currentDraft, [f.key]: e.target.value })}
+                  onChange={(v) => setDraft({ ...currentDraft, [f.key]: v })}
                 />
               )
             })}
           </div>
         </section>
-      ) : (
-        <PlannedTab
-          title={EDIT_GROUP_LABEL[group] ?? group}
-          requirement="F-2-05"
-          description={EDIT_GROUP_DESCRIPTION[group] ?? ''}
-          blocked="当前阻塞：这些配置项尚未在投影中建模，且需要 agent 的改配能力。"
-        />
       )}
 
       <p className="rounded-card border border-line bg-raised px-4 py-3 text-sm text-ink-3">
@@ -1371,13 +1379,83 @@ function EditTab({ vmID, onSaved }: { vmID: number; onSaved: () => void }) {
   )
 }
 
-/** 各子选项卡的说明，用于尚未实现的那些。 */
-const EDIT_GROUP_DESCRIPTION: Record<string, string> = {
-  disk: '磁盘与驱动器：热插拔与槽位、扩容、IOPS 限制、光驱与软盘、宿主机目录共享。',
-  boot: '启动与安全：引导顺序、机器类型、UEFI/BIOS、安全启动、开机自启、Watchdog。',
-  network: '网口：型号与限速、接入网络、MAC 地址、允许的源地址。',
-  passthru: '硬件直通：PCI 设备直通与 USB 设备透传。',
-  advanced: '高级设置：CPU 类型与亲和性、内存策略、APIC/PAE、Guest Agent 与初始化方式。',
+/**
+ * FieldControl 按矩阵声明的类型渲染控件。
+ *
+ * 分支集中在这一处，而不是散在每个字段的渲染里：新增一种控件类型时只需要
+ * 在这里加一个 case，其余代码（校验、差异、提交）都不用动。
+ */
+function FieldControl({
+  field,
+  value,
+  disabled,
+  hint,
+  onChange,
+}: {
+  field: EditField
+  value: string
+  disabled: boolean
+  hint: string
+  onChange: (v: string) => void
+}) {
+  if (field.kind === 'boolean') {
+    return (
+      <label className="flex cursor-pointer items-start gap-2.5">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={value === 'true'}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.checked ? 'true' : 'false')}
+        />
+        <span>
+          <span className="block text-base text-ink">{field.label}</span>
+          <span className={disabled ? 'block text-sm text-warning' : 'block text-sm text-ink-3'}>
+            {hint}
+          </span>
+        </span>
+      </label>
+    )
+  }
+
+  if (field.kind === 'select') {
+    return (
+      <label className="flex flex-col gap-1">
+        <span className="text-base text-ink">{field.label}</span>
+        <select
+          className={[
+            'rounded-control border border-line-strong bg-surface px-2.5 py-2 text-base text-ink',
+            disabled ? 'cursor-not-allowed opacity-60' : '',
+          ].join(' ')}
+          value={value}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.value)}
+        >
+          {/* 枚举值来自后端下发的 options，前端不硬编码——
+              否则后端新增一个取值时，界面会显示成空白选项。 */}
+          {(field.options ?? []).map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <span className={disabled ? 'text-sm text-warning' : 'text-sm text-ink-3'}>{hint}</span>
+      </label>
+    )
+  }
+
+  return (
+    <Input
+      label={field.label}
+      type={field.kind === 'number' ? 'number' : 'text'}
+      value={value}
+      min={field.min}
+      max={field.max}
+      disabled={disabled}
+      hint={hint}
+      onChange={(e) => onChange(e.target.value)}
+    />
+  )
 }
 
 /** buildDraft 把当前值转成表单可编辑的字符串。 */
@@ -1396,68 +1474,55 @@ function buildDraft(values: Record<string, unknown>): Record<string, string> {
  * 上报，在需要重启的项上就会触发一次没有理由的重启。
  */
 function computeChanges(form: EditForm, draft: Record<string, string>) {
+  // 元数据走专门的接口：它同步生效、不入队，与需要下发的配置不是一回事。
   const metadata: { remark?: string; group_name?: string } = {}
-  const config: { vcpu?: number; memory_mb?: number } = {}
+  const config: Record<string, unknown> = {}
+  const keys: string[] = []
   let hasMetadata = false
   let hasConfig = false
 
   for (const f of form.fields) {
+    if (f.read_only) continue
+
     const before = toStr(form.values[f.key])
     const after = draft[f.key] ?? ''
     if (before === after) continue
 
+    keys.push(f.key)
+
     if (!f.requires_node) {
-      if (f.key === 'remark') {
-        metadata.remark = after
-        hasMetadata = true
-      } else if (f.key === 'group_name') {
-        metadata.group_name = after
-        hasMetadata = true
-      }
+      // 目前只有两项纯元数据，它们有各自的接口。
+      if (f.key === 'remark') metadata.remark = after
+      else if (f.key === 'group_name') metadata.group_name = after
+      else continue
+      hasMetadata = true
       continue
     }
 
-    const n = Number(after)
-    if (!Number.isFinite(n)) continue
-    if (f.key === 'vcpu') {
-      config.vcpu = n
-      hasConfig = true
-    } else if (f.key === 'memory_mb') {
-      config.memory_mb = n
-      hasConfig = true
+    switch (f.kind) {
+      case 'number': {
+        const n = Number(after)
+        if (!Number.isFinite(n)) continue
+        config[f.key] = n
+        break
+      }
+      case 'boolean':
+        config[f.key] = after === 'true'
+        break
+      default:
+        config[f.key] = after
     }
+    hasConfig = true
   }
 
-  return { metadata, config, hasMetadata, hasConfig }
+  return { metadata, config, hasMetadata, hasConfig, keys }
 }
 
 function toStr(v: unknown): string {
   return v === null || v === undefined ? '' : String(v)
 }
 
-/** PlannedTab 说明一个尚未实现的页签。 */
-function PlannedTab({
-  title,
-  requirement,
-  description,
-  blocked,
-}: {
-  title: string
-  requirement: string
-  description: string
-  blocked: string
-}) {
-  return (
-    <section className="rounded-card border border-line bg-raised px-4 py-5">
-      <p className="text-base font-medium text-ink">{title}</p>
-      <p className="mt-1.5 text-base text-ink-2">{description}</p>
-      <p className="mt-3 text-sm text-ink-3">
-        对应需求 {requirement}。
-      </p>
-      <p className="mt-1 text-sm text-ink-3">{blocked}</p>
-    </section>
-  )
-}
+
 
 function ErrorBox({ message }: { message: string }) {
   return (
