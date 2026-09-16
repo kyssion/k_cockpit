@@ -279,14 +279,18 @@ func (h *VM) UpdateMetadata(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, view)
 }
 
+// updateConfigRequest 用 map 接收变更，而不是逐个字段。
+//
+// 接口的形状由**矩阵**决定：新增一个可编辑项时只需要改矩阵，不需要动这里。
+// 逐个字段的写法会让新增一项变成三处修改，漏掉任何一处都会让那一项在界面上
+// 可改、提交后却被静默丢弃。
 type updateConfigRequest struct {
-	VCPU     *int `json:"vcpu"`
-	MemoryMB *int `json:"memory_mb"`
+	Changes map[string]any `json:"changes"`
 }
 
-// UpdateConfig 提交硬件配置变更（API-058）。
+// UpdateConfig 提交配置变更（API-058）。
 //
-// 返回任务标识：修改 CPU / 内存需要下发到节点，且可能要求先关机。
+// 返回任务标识：这些配置需要下发到节点，且多数要求先关机。
 func (h *VM) UpdateConfig(ctx context.Context, c *app.RequestContext) {
 	id, err := namedPathID(c, "id", "虚拟机 ID")
 	if err != nil {
@@ -304,8 +308,7 @@ func (h *VM) UpdateConfig(ctx context.Context, c *app.RequestContext) {
 	info := auth.ClientInfoOf(c)
 
 	t, err := h.svc.UpdateConfig(ctx, id, vm.ConfigChangeRequest{
-		VCPU:     req.VCPU,
-		MemoryMB: req.MemoryMB,
+		Changes: req.Changes,
 	}, authz.ViewerOf(c), user.Username, info.IP)
 	if err != nil {
 		api.Fail(c, err)

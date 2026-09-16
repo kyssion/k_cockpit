@@ -814,7 +814,7 @@ func TestEditFormCarriesTheMatrix(t *testing.T) {
 
 	// 纯控制面元数据**不需要下发**，因此也**不受运行态限制**——
 	// 虚拟机开着也能改备注，这一点必须在矩阵里体现出来。
-	for _, key := range []string{vm.EditFieldRemark, vm.EditFieldGroupName} {
+	for _, key := range []string{"remark", "group_name"} {
 		f, ok := byKey[key]
 		if !ok {
 			t.Fatalf("矩阵缺少 %s", key)
@@ -828,10 +828,31 @@ func TestEditFormCarriesTheMatrix(t *testing.T) {
 	}
 
 	// 硬件配置需要下发且需要关机。
-	for _, key := range []string{vm.EditFieldVCPU, vm.EditFieldMemoryMB} {
+	for _, key := range []string{"vcpu", "memory_mb"} {
 		f := byKey[key]
 		if !f.RequiresNode || !f.RequiresShutdown {
 			t.Errorf("%s 应标记为需下发且需关机（实际 %+v）", key, f)
+		}
+	}
+
+	// Guest Agent 是**探测结果**，必须标为只读——把它做成可编辑的输入框
+	// 会让人以为「勾上它就能让 Guest Agent 跑起来」。
+	if f := byKey["guest_agent"]; !f.ReadOnly {
+		t.Error("guest_agent 是节点上报的状态，应标为只读")
+	}
+
+	// 子选项卡要带上：界面按它渲染，新增一个只改后端一处。
+	if len(form.Groups) == 0 {
+		t.Error("未下发子选项卡定义，界面只能硬编码——那正是矩阵要消灭的东西")
+	}
+
+	// 枚举字段必须带可选值：没有它，界面只能渲染成自由文本输入框，
+	// 而用户可以填任何东西进去。
+	for _, key := range []string{"firmware", "machine_type", "watchdog"} {
+		f := byKey[key]
+		if f.Kind != vm.EditKindSelect || len(f.Options) == 0 {
+			t.Errorf("%s 应是带可选值的枚举字段（实际 kind=%s options=%d）",
+				key, f.Kind, len(f.Options))
 		}
 	}
 
@@ -902,7 +923,7 @@ func TestUpdateConfigRejectsWhileRunning(t *testing.T) {
 	// 探测（mock）返回 running，所以需要关机的改动必须被拒绝——
 	// 注意投影写的是 stopped，判定必须基于实时探测（f-2-01 R-002）。
 	_, err := svc.UpdateConfig(ctx, row.ID, vm.ConfigChangeRequest{
-		VCPU: ptr(4),
+		Changes: map[string]any{"vcpu": 4},
 	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
 	assertAPIError(t, err, 422)
 
@@ -921,8 +942,12 @@ func TestUpdateConfigRejectsNoopChange(t *testing.T) {
 
 	// 等值提交要拒绝，而不是照样入队：它会白白触发一次节点往返，
 	// 在更复杂的场景下（需要重启的项）还会引发一次没有理由的重启。
+	//
+	// 注意这里传的是**字符串** "2"——界面上的输入框提交的就是字符串，
+	// 而库里存的是 int。值比较必须跨过这一层转换，否则每个没动过的输入框
+	// 都会被认为「变了」。
 	_, err := svc.UpdateConfig(ctx, row.ID, vm.ConfigChangeRequest{
-		VCPU: ptr(2),
+		Changes: map[string]any{"vcpu": "2"},
 	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
 	assertAPIError(t, err, 400)
 }
@@ -937,7 +962,7 @@ func TestUpdateConfigValidatesRange(t *testing.T) {
 	// 范围来自矩阵，与界面上的控件约束同源。
 	for _, v := range []int{0, -1, 999} {
 		_, err := svc.UpdateConfig(ctx, row.ID, vm.ConfigChangeRequest{
-			VCPU: ptr(v),
+			Changes: map[string]any{"vcpu": v},
 		}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
 		if err == nil {
 			t.Errorf("CPU=%d 应被拒绝", v)
@@ -956,7 +981,9 @@ func TestUpdateConfigEnqueuesWhenStopped(t *testing.T) {
 	db.Create(&row)
 
 	tk, err := svc.UpdateConfig(ctx, row.ID, vm.ConfigChangeRequest{
-		VCPU: ptr(8), MemoryMB: ptr(8192),
+		// 混合类型：数字、字符串、布尔都走同一条转换路径。界面上的输入框
+		// 提交字符串、开关提交布尔、而 JSON 反序列化后的数字是 float64。
+		Changes: map[string]any{"vcpu": 8, "memory_mb": "8192"},
 	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
 	if err != nil {
 		t.Fatalf("关机态下应受理: %v", err)
@@ -983,6 +1010,123 @@ func TestEditFormRejectsOthersVM(t *testing.T) {
 	_, err = svc.UpdateMetadata(ctx, theirs.ID, vm.UpdateMetadataRequest{Remark: ptr("x")},
 		authz.Viewer{UserID: 10}, "bob", "10.0.0.2")
 	assertAPIError(t, err, 404)
+}
+
+func TestUpdateConfigRejectsUnknownField(t *testing.T) {
+	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-unknown", OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	// 不在矩阵里的字段必须**拒绝**而不是静默丢弃。
+	// 静默丢弃的表现是「点了保存、提示成功、但配置没变」——用户会以为
+	// 是节点没生效，而实际上请求根本没被受理。
+	_, err := svc.UpdateConfig(ctx, row.ID, vm.ConfigChangeRequest{
+		Changes: map[string]any{"disk_gb": 100},
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 400)
+}
+
+func TestUpdateConfigRejectsReadOnlyField(t *testing.T) {
+	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-ro", OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	// guest_agent 是节点上报的探测结果。允许修改会让用户以为
+	// 「勾上它就能让 Guest Agent 跑起来」——而它取决于来宾里装没装。
+	_, err := svc.UpdateConfig(ctx, row.ID, vm.ConfigChangeRequest{
+		Changes: map[string]any{"guest_agent": true},
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 400)
+}
+
+func TestUpdateConfigRejectsInvalidEnum(t *testing.T) {
+	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-enum", OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	// 枚举值必须落在矩阵声明的范围内。放行未知值会让它一路传到节点，
+	// 而节点报的错通常是一句看不懂的参数错误。
+	_, err := svc.UpdateConfig(ctx, row.ID, vm.ConfigChangeRequest{
+		Changes: map[string]any{"firmware": "coreboot"},
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 400)
+
+	// 合法值应通过。
+	if _, err := svc.UpdateConfig(ctx, row.ID, vm.ConfigChangeRequest{
+		Changes: map[string]any{"firmware": "uefi"},
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1"); err != nil {
+		t.Errorf("合法枚举值被拒绝: %v", err)
+	}
+}
+
+// TestHotChangeableFieldWorksWhileRunning 覆盖矩阵里**真正的「可热改」**项。
+//
+// 自启开关不需要关机——它只影响下次宿主机启动时的行为。这类项如果被误标为
+// 需关机，用户会白白停机一次；反过来如果该关机的项没标，则会在运行中改出
+// 一个不一致的配置。矩阵里每一项的这两条标记都需要有意为之。
+func TestHotChangeableFieldWorksWhileRunning(t *testing.T) {
+	svc, _, db := newTestEnv(t) // mock 探测固定返回 running
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-hot", OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	tk, err := svc.UpdateConfig(ctx, row.ID, vm.ConfigChangeRequest{
+		Changes: map[string]any{"auto_start": true},
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("运行态下应可修改「随宿主机自启」: %v", err)
+	}
+	if tk.Type != model.TaskVMConfigUpdate {
+		t.Errorf("任务类型 = %q", tk.Type)
+	}
+}
+
+func TestIOPSLimitsAreMutuallyExclusive(t *testing.T) {
+	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-iops", OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	// 一次提交里同时给总量与读写分离：必须拒绝。
+	_, err := svc.UpdateConfig(ctx, row.ID, vm.ConfigChangeRequest{
+		Changes: map[string]any{"disk_iops_total": 1000, "disk_iops_read": 500},
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 422)
+
+	// **校验的是变更后的最终状态**，而不是本次提交的字段：
+	// 先设总量（成功），再设读限值（应被拒）——只检查本次提交会漏掉
+	// 这种「两次操作叠加出互斥状态」的情况。
+	if _, err := svc.UpdateConfig(ctx, row.ID, vm.ConfigChangeRequest{
+		Changes: map[string]any{"disk_iops_total": 1000},
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1"); err != nil {
+		t.Fatalf("设置总量失败: %v", err)
+	}
+
+	// 模拟第一次任务已执行完。测试环境里队列未启动，任务停在 pending，
+	// 投影不会自动更新。
+	//
+	// 这里顺带说明一个**真实存在的窗口**：校验读的是投影，因此在「提交成功」
+	// 到「任务执行完回写投影」之间再提交一次，两次操作叠加出的互斥状态不会被
+	// 拦住。窗口的宽度是一次任务执行的时间，而这个窗口无法用投影消除——
+	// 彻底的解法是在执行器里也校验一次，但那属于「节点侧的前置条件」，
+	// 与这里的分工不同。
+	if err := db.Model(&model.VM{}).Where("id = ?", row.ID).
+		Update("disk_iops_total", 1000).Error; err != nil {
+		t.Fatalf("更新投影失败: %v", err)
+	}
+
+	_, err = svc.UpdateConfig(ctx, row.ID, vm.ConfigChangeRequest{
+		Changes: map[string]any{"disk_iops_read": 500},
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
+	assertAPIError(t, err, 422)
 }
 
 func ptr[T any](v T) *T { return &v }

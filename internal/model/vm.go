@@ -79,6 +79,47 @@ type VM struct {
 	// （R-011）。界面据此隐藏入口，而不是给用户一个点了打不开的按钮。
 	DisplayDevice string `gorm:"size:16;not null;default:vnc"`
 
+	// --- 启动与安全（f-2-05「启动与安全」子选项卡）---
+	//
+	// 下面这批字段的 column 全部**显式声明**：GORM 的命名策略按大写字母
+	// 边界切分，`OSType` 会被转成 `o_s_type`、`APIC` 转成 `a_p_i_c`——
+	// 而迁移里建的列是 `os_type` / `apic`。这类不一致不编译报错、测试也
+	// 发现不了（测试库由同一套策略建表，两边一起错），只在连上真实库时
+	// 表现为一个笼统的 500。本项目为此踩过一次（VCPU → v_cpu）。
+
+	OSType      string `gorm:"column:os_type;size:32;not null;default:linux"`
+	MachineType string `gorm:"size:32;not null;default:q35"`
+	Firmware    string `gorm:"size:16;not null;default:bios"`
+	SecureBoot  bool   `gorm:"not null;default:false"`
+	BootOrder   string `gorm:"size:128;not null;default:disk,cdrom,network"`
+	AutoStart   bool   `gorm:"not null;default:false"`
+	Watchdog    string `gorm:"size:16;not null;default:none"`
+
+	// --- 高级设置（f-2-05「高级设置」子选项卡）---
+
+	CPUType         string `gorm:"column:cpu_type;size:32;not null;default:host"`
+	CPULimitPercent int    `gorm:"column:cpu_limit_percent;not null;default:0"`
+	MemoryHugepages bool   `gorm:"not null;default:false"`
+	APIC            bool   `gorm:"column:apic;not null;default:true"`
+	PAE             bool   `gorm:"column:pae;not null;default:true"`
+	// GuestAgent 是**探测结果**而非配置：由 agent 上报「来宾里是否运行了
+	// QEMU Guest Agent」。放在这里是因为「来宾自动化」（f-2-10）的每项能力
+	// 都以它为前置，界面上需要有地方显示这个状态。
+	GuestAgent    bool   `gorm:"not null;default:false"`
+	InitMode      string `gorm:"size:32;not null;default:none"`
+	FreezeOnStart bool   `gorm:"not null;default:false"`
+
+	// --- 磁盘（f-2-05「磁盘与驱动器」子选项卡）---
+
+	DiskFormat string `gorm:"size:16;not null;default:qcow2"`
+	// IOPS 限制：总量与读写分离**互斥**（f-2-06）。
+	//
+	// 三组值都保留在表里：「互斥」是业务规则，由服务层校验；用「表里只存
+	// 一种」来表达它，会让用户在两种模式之间来回切换时丢失另一组已设好的值。
+	DiskIOPSTotal int `gorm:"column:disk_iops_total;not null;default:0"`
+	DiskIOPSRead  int `gorm:"column:disk_iops_read;not null;default:0"`
+	DiskIOPSWrite int `gorm:"column:disk_iops_write;not null;default:0"`
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
