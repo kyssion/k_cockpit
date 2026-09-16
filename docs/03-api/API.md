@@ -228,6 +228,8 @@
 | API-043 | POST | `/api/v1/auth/totp/confirm` | 提交动态码启用绑定，并返回恢复码（**只返回一次**） | 是 | 已实现 | F-10-01 |
 | API-044 | GET | `/api/v1/storage-pools/:id` | 单个存储池详情（配置、容量与新鲜度） | 是（管理员） | 已实现 | F-5-01 |
 | API-045 | POST | `/api/v1/dev/agent-register` | 开发期模拟 agent 注册；**仅在 `AGENT_TRANSPORT=mock` 时注册该路由**，接入真实 agent 后不存在 | 否（开发期） | 已实现（开发期专用） | F-6-01 |
+| API-046 | GET | `/api/v1/vms/:id/interfaces` | 虚拟机网卡列表（型号、MAC、接入网络、限速、下发状态）。`order` 是网卡在**来宾系统内的设备顺序**，界面应以它而非 `id` 为主标识。**只读**：增删改需下发到节点，尚未实现 | 是 | 已实现（只读） | F-2-03 |
+| API-047 | GET | `/api/v1/vms/:id/static-ips` | 虚拟机已绑定的静态地址，区分 DHCP 静态租约与来宾内手工配置（两者的排查方向不同） | 是 | 已实现（只读） | F-2-03 |
 
 > **公开接口共 4 个**（`/health`、`/api/v1/setup/*`、`/api/v1/auth/login`）。前两个的公开理由是「系统尚无可用凭据时的自举需要」：初始化接口靠**只能从服务端日志获取**的一次性令牌保护（[ADR-0008](../06-decisions/0008-first-admin-bootstrap.md)），登录接口是获取凭据的入口本身。新增公开接口必须在此说明理由。
 
