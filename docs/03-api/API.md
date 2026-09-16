@@ -234,6 +234,10 @@
 | API-049 | POST | `/api/v1/vms/:id/schedules` | 新建定时任务；**删除类仅允许一次性**，且在**创建时**走二次验证——它是一条将来会自动执行的删除指令，留到执行时再验证就没人可验了 | 是（删除类需二次验证） | 已实现（界面暂未接入删除类） | F-7-05 |
 | API-050 | PATCH | `/api/v1/vms/:id/schedules/:scheduleID` | 启用 / 停用定时任务。停用**保留记录与执行历史**（用户能看出它跑过），不同于删除 | 是 | 已实现 | F-7-05 |
 | API-051 | DELETE | `/api/v1/vms/:id/schedules/:scheduleID` | 删除**定时任务定义**，不删除虚拟机。可逆性完全不同，因此不需要二次验证 | 是 | 已实现 | F-7-05 |
+| API-052 | GET | `/api/v1/vms/:id/snapshots` | 快照列表与配额（`used` / `quota`）。每条带后端算好的 `can_delete` / `can_restore`——**界面不得自行拼这套判断**，否则规则存在两份、迟早不一致 | 是 | 已实现 | F-2-07 |
+| API-053 | POST | `/api/v1/vms/:id/snapshots` | 创建快照。快照种类由后端按「是否含内存 + 当前运行态」**推导**，不是用户选的 | 是 | 已实现 | F-2-07 |
+| API-054 | POST | `/api/v1/vms/:id/snapshots/:snapshotID/restore` | 恢复快照。会**丢弃快照之后的所有磁盘改动**，未纳入二次验证清单——已知缺口，见下方说明 | 是 | 已实现（**二次验证待补**） | F-2-07 |
+| API-055 | DELETE | `/api/v1/vms/:id/snapshots/:snapshotID` | 删除快照。有子快照或正处于「当前状态」时拒绝，并给出**具体**原因 | 是 | 已实现 | F-2-07 |
 
 > **公开接口共 4 个**（`/health`、`/api/v1/setup/*`、`/api/v1/auth/login`）。前两个的公开理由是「系统尚无可用凭据时的自举需要」：初始化接口靠**只能从服务端日志获取**的一次性令牌保护（[ADR-0008](../06-decisions/0008-first-admin-bootstrap.md)），登录接口是获取凭据的入口本身。新增公开接口必须在此说明理由。
 
