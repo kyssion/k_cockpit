@@ -604,7 +604,7 @@ erDiagram
 | `internal/database/migrations/0002_node_agent_fields.sql` | 节点接入方式改为 **agent**（[ADR-0005](../06-decisions/0005-control-plane-node-agent-architecture.md)）：删除 API/SSH 双通道与远程探测字段，新增注册令牌哈希、证书指纹、注册状态、agent 与协议版本、心跳/最后通信/能力上报时间与最近错误 |
 | `internal/database/migrations/0003_task_agent_fields.sql` | 任务表适配 agent 执行：新增 `idempotency_key`（唯一）、`dispatched_at`、`last_reported_at`；`task.status` 增加 `unknown` 取值用于"节点离线致结果未知" |
 
-- **执行方式**：`psql "<DSN>" -f internal/database/migrations/0001_init_schema.sql`；或由迁移执行器读取该目录、按 `schema_migration` 去重后执行。
+- **执行方式**：`go run ./cmd/migrate`（迁移执行器，读取该目录、按 `schema_migration` 去重后执行，单文件单事务）。也可用 `psql "<DSN>" -f <文件>` 手工执行，但**必须自行登记** `schema_migration`，否则执行器会把它当成待应用再跑一遍（虽幂等，但校验和比对会失效）。
 - **执行后登记**：写入 `schema_migration`（`migration_id` = 文件名去扩展名、`checksum` = 文件 sha256、`applied_at`），用于发现"历史迁移被改动"。
 - **双库说明**：本 SQL 为 **PostgreSQL 专用**；本地开发的 SQLite 走 GORM 模型 + `AutoMigrate`（模型须与本文件保持一致，属后续实现项）。
 - **失败处理**：整个脚本在**单事务**内执行，任一句失败即整体回滚，不会留下半成品表结构。

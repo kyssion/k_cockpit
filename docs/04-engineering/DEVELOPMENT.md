@@ -60,7 +60,15 @@ DB_PASSWORD=your_password
 DB_SSLMODE=disable
 ```
 
-需先自行创建数据库 `k_cockpit`，再执行 `internal/database/migrations/` 下的 SQL 迁移建表（见 [`../02-architecture/DATA_MODEL.md`](../02-architecture/DATA_MODEL.md) 第 6 节）。**服务启动不做自动建表**。
+需先自行创建数据库 `k_cockpit`，再用迁移执行器建表（见 [`../02-architecture/DATA_MODEL.md`](../02-architecture/DATA_MODEL.md) 第 6 节）。**服务启动不做自动建表**。
+
+```bash
+go run ./cmd/migrate -status     # 查看哪些待应用（只读）
+go run ./cmd/migrate -dry-run    # 预览将要执行的语句
+go run ./cmd/migrate             # 应用未执行的迁移
+```
+
+执行器按文件名排序、比对 `schema_migration` 的校验和去重，每个文件在**单事务**内执行。不需要单独安装 `psql`。
 
 ---
 
@@ -80,7 +88,7 @@ DB_SSLMODE=disable
 | 单元测试 | `go test ./...` |
 | 单包测试 | `go test ./internal/handler/...` |
 | 覆盖率 | `go test -cover ./...` |
-| 数据库迁移 | 执行 `internal/database/migrations/` 下的 SQL 迁移，并登记到 `schema_migration`（见 [`../02-architecture/DATA_MODEL.md`](../02-architecture/DATA_MODEL.md) §6） |
+| 数据库迁移 | `go run ./cmd/migrate`（按 `schema_migration` 去重并登记校验和；见 [`../02-architecture/DATA_MODEL.md`](../02-architecture/DATA_MODEL.md) §6） |
 | 前端依赖 / 开发 / 构建（`web/`，**尚未创建**，技术栈见 [ADR-0006](../06-decisions/0006-frontend-tech-stack.md)） | `cd web && pnpm install` / `pnpm dev`（`/api` 代理到 8080） / `pnpm build` |
 | 前端类型检查 / Lint | `cd web && pnpm typecheck` / `pnpm lint` |
 | 前端测试 | `cd web && pnpm test`（Vitest）/ `pnpm test:e2e`（Playwright） |
