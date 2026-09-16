@@ -218,9 +218,9 @@
 | API-033 | GET | `/api/v1/vms/:id/console/ws` | **WebSocket**：VNC 流量代理（经 agent 通道转发，不直连宿主机） | 是 | 规划中 | F-2-08 |
 | API-034 | GET | `/api/v1/security/high-risk-policy` | 高风险操作清单与判定口径（供前端渲染提示；**清单由后端下发，前端不得硬编码第二份**） | 是 | 已实现 | F-10-02 |
 | API-035 | POST | `/api/v1/auth/risk-verification` | 提交验证码，换取一次性高风险许可（2 分钟有效、消费即失效、绑定会话） | 是 | 已实现 | F-10-01 |
-| API-036 | GET | `/api/v1/settings` | 设置项清单（元数据、当前生效值、来源、是否被环境变量锁定） | 是 | 规划中 | F-9-01 |
-| API-037 | PATCH | `/api/v1/settings` | 批量更新设置（部分成功语义，失败项自动回滚） | 是 | 规划中 | F-9-01 |
-| API-038 | POST | `/api/v1/settings/rollback` | 将指定设置项回滚到最近一次变更前的值 | 是 | 规划中 | F-9-01 |
+| API-036 | GET | `/api/v1/settings` | 设置项清单：**元数据 + 当前生效值 + 来源**（环境变量 / 面板设置 / 默认值）；未交付标签的项不出现 | 是（管理员） | 已实现 | F-9-01 |
+| API-037 | PATCH | `/api/v1/settings` | 批量更新设置；**部分成功**语义，逐项返回「已生效 / 失败 / 已回滚」；被环境变量锁定的项一律拒绝 | 是（管理员） | 已实现 | F-9-01 |
+| API-038 | POST | `/api/v1/settings/rollback` | 将指定设置项回滚到最近一次变更前的值（只保留一次前值，回滚本身也可再回滚） | 是（管理员） | 已实现 | F-9-01 |
 | API-039 | GET | `/api/v1/setup/status` | 系统是否已完成初始化（供前端决定跳初始化页或登录页） | 否（公开，理由见 [ADR-0008](../06-decisions/0008-first-admin-bootstrap.md)） | 已实现 | 首次初始化 |
 | API-040 | POST | `/api/v1/setup/admin` | 用一次性令牌创建首个管理员；成功后自动建立会话 | 否（公开，理由同上） | 已实现 | 首次初始化 |
 | API-041 | GET | `/api/v1/auth/security-setup` | 二次验证方式的绑定进度与可用方式 | 是 | 已实现 | F-10-01 |
