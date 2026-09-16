@@ -68,3 +68,103 @@ type VpcSwitch struct {
 
 // TableName 固定表名。
 func (VpcSwitch) TableName() string { return "vpc_switch" }
+
+// 网卡型号。取值与 QEMU 的设备类型对应。
+const (
+	// NICModelVirtio 是默认型号：半虚拟化，性能最好，需要来宾有对应驱动。
+	NICModelVirtio = "virtio"
+	// NICModelE1000 是 Intel 千兆网卡，兼容性最好，用于没有 virtio 驱动的
+	// 老旧系统（装完系统没网卡，问题通常就出在这里）。
+	NICModelE1000 = "e1000"
+	// NICModelRTL8139 用于更老的系统（Windows XP 一类的）。
+	NICModelRTL8139 = "rtl8139"
+)
+
+// 地址族。
+const (
+	AddressFamilyIPv4 = "ipv4"
+	AddressFamilyIPv6 = "ipv6"
+)
+
+// VMInterface 对应 vm_interface 表：一台虚拟机的网卡。
+//
+// 与多数「改了立刻生效」的配置不同，网卡变更需要**下发到节点**才生效，因此
+// 本表带 LastAppliedAt：它是投影，可能与虚拟化层的实际配置不一致。为空表示
+// 从未下发成功，界面据此提示「尚未生效」，而不是假装已经改好了。
+type VMInterface struct {
+	ID     int64 `gorm:"primaryKey"`
+	VMID   int64 `gorm:"not null;uniqueIndex:uniq_vm_interface_vm_order,priority:1"`
+	NodeID int64 `gorm:"not null"`
+
+	// Order 是网卡序号，从 0 开始。**它同时是网卡在虚拟机内的标识**：
+	// 来宾系统看到的设备顺序由它决定。数据库 id 反而不可靠——重建网卡时
+	// 会得到新 id，而来宾里的 eth0/eth1 是按顺序认的。
+	//
+	// `order` 是 SQL 保留字，由 GORM 自动加引号（迁移里也是带引号建的）。
+	// 索引与迁移保持一致（uniq_vm_interface_vm_order），否则测试库与真实库
+	// 的约束会分叉——那正是上次「测试全绿、生产必挂」的成因。
+	Order int `gorm:"column:order;not null;uniqueIndex:uniq_vm_interface_vm_order,priority:2"`
+
+	// IsPrimary 标记主网卡。主网卡不可删除——重装系统（f-2-11）依赖它保持
+	// 网络可达，删掉它就没有恢复路径了。
+	IsPrimary bool `gorm:"not null;default:false"`
+
+	// SwitchID 指向 VpcSwitch；为空表示使用节点默认网络。
+	SwitchID        *int64 `gorm:"index:idx_vm_interface_switch_id"`
+	SecurityGroupID *int64
+
+	Model string `gorm:"size:16;not null;default:virtio"`
+
+	// MAC 由控制面分配后固定下来，**不随网卡重建而改变**：来宾系统里可能
+	// 已经按 MAC 配过网络（静态 IP、udev 规则），换了 MAC 会让它静默失联。
+	MAC *string `gorm:"size:32"`
+
+	// AllowedAddresses 是允许的源地址列表，用于防止 IP 欺骗。
+	AllowedAddresses *string `gorm:"type:text"`
+
+	// RateLimitMbps 是限速上限（Mbps）；0 表示不限速。
+	RateLimitMbps int `gorm:"not null;default:0"`
+
+	// LastAppliedAt 是最近一次成功下发到节点的时间。
+	LastAppliedAt *time.Time
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// TableName 固定表名。
+func (VMInterface) TableName() string { return "vm_interface" }
+
+// StaticIP 对应 static_ip 表：分配给虚拟机的静态地址。
+//
+// 它与 `vm.ip_summary` 的区别很重要：ip_summary 是**从节点探测到的实际地址**
+// （投影），本表是**控制面期望的分配**。两者不一致时界面应以实际为准——
+// 用户需要知道真实情况，而不是我们期望的情况。
+type StaticIP struct {
+	ID     int64 `gorm:"primaryKey"`
+	NodeID int64 `gorm:"not null"`
+
+	// VMID 为空表示地址已分配但尚未绑定到虚拟机（预留给将来使用）。
+	VMID *int64 `gorm:"index:idx_static_ip_vm_id"`
+
+	// InterfaceOrder 对应 VMInterface.Order。
+	InterfaceOrder *int
+
+	IP            string  `gorm:"size:64;not null"`
+	MAC           *string `gorm:"size:32"`
+	AddressFamily string  `gorm:"size:8;not null;default:ipv4"`
+
+	// IsDHCPReservation 区分这条记录是 DHCP 静态租约，还是来宾内部手工
+	// 配置的地址。两者的排查方向完全不同：前者要查 DHCP 服务，后者要进
+	// 系统里看配置文件。
+	IsDHCPReservation bool `gorm:"not null;default:false"`
+
+	// AppliedAt 是最近一次下发到节点的时间；为空表示尚未生效。
+	AppliedAt *time.Time
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// TableName 固定表名。
+func (StaticIP) TableName() string { return "static_ip" }

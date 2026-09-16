@@ -202,3 +202,37 @@ func (h *VM) Delete(ctx context.Context, c *app.RequestContext) {
 		"status":  t.Status,
 	})
 }
+
+// Interfaces 返回虚拟机的网卡列表（F-2-03「网络管理」标签页）。
+//
+// 只读、不分页：一台虚拟机的网卡是个位数，分页只会让前端多写一层处理。
+func (h *VM) Interfaces(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	items, err := h.svc.Interfaces(ctx, id, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"items": items})
+}
+
+// StaticIPs 返回虚拟机的静态地址列表。
+func (h *VM) StaticIPs(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	items, err := h.svc.StaticIPs(ctx, id, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"items": items})
+}

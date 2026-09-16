@@ -112,6 +112,12 @@ type View struct {
 	// 实时探测拒绝并说明原因。前端禁用只是体验优化，不构成安全边界
 	// （f-2-01 R-004）。`stale` 为 true 时界面不应完全依赖它。
 	AvailableActions []string `json:"available_actions"`
+
+	// HasConsole 表示该虚拟机是否有可用的控制台（display != none）。
+	//
+	// 为 false 时界面应隐藏控制台入口，而不是给一个点了打不开的按钮
+	// （f-2-08 R-011）。
+	HasConsole bool `json:"has_console"`
 }
 
 // ListFilter 是列表查询条件。
@@ -568,6 +574,7 @@ func toView(vm *model.VM, now time.Time, threshold time.Duration) View {
 		// 按投影状态给出可用动作。投影滞后时可能与实际不符，后端受理时
 		// 会以实时探测为准重新校验（f-2-01 R-004）。
 		AvailableActions: AvailableActions(vm.Status),
+		HasConsole:       vm.HasConsole(),
 	}
 	if vm.UUID != nil {
 		view.UUID = *vm.UUID

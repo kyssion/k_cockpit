@@ -45,7 +45,8 @@ func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task
 	}
 	if err := db.AutoMigrate(
 		&model.VM{}, &model.Task{}, &model.AuditLog{}, &model.Node{},
-		&model.VMCredential{},
+		&model.VMCredential{}, &model.VMInterface{}, &model.StaticIP{},
+		&model.VpcSwitch{},
 	); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
@@ -517,6 +518,84 @@ func TestPowerRejectsMissingNode(t *testing.T) {
 
 	_, err := svc.Power(ctx, row.ID, "shutdown", authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
 	assertAPIError(t, err, 422)
+}
+
+// --- 网络 ---
+
+func TestInterfacesSortedByOrderNotInsertion(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-nic", Status: model.VMStatusRunning, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+	db.Create(&model.VpcSwitch{ID: 9, NodeID: 1, Name: "vpc-a", BridgeName: "br9"})
+
+	// **故意乱序插入**：网卡顺序决定了它在来宾系统里是 eth0 还是 eth1，
+	// 按插入顺序或 id 返回都会让用户对着与实际相反的编号做配置。
+	db.Create(&model.VMInterface{
+		VMID: row.ID, NodeID: 1, Order: 1, Model: model.NICModelE1000,
+	})
+	db.Create(&model.VMInterface{
+		VMID: row.ID, NodeID: 1, Order: 0, Model: model.NICModelVirtio,
+		IsPrimary: true, SwitchID: ptr(int64(9)),
+	})
+
+	nics, err := svc.Interfaces(ctx, row.ID, authz.Viewer{UserID: 7})
+	if err != nil {
+		t.Fatalf("查询网卡失败: %v", err)
+	}
+	if len(nics) != 2 {
+		t.Fatalf("网卡数 = %d, 期望 2", len(nics))
+	}
+	if nics[0].Order != 0 || nics[1].Order != 1 {
+		t.Errorf("网卡未按 order 排序: %d, %d", nics[0].Order, nics[1].Order)
+	}
+	if !nics[0].IsPrimary {
+		t.Error("主网卡标记丢失")
+	}
+	// 交换机名要带上：只给一个 switch_id，用户还得自己去网络页面对照名字。
+	if nics[0].SwitchName == nil || *nics[0].SwitchName != "vpc-a" {
+		t.Errorf("交换机名未解析: %v", nics[0].SwitchName)
+	}
+	// 从未下发过（LastAppliedAt 为空）时必须是「尚未生效」。
+	// 把它报成已生效，会让用户以为改配置没反应是别的原因。
+	if nics[0].Applied {
+		t.Error("从未下发的网卡被报成已生效")
+	}
+}
+
+func TestInterfacesRejectsOthersVM(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	theirs := model.VM{NodeID: 1, Name: "vm-theirs-nic", OwnerID: ptr(int64(20))}
+	db.Create(&theirs)
+	db.Create(&model.VMInterface{VMID: theirs.ID, NodeID: 1, Order: 0})
+
+	// 404 而非 403：403 会确认「这个 ID 存在」，可被用来枚举他人资源。
+	_, err := svc.Interfaces(ctx, theirs.ID, authz.Viewer{UserID: 10})
+	assertAPIError(t, err, 404)
+}
+
+func TestStaticIPsOnlyReturnsBoundOnes(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-ip", Status: model.VMStatusRunning, OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	db.Create(&model.StaticIP{NodeID: 1, VMID: &row.ID, IP: "10.0.0.20", AddressFamily: model.AddressFamilyIPv4})
+	// 未绑定（vm_id 为空）的地址不属于任何虚拟机：把它显示在这里会让用户
+	// 以为虚拟机已经拿到了那个 IP。
+	db.Create(&model.StaticIP{NodeID: 1, VMID: nil, IP: "10.0.0.99", AddressFamily: model.AddressFamilyIPv4})
+
+	ips, err := svc.StaticIPs(ctx, row.ID, authz.Viewer{UserID: 7})
+	if err != nil {
+		t.Fatalf("查询静态地址失败: %v", err)
+	}
+	if len(ips) != 1 || ips[0].IP != "10.0.0.20" {
+		t.Errorf("静态地址 = %+v, 期望只含 10.0.0.20", ips)
+	}
 }
 
 func ptr[T any](v T) *T { return &v }

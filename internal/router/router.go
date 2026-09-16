@@ -133,6 +133,11 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/vms/:id/power-actions", requireAuth, vmHandler.Power)
 		v1.DELETE("/vms/:id", requireAuth, vmHandler.Delete)
 
+		// 详情页「网络管理」标签页的数据（F-2-03）。均为只读：网卡的增删改
+		// 需要下发到节点，走任务队列，尚未实现。
+		v1.GET("/vms/:id/interfaces", requireAuth, vmHandler.Interfaces)
+		v1.GET("/vms/:id/static-ips", requireAuth, vmHandler.StaticIPs)
+
 		// 控制台（F-2-08）。WebSocket 端点同样经过认证中间件：Cookie 随
 		// 握手请求发送，因此**升级前**就完成了鉴权与授权（R-003）——
 		// 升级之后没有 HTTP 状态码可用，那时再拒绝已经没有合适的表达方式。
