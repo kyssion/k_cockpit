@@ -20,6 +20,7 @@ import (
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/audit"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/settings"
 	"k_cockpit/internal/task"
 )
 
@@ -47,11 +48,28 @@ type Service struct {
 	queue *task.Queue
 	audit *audit.Recorder
 	agent agent.Client
+	// settings 用于读取可调整的运行参数（f-9-01）；为 nil 时用内置默认值。
+	settings settings.Provider
 }
 
 // NewService 构造存储池服务。
-func NewService(db *gorm.DB, queue *task.Queue, recorder *audit.Recorder, client agent.Client) *Service {
-	return &Service{db: db, queue: queue, audit: recorder, agent: client}
+func NewService(
+	db *gorm.DB, queue *task.Queue, recorder *audit.Recorder, client agent.Client,
+	provider settings.Provider,
+) *Service {
+	return &Service{db: db, queue: queue, audit: recorder, agent: client, settings: provider}
+}
+
+// staleThreshold 返回当前的容量数据陈旧阈值。
+func (s *Service) staleThreshold() time.Duration {
+	if s.settings == nil {
+		return StaleThreshold
+	}
+	minutes := s.settings.Int(settings.KeyStorageStaleThreshold, int(StaleThreshold.Minutes()))
+	if minutes <= 0 {
+		return StaleThreshold
+	}
+	return time.Duration(minutes) * time.Minute
 }
 
 // DiskView 是块设备的对外视图。
@@ -158,9 +176,11 @@ func (s *Service) List(ctx context.Context, nodeID int64) ([]PoolView, error) {
 	}
 
 	now := time.Now()
+	threshold := s.staleThreshold()
+
 	views := make([]PoolView, 0, len(pools))
 	for i := range pools {
-		views = append(views, toPoolView(&pools[i], now))
+		views = append(views, toPoolView(&pools[i], now, threshold))
 	}
 	return views, nil
 }
@@ -171,7 +191,7 @@ func (s *Service) Get(ctx context.Context, id int64) (*PoolView, error) {
 	if err != nil {
 		return nil, err
 	}
-	view := toPoolView(pool, time.Now())
+	view := toPoolView(pool, time.Now(), s.staleThreshold())
 	return &view, nil
 }
 
@@ -398,7 +418,7 @@ func (s *Service) SetDefault(
 	if err != nil {
 		return nil, err
 	}
-	view := toPoolView(updated, time.Now())
+	view := toPoolView(updated, time.Now(), s.staleThreshold())
 	return &view, nil
 }
 
@@ -528,7 +548,7 @@ func (s *Service) record(ctx context.Context, e audit.Entry) {
 	}
 }
 
-func toPoolView(p *model.StoragePool, now time.Time) PoolView {
+func toPoolView(p *model.StoragePool, now time.Time, threshold time.Duration) PoolView {
 	return PoolView{
 		ID:             p.ID,
 		NodeID:         p.NodeID,
@@ -542,7 +562,7 @@ func toPoolView(p *model.StoragePool, now time.Time) PoolView {
 		IsDefault:      p.IsDefault,
 		Status:         p.Status,
 		Remark:         derefStr(p.Remark),
-		Stale:          p.IsStale(now, StaleThreshold),
+		Stale:          p.IsStale(now, threshold),
 		LastReportedAt: p.LastReportedAt,
 		CreatedAt:      p.CreatedAt,
 	}

@@ -21,6 +21,7 @@ import (
 	"k_cockpit/internal/audit"
 	"k_cockpit/internal/authz"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/settings"
 	"k_cockpit/internal/task"
 )
 
@@ -41,13 +42,32 @@ type Service struct {
 	// agent 用于**实时探测**运行态：投影不得参与业务判定（f-2-01 R-002），
 	// 因此受理写操作前必须向节点确认一次真实状态，而不是凭投影下结论。
 	agent agent.Client
+	// settings 用于读取可调整的运行参数（f-9-01）。为 nil 时使用内置默认值，
+	// 这样单测与轻量部署不必先装配设置模块。
+	settings settings.Provider
 }
 
 // NewService 构造虚拟机服务。
 func NewService(
 	db *gorm.DB, queue *task.Queue, recorder *audit.Recorder, client agent.Client,
+	provider settings.Provider,
 ) *Service {
-	return &Service{db: db, queue: queue, audit: recorder, agent: client}
+	return &Service{db: db, queue: queue, audit: recorder, agent: client, settings: provider}
+}
+
+// staleThreshold 返回当前的投影陈旧阈值。
+//
+// 从设置读取而不是直接用常量：这个值写进规格时是 60 秒，但不同部署环境
+// 对「多久算陈旧」的容忍度不同——节点多、心跳慢的环境需要放宽它。
+func (s *Service) staleThreshold() time.Duration {
+	if s.settings == nil {
+		return StaleThreshold
+	}
+	seconds := s.settings.Int(settings.KeyVMStaleThreshold, int(StaleThreshold.Seconds()))
+	if seconds <= 0 {
+		return StaleThreshold
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 // View 是虚拟机的对外视图。
@@ -117,9 +137,13 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]View, int64, error)
 	}
 
 	now := time.Now()
+	// 阈值只读一次：放在循环里会让每台虚拟机都触发一次设置查询，
+	// 而列表页可能有上百台。
+	threshold := s.staleThreshold()
+
 	views := make([]View, 0, len(vms))
 	for i := range vms {
-		views = append(views, toView(&vms[i], now))
+		views = append(views, toView(&vms[i], now, threshold))
 	}
 	return views, total, nil
 }
@@ -131,7 +155,7 @@ func (s *Service) Get(ctx context.Context, id int64, v authz.Viewer) (*View, err
 		return nil, err
 	}
 
-	view := toView(vm, time.Now())
+	view := toView(vm, time.Now(), s.staleThreshold())
 	return &view, nil
 }
 
@@ -514,7 +538,7 @@ func applyFilter(query *gorm.DB, f ListFilter) *gorm.DB {
 	return query
 }
 
-func toView(vm *model.VM, now time.Time) View {
+func toView(vm *model.VM, now time.Time, threshold time.Duration) View {
 	view := View{
 		ID:           vm.ID,
 		NodeID:       vm.NodeID,
@@ -526,7 +550,7 @@ func toView(vm *model.VM, now time.Time) View {
 		DiskGB:       vm.DiskGB,
 		Present:      vm.Present,
 		LastSyncedAt: vm.LastSyncedAt,
-		Stale:        vm.IsStale(now, StaleThreshold),
+		Stale:        vm.IsStale(now, threshold),
 		CreatedAt:    vm.CreatedAt,
 		// 按投影状态给出可用动作。投影滞后时可能与实际不符，后端受理时
 		// 会以实时探测为准重新校验（f-2-01 R-004）。

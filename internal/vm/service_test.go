@@ -72,7 +72,8 @@ func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task
 		queue.Stop()
 	})
 
-	return vm.NewService(db, queue, recorder, client), queue, db
+	// settings 传 nil：本包不依赖设置模块，阈值走内置默认值。
+	return vm.NewService(db, queue, recorder, client, nil), queue, db
 }
 
 // probeClient 在 mock 之上覆盖**探测结果**，其余操作沿用 mock。

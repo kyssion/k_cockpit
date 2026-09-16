@@ -21,6 +21,7 @@ import (
 	"k_cockpit/internal/node"
 	"k_cockpit/internal/risk"
 	"k_cockpit/internal/router"
+	"k_cockpit/internal/settings"
 	"k_cockpit/internal/storage"
 	"k_cockpit/internal/task"
 	"k_cockpit/internal/vm"
@@ -99,9 +100,14 @@ func main() {
 	queue.Register(storage.NewDeleteExecutor(db, mockAgent))
 	queue.Start(context.Background())
 
-	vmSvc := vm.NewService(db, queue, recorder, mockAgent)
-	storageSvc := storage.NewService(db, queue, recorder, mockAgent)
+	settingsSvc := settings.NewService(db, recorder)
 	networkSvc := network.NewService(db, mockAgent)
+
+	// vm 与 storage 都要读设置里的陈旧阈值：把 settingsSvc 作为 Provider
+	// 注入，让「面板上改的阈值」真的影响业务行为——否则那两个设置项就是
+	// 摆设，而「改了不生效」正是 f-9-01 R-002 要消灭的现象。
+	vmSvc := vm.NewService(db, queue, recorder, mockAgent, settingsSvc)
+	storageSvc := storage.NewService(db, queue, recorder, mockAgent, settingsSvc)
 
 	h := server.Default(server.WithHostPorts(cfg.HTTP.Addr()))
 	router.Register(h, router.Deps{
@@ -114,6 +120,7 @@ func main() {
 		Risk:          riskGuard,
 		Storage:       storageSvc,
 		Network:       networkSvc,
+		Settings:      settingsSvc,
 		SecureCookie:  cfg.Session.SecureCookie,
 		SimulateAgent: cfg.Agent.Transport == config.AgentTransportMock,
 	})

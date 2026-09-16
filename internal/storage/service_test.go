@@ -112,7 +112,8 @@ func newTestEnv(t *testing.T) (*storage.Service, *task.Queue, *gorm.DB, *diskCli
 		queue.Stop()
 	})
 
-	return storage.NewService(db, queue, recorder, client), queue, db, client
+	// settings 传 nil：本包不依赖设置模块，阈值走内置默认值。
+	return storage.NewService(db, queue, recorder, client, nil), queue, db, client
 }
 
 func waitFor(t *testing.T, what string, cond func() bool) {
