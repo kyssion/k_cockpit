@@ -63,6 +63,24 @@ export function SecurityPage() {
         </p>
       </header>
 
+      {/*
+        开发模式提示放在最上面，因为它改变的是「这个页面其余部分在说什么」：
+        万能码开着时，「已绑定验证器」只表示流程走过了，不代表防护真的生效。
+        把它藏进折叠区或只留在日志里，等于让所有人看着界面误判当前的安全状态。
+      */}
+      {info?.dev_bypass && (
+        <div className="rounded-card border border-warning/40 bg-warning/5 px-4 py-3">
+          <p className="text-base font-medium text-warning">开发模式：万能验证码已启用</p>
+          <p className="mt-1 text-base text-ink-2">
+            当前配置下，二次验证可被一个固定的开发码直接通过，无需真实验证器。
+            此处的「已绑定」只表示绑定流程走完了，
+            <span className="font-medium text-ink">不代表防护生效</span>。
+            部署前请清除环境变量 <code className="rounded bg-surface px-1">SECURITY_DEV_BYPASS_CODE</code>
+            （生产环境配置它会导致服务启动失败）。
+          </p>
+        </div>
+      )}
+
       {info && (
         <section className="rounded-card border border-line">
           <h2 className="border-b border-line px-4 py-2.5 text-sm font-medium text-ink-2">

@@ -30,6 +30,14 @@ export interface SetupStatus {
   has_recovery_codes: boolean
   /** 已绑定的验证方式，取值与后端 risk.Method 一致。 */
   methods: string[]
+  /**
+   * 开发期万能验证码是否启用。
+   *
+   * 由后端下发而非前端推断（比如判断 host 是不是 localhost）——前端猜测
+   * 会出现「界面说没开、实际开着」这类最危险的不一致：所有人看着界面就
+   * 以为防护是完整的。
+   */
+  dev_bypass: boolean
   session_id: number
 }
 
@@ -62,10 +70,13 @@ export const riskApi = {
 export const METHOD_LABEL: Record<string, string> = {
   totp: '验证器动态码',
   recovery_code: '恢复码',
+  // 仅开发环境会出现（后端在开发模式下追加到方式列表里）。
+  dev_bypass: '开发万能码',
 }
 
 /** 输入框的提示语：两种方式的输入形态差别很大。 */
 export const METHOD_PLACEHOLDER: Record<string, string> = {
   totp: '6 位动态码',
   recovery_code: 'XXXX-XXXX-XXXX',
+  dev_bypass: '开发配置里的固定值',
 }
