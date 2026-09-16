@@ -41,6 +41,9 @@ export interface VmView {
    * 原因。`stale` 为 true 时不应完全依赖它。
    */
   available_actions: PowerAction[]
+
+  /** 是否有可用控制台（display != none）。为 false 时界面应隐藏入口。 */
+  has_console: boolean
 }
 
 export interface VmListParams {
@@ -102,4 +105,66 @@ export const vmApi = {
   // 走 query 更稳妥（服务端两种都接受）。
   remove: (id: number, diskAction: DiskAction) =>
     del<TaskRef>(`/api/v1/vms/${id}?disk_action=${diskAction}`),
+
+  /** 网卡列表（详情页「网络管理」标签页）。 */
+  interfaces: (id: number) => get<{ items: VMInterface[] }>(`/api/v1/vms/${id}/interfaces`),
+
+  /** 静态地址列表。 */
+  staticIPs: (id: number) => get<{ items: StaticIP[] }>(`/api/v1/vms/${id}/static-ips`),
+}
+
+/**
+ * 网卡型号。取值与后端 `model.NICModel*` 对应。
+ *
+ * 这些不是可以随便增减的枚举：每个型号对应一个 QEMU 设备类型，来宾系统里
+ * 是否有它的驱动决定网卡能不能用。装完系统发现没网，原因通常就是选错了这里。
+ */
+export type NICModel = 'virtio' | 'e1000' | 'rtl8139'
+
+/** 虚拟机网卡。 */
+export interface VMInterface {
+  id: number
+  /**
+   * 网卡序号，同时是它在**来宾系统里的设备顺序**。
+   *
+   * 界面以它为主标识而不是 `id`：重建网卡会得到新 id，而 eth0/eth1 是按
+   * 顺序认的。
+   */
+  order: number
+  is_primary: boolean
+  node_id: number
+  model: NICModel
+  /** 为空表示使用节点默认网络。 */
+  switch_id?: number
+  switch_name?: string
+  mac?: string
+  allowed_addresses?: string
+  /** 限速上限（Mbps）；0 表示不限速。 */
+  rate_limit_mbps: number
+  /** 配置是否已下发到节点。false 表示**尚未生效**，不是失败。 */
+  applied: boolean
+  last_applied_at?: string
+}
+
+/** 分配的静态地址。 */
+export interface StaticIP {
+  id: number
+  ip: string
+  address_family: 'ipv4' | 'ipv6'
+  interface_order?: number
+  mac?: string
+  /**
+   * 区分 DHCP 静态租约与来宾内手工配置的地址。
+   * 两者的排查方向完全不同：前者查 DHCP 服务，后者要进系统看配置文件。
+   */
+  is_dhcp_reservation: boolean
+  applied: boolean
+  applied_at?: string
+}
+
+/** 网卡型号的中文说明。选错型号是「装完系统没网」最常见的原因。 */
+export const NIC_MODEL_LABEL: Record<NICModel, string> = {
+  virtio: 'virtio（半虚拟化，性能最好）',
+  e1000: 'e1000（Intel 千兆，兼容性最好）',
+  rtl8139: 'rtl8139（老旧系统兼容）',
 }

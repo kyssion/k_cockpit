@@ -1,11 +1,31 @@
+/**
+ * 虚拟机详情页（F-2-03）。
+ *
+ * 结构对齐 FRONTEND.md §5.3.3：Hero（状态与电源操作）+ 标签页
+ * （系统信息 / 快照管理 / 网络管理 / 定时任务 / 控制台 / 编辑）。
+ *
+ * 两条贯穿全页的约定：
+ *
+ * 1. **页签惰性挂载**——只有当前可见的页签会挂载并拉数据。六个页签一次性
+ *    拉全部数据会让打开页面产生十几个并发请求，而用户通常只看其中一个。
+ * 2. **未实现的页签明确标注，不隐藏**——隐藏会让「这个产品没有这个能力」
+ *    与「这个能力还没做」看起来一样。前者是设计判断，后者是欠账，对使用者
+ *    是两件完全不同的事。
+ */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 
 import { ApiError, NetworkError } from '@/api/client'
 import { nodeApi } from '@/api/node'
-import { isActive, taskApi } from '@/api/task'
-import { vmApi, type DiskAction, type PowerAction } from '@/api/vm'
+import { isActive, taskApi, type TaskView } from '@/api/task'
+import {
+  NIC_MODEL_LABEL,
+  vmApi,
+  type DiskAction,
+  type PowerAction,
+  type VmView,
+} from '@/api/vm'
 import { Button } from '@/components/common/Button'
 import { EmptyState, PageLoading } from '@/components/common/Feedback'
 import { Modal } from '@/components/common/Modal'
@@ -21,12 +41,25 @@ import {
   taskTypeLabel,
 } from '@/utils/labels'
 
+/** 详情页的页签。取值与 FRONTEND.md §5.3.3 的表格一一对应。 */
+type TabKey = 'system' | 'snapshot' | 'network' | 'schedule' | 'console' | 'edit'
+
+const TABS: { key: TabKey; label: string }[] = [
+  { key: 'system', label: '系统信息' },
+  { key: 'snapshot', label: '快照管理' },
+  { key: 'network', label: '网络管理' },
+  { key: 'schedule', label: '定时任务' },
+  { key: 'console', label: '控制台' },
+  { key: 'edit', label: '编辑' },
+]
+
 export function VmDetailPage() {
   const { id } = useParams<{ id: string }>()
   const vmID = Number(id)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
 
+  const [tab, setTab] = useState<TabKey>('system')
   const [confirmAction, setConfirmAction] = useState<PowerAction | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [error, setError] = useState('')
@@ -57,6 +90,8 @@ export function VmDetailPage() {
     void queryClient.invalidateQueries({ queryKey: ['vm', vmID] })
     void queryClient.invalidateQueries({ queryKey: ['vms'] })
     void queryClient.invalidateQueries({ queryKey: ['tasks'] })
+    void queryClient.invalidateQueries({ queryKey: ['vm-interfaces', vmID] })
+    void queryClient.invalidateQueries({ queryKey: ['vm-static-ips', vmID] })
   }
 
   const power = useMutation({
@@ -99,9 +134,15 @@ export function VmDetailPage() {
                 {VM_STATUS_LABEL[vm.status]}
               </StatusBadge>
               {vm.stale && (
-                <span className="text-xs text-warning" title={`最近对账：${formatDateTime(vm.last_synced_at)}`}>
+                <span
+                  className="text-xs text-warning"
+                  title={`最近对账：${formatDateTime(vm.last_synced_at)}`}
+                >
                   数据可能陈旧
                 </span>
+              )}
+              {!vm.present && (
+                <span className="text-xs text-warning">虚拟化层已不存在</span>
               )}
             </div>
           </div>
@@ -125,11 +166,15 @@ export function VmDetailPage() {
                 }}
               />
             ))}
-            <Link to={`/vm/${vm.id}/console`}>
-              <Button variant="secondary" size="sm">
-                控制台
-              </Button>
-            </Link>
+            {/* 控制台入口只在真的有控制台时出现：display=none 的虚拟机点了
+                也打不开，给一个必然失败的按钮比不给更糟。 */}
+            {vm.has_console && (
+              <Link to={`/vm/${vm.id}/console`}>
+                <Button variant="secondary" size="sm">
+                  控制台
+                </Button>
+              </Link>
+            )}
             <Button variant="danger" size="sm" onClick={() => setDeleteOpen(true)}>
               删除
             </Button>
@@ -152,59 +197,43 @@ export function VmDetailPage() {
         </p>
       )}
 
-      <section className="rounded-card border border-line">
-        <h2 className="border-b border-line px-4 py-2.5 text-sm font-medium text-ink-2">配置</h2>
-        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 px-4 py-3.5 text-base sm:grid-cols-3">
-          <Field label="CPU">{vm.vcpu} 核</Field>
-          <Field label="内存">{formatMemory(vm.memory_mb)}</Field>
-          <Field label="磁盘">{vm.disk_gb} GB</Field>
-          <Field label="IP">{vm.ip_summary || '—'}</Field>
-          <Field label="所属节点">{nodeName ?? `#${vm.node_id}`}</Field>
-          <Field label="分组">{vm.group_name || '—'}</Field>
-          <Field label="UUID">
-            <span className="kc-mono text-sm">{vm.uuid || '—'}</span>
-          </Field>
-          <Field label="归属">
-            {vm.owner_id ? `用户 #${vm.owner_id}` : '—'}
-          </Field>
-          <Field label="创建时间">{formatDateTime(vm.created_at)}</Field>
-          <Field label="备注">{vm.remark || '—'}</Field>
-          <Field label="最近对账">{formatDateTime(vm.last_synced_at)}</Field>
-        </dl>
-      </section>
+      <TabBar value={tab} onChange={setTab} />
 
-      <section className="rounded-card border border-line">
-        <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
-          <h2 className="text-sm font-medium text-ink-2">最近任务</h2>
-          <Link to="/task" className="text-sm text-brand hover:underline">
-            全部任务 →
-          </Link>
-        </div>
+      {/* 惰性挂载：条件渲染而非 CSS 隐藏，未选中的页签不会发任何请求。 */}
+      {tab === 'system' && (
+        <SystemTab
+          vm={vm}
+          nodeName={nodeName}
+          tasks={tasks.data?.items ?? []}
+        />
+      )}
+      {tab === 'network' && <NetworkTab vmID={vm.id} />}
+      {tab === 'console' && <ConsoleTab vmID={vm.id} />}
 
-        {tasks.data && tasks.data.items.length === 0 && (
-          <EmptyState title="没有相关任务" description="对该虚拟机的操作会记录在这里。" />
-        )}
-
-        {tasks.data && tasks.data.items.length > 0 && (
-          <table className="w-full border-collapse text-base">
-            <tbody>
-              {tasks.data.items.map((t) => (
-                <tr key={t.id} className="border-t border-line first:border-t-0">
-                  <td className="kc-mono px-4 py-2.5 text-ink-3">#{t.id}</td>
-                  <td className="px-4 py-2.5 text-ink">{taskTypeLabel(t.type)}</td>
-                  <td className="px-4 py-2.5">
-                    <StatusBadge tone={TASK_STATUS_TONE[t.status]}>
-                      {TASK_STATUS_LABEL[t.status]}
-                    </StatusBadge>
-                  </td>
-                  <td className="px-4 py-2.5 text-ink-2">{relativeTime(t.created_at)}</td>
-                  <td className="px-4 py-2.5 text-xs text-danger">{t.error || ''}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+      {tab === 'snapshot' && (
+        <PlannedTab
+          title="快照管理"
+          requirement="F-2-07"
+          description="创建、恢复、删除快照；关机态与运行态分别使用内部快照与外部快照；配额与含子快照的专项提示。"
+          blocked="当前阻塞：需要先建 snapshot 表（迁移里尚未创建），以及 agent 侧的快照能力。"
+        />
+      )}
+      {tab === 'schedule' && (
+        <PlannedTab
+          title="定时任务"
+          requirement="F-7-05"
+          description="一次性 / 每天 / 每周的定时开机、关机、删除；删除类仅允许一次性并走二次验证。"
+          blocked="当前阻塞：数据表 vm_schedule 已建，但调度器与接口尚未实现。"
+        />
+      )}
+      {tab === 'edit' && (
+        <PlannedTab
+          title="编辑配置"
+          requirement="F-2-05"
+          description="基础配置 / 磁盘与驱动器 / 启动与安全 / 网口 / 硬件直通 / 高级设置；差异提交，运行态可改项与需关机项分别标注。"
+          blocked="当前阻塞：磁盘、引导、直通等配置项尚未在投影中建模，且需要 agent 的改配能力。"
+        />
+      )}
 
       <Modal
         open={confirmAction !== null}
@@ -228,7 +257,7 @@ export function VmDetailPage() {
         }
       >
         <p className="text-base text-ink-2">
-          当前状态：{VM_STATUS_LABEL[vm.status]}。操作提交后可在下方「最近任务」中跟踪进度。
+          当前状态：{VM_STATUS_LABEL[vm.status]}。操作提交后可在「系统信息」中跟踪进度。
         </p>
       </Modal>
 
@@ -244,6 +273,298 @@ export function VmDetailPage() {
         }}
       />
     </div>
+  )
+}
+
+/** TabBar 是详情页的页签条。 */
+function TabBar({ value, onChange }: { value: TabKey; onChange: (k: TabKey) => void }) {
+  return (
+    <div role="tablist" className="flex flex-wrap gap-1 border-b border-line">
+      {TABS.map((t) => {
+        const active = t.key === value
+        return (
+          <button
+            key={t.key}
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(t.key)}
+            className={[
+              'rounded-t-control px-3.5 py-2 text-base transition-colors',
+              active
+                ? 'border-b-2 border-brand font-medium text-brand'
+                : 'border-b-2 border-transparent text-ink-3 hover:text-ink',
+            ].join(' ')}
+          >
+            {t.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/** SystemTab 汇总系统信息与最近任务。 */
+function SystemTab({
+  vm,
+  nodeName,
+  tasks,
+}: {
+  vm: VmView
+  nodeName?: string
+  tasks: TaskView[]
+}) {
+  return (
+    <>
+      <section className="rounded-card border border-line">
+        <h2 className="border-b border-line px-4 py-2.5 text-sm font-medium text-ink-2">配置</h2>
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 px-4 py-3.5 text-base sm:grid-cols-3">
+          <Field label="CPU">{vm.vcpu} 核</Field>
+          <Field label="内存">{formatMemory(vm.memory_mb)}</Field>
+          <Field label="磁盘">{vm.disk_gb} GB</Field>
+          <Field label="IP">{vm.ip_summary || '—'}</Field>
+          <Field label="所属节点">{nodeName ?? `#${vm.node_id}`}</Field>
+          <Field label="分组">{vm.group_name || '—'}</Field>
+          <Field label="UUID">
+            <span className="kc-mono text-sm">{vm.uuid || '—'}</span>
+          </Field>
+          <Field label="归属">{vm.owner_id ? `用户 #${vm.owner_id}` : '—'}</Field>
+          <Field label="创建时间">{formatDateTime(vm.created_at)}</Field>
+          <Field label="备注">{vm.remark || '—'}</Field>
+          <Field label="最近对账">{formatDateTime(vm.last_synced_at)}</Field>
+          <Field label="控制台">
+            {vm.has_console ? '可用' : '无（display=none）'}
+          </Field>
+        </dl>
+      </section>
+
+      <section className="rounded-card border border-line">
+        <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
+          <h2 className="text-sm font-medium text-ink-2">最近任务</h2>
+          <Link to="/task" className="text-sm text-brand hover:underline">
+            全部任务 →
+          </Link>
+        </div>
+
+        {tasks.length === 0 && (
+          <EmptyState title="没有相关任务" description="对该虚拟机的操作会记录在这里。" />
+        )}
+
+        {tasks.length > 0 && (
+          <table className="w-full border-collapse text-base">
+            <tbody>
+              {tasks.map((t) => (
+                <tr key={t.id} className="border-t border-line first:border-t-0">
+                  <td className="kc-mono px-4 py-2.5 text-ink-3">#{t.id}</td>
+                  <td className="px-4 py-2.5 text-ink">{taskTypeLabel(t.type)}</td>
+                  <td className="px-4 py-2.5">
+                    <StatusBadge tone={TASK_STATUS_TONE[t.status]}>
+                      {TASK_STATUS_LABEL[t.status]}
+                    </StatusBadge>
+                  </td>
+                  <td className="px-4 py-2.5 text-ink-2">{relativeTime(t.created_at)}</td>
+                  <td className="px-4 py-2.5 text-xs text-danger">{t.error || ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+    </>
+  )
+}
+
+/** NetworkTab 展示网卡与静态地址（F-2-03「网络管理」）。 */
+function NetworkTab({ vmID }: { vmID: number }) {
+  const interfaces = useQuery({
+    queryKey: ['vm-interfaces', vmID],
+    queryFn: () => vmApi.interfaces(vmID),
+  })
+  const staticIPs = useQuery({
+    queryKey: ['vm-static-ips', vmID],
+    queryFn: () => vmApi.staticIPs(vmID),
+  })
+
+  if (interfaces.isPending || staticIPs.isPending) return <PageLoading />
+  if (interfaces.isError) return <ErrorBox message={describe(interfaces.error)} />
+  if (staticIPs.isError) return <ErrorBox message={describe(staticIPs.error)} />
+
+  const nics = interfaces.data.items
+  const ips = staticIPs.data.items
+
+  return (
+    <div className="flex flex-col gap-4">
+      <section className="rounded-card border border-line">
+        <h2 className="border-b border-line px-4 py-2.5 text-sm font-medium text-ink-2">网卡</h2>
+
+        {nics.length === 0 ? (
+          <EmptyState
+            title="没有网卡"
+            description="该虚拟机尚未配置网络接口。"
+          />
+        ) : (
+          <table className="w-full border-collapse text-base">
+            <thead>
+              <tr className="border-b border-line text-xs text-ink-3">
+                <th className="px-4 py-2 text-left font-normal">序号</th>
+                <th className="px-4 py-2 text-left font-normal">型号</th>
+                <th className="px-4 py-2 text-left font-normal">MAC</th>
+                <th className="px-4 py-2 text-left font-normal">接入网络</th>
+                <th className="px-4 py-2 text-left font-normal">限速</th>
+                <th className="px-4 py-2 text-left font-normal">下发状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {nics.map((n) => (
+                <tr key={n.id} className="border-t border-line">
+                  <td className="px-4 py-2.5 text-ink">
+                    {n.order}
+                    {n.is_primary && (
+                      <span className="ml-1.5 text-xs text-ink-3">主网卡</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5 text-ink-2">{NIC_MODEL_LABEL[n.model] ?? n.model}</td>
+                  <td className="kc-mono px-4 py-2.5 text-sm text-ink-2">{n.mac || '—'}</td>
+                  <td className="px-4 py-2.5 text-ink-2">
+                    {n.switch_name ?? <span className="text-ink-3">节点默认网络</span>}
+                  </td>
+                  <td className="px-4 py-2.5 text-ink-2">
+                    {n.rate_limit_mbps > 0 ? `${n.rate_limit_mbps} Mbps` : '不限速'}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <AppliedBadge applied={n.applied} at={n.last_applied_at} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <section className="rounded-card border border-line">
+        <h2 className="border-b border-line px-4 py-2.5 text-sm font-medium text-ink-2">
+          静态地址
+        </h2>
+
+        {ips.length === 0 ? (
+          <EmptyState
+            title="没有分配静态地址"
+            description="虚拟机的 IP 由 DHCP 分配时，这里为空；实际拿到的地址显示在「系统信息」的 IP 一栏。"
+          />
+        ) : (
+          <table className="w-full border-collapse text-base">
+            <thead>
+              <tr className="border-b border-line text-xs text-ink-3">
+                <th className="px-4 py-2 text-left font-normal">地址</th>
+                <th className="px-4 py-2 text-left font-normal">网卡</th>
+                <th className="px-4 py-2 text-left font-normal">MAC</th>
+                <th className="px-4 py-2 text-left font-normal">来源</th>
+                <th className="px-4 py-2 text-left font-normal">下发状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ips.map((s) => (
+                <tr key={s.id} className="border-t border-line">
+                  <td className="kc-mono px-4 py-2.5 text-ink">{s.ip}</td>
+                  <td className="px-4 py-2.5 text-ink-2">
+                    {s.interface_order !== undefined ? `#${s.interface_order}` : '—'}
+                  </td>
+                  <td className="kc-mono px-4 py-2.5 text-sm text-ink-2">{s.mac || '—'}</td>
+                  {/* 区分来源：排查时一个查 DHCP 服务，另一个要进系统看配置文件。 */}
+                  <td className="px-4 py-2.5 text-ink-2">
+                    {s.is_dhcp_reservation ? 'DHCP 静态租约' : '手工配置'}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <AppliedBadge applied={s.applied} at={s.applied_at} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <p className="rounded-card border border-line bg-raised px-4 py-3 text-sm text-ink-3">
+        网卡的增删改需要下发到节点才能生效，尚未实现。当前页面为只读。
+        <br />
+        静态地址与「系统信息」里的 IP 可能不一致：前者是我们**期望**的分配，
+        后者是从节点**探测到**的实际地址。不一致时以实际地址为准。
+      </p>
+    </div>
+  )
+}
+
+/** AppliedBadge 标注配置是否已下发到节点。 */
+function AppliedBadge({ applied, at }: { applied: boolean; at?: string }) {
+  if (applied) {
+    return (
+      <span className="text-sm text-success" title={at ? formatDateTime(at) : undefined}>
+        已生效
+      </span>
+    )
+  }
+  // 尚未下发**不是失败**：任务可能还在队列里。用 idle 色而不是红色——
+  // 标红会让人去排查一个可能马上就会完成的操作。
+  return (
+    <span className="text-sm text-ink-3" title="配置已保存，尚未下发到节点">
+      尚未生效
+    </span>
+  )
+}
+
+/** ConsoleTab 提供控制台入口与状态说明。 */
+function ConsoleTab({ vmID }: { vmID: number }) {
+  return (
+    <section className="rounded-card border border-line">
+      <h2 className="border-b border-line px-4 py-2.5 text-sm font-medium text-ink-2">
+        VNC 控制台
+      </h2>
+      <div className="flex flex-col gap-3 px-4 py-3.5">
+        <p className="text-base text-ink-2">
+          控制台流量经面板代理，不直连宿主机端口。
+        </p>
+        <div>
+          <Link to={`/vm/${vmID}/console`}>
+            <Button size="sm">打开控制台</Button>
+          </Link>
+        </div>
+        <p className="text-sm text-ink-3">
+          控制台开关、改密与「对外暴露」需要下发到节点，尚未实现；当前可从
+          虚拟机列表进入控制台。
+        </p>
+      </div>
+    </section>
+  )
+}
+
+/** PlannedTab 说明一个尚未实现的页签。 */
+function PlannedTab({
+  title,
+  requirement,
+  description,
+  blocked,
+}: {
+  title: string
+  requirement: string
+  description: string
+  blocked: string
+}) {
+  return (
+    <section className="rounded-card border border-line bg-raised px-4 py-5">
+      <p className="text-base font-medium text-ink">{title}</p>
+      <p className="mt-1.5 text-base text-ink-2">{description}</p>
+      <p className="mt-3 text-sm text-ink-3">
+        对应需求 {requirement}。
+      </p>
+      <p className="mt-1 text-sm text-ink-3">{blocked}</p>
+    </section>
+  )
+}
+
+function ErrorBox({ message }: { message: string }) {
+  return (
+    <p role="alert" className="rounded-card bg-danger/10 px-4 py-3 text-base text-danger">
+      {message}
+    </p>
   )
 }
 
