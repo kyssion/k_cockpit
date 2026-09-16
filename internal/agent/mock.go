@@ -130,5 +130,21 @@ func (m *MockClient) Snapshot(_ context.Context, _ int64) (*Snapshot, error) {
 	}, nil
 }
 
-// 编译期断言：MockClient 必须满足 Client 契约。
-var _ Client = (*MockClient)(nil)
+// OpenStream 返回 ErrStreamUnsupported。
+//
+// 刻意**不模拟 RFB 握手**：伪造一段能通过握手的字节流会让 noVNC 走到
+// 「已连接但永远黑屏」的状态，而那种现象看起来像前端坏了。返回明确的
+// 不支持，前端就能给出「通路已建立，当前为模拟模式」这类可理解的提示。
+//
+// 这属于 ADR-0007 接受的代价：控制台的真实画面需接入真实 agent 后验证。
+func (m *MockClient) OpenStream(
+	_ context.Context, _ StreamKind, _ int64, _ string,
+) (Stream, error) {
+	return nil, ErrStreamUnsupported
+}
+
+// 编译期断言：MockClient 必须满足 Client 与 StreamOpener 契约。
+var (
+	_ Client       = (*MockClient)(nil)
+	_ StreamOpener = (*MockClient)(nil)
+)
