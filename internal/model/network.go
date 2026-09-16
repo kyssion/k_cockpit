@@ -37,13 +37,16 @@ type VpcSwitch struct {
 	Name    string `gorm:"size:64;not null"`
 	Mode    string `gorm:"size:16;not null;default:empty"`
 	// BridgeName 是宿主机上的网桥名。
-	BridgeName string  `gorm:"size:64;not null"`
-	VlanID     *int    `gorm:"column:vlan_id"`
-	CIDR       *string `gorm:"size:64"`
-	GatewayIP  *string `gorm:"size:64"`
-	DHCPStart  *string `gorm:"size:64"`
-	DHCPEnd    *string `gorm:"size:64"`
-	UplinkIf   *string `gorm:"size:64"`
+	BridgeName string `gorm:"size:64;not null"`
+	VlanID     *int   `gorm:"column:vlan_id"`
+	// column 必须显式声明：GORM 的命名策略把 `CIDR` 转成了 `c_id_r`
+	// （`CIDR` 不在它的常见缩写词表里，被按大写边界切开了），而迁移建的列
+	// 叫 `cidr`。详见 model/vm.go 中 VCPU 的同款说明。
+	CIDR      *string `gorm:"column:cidr;size:64"`
+	GatewayIP *string `gorm:"size:64"`
+	DHCPStart *string `gorm:"size:64"`
+	DHCPEnd   *string `gorm:"size:64"`
+	UplinkIf  *string `gorm:"size:64"`
 
 	BandwidthInMbps  int `gorm:"not null;default:0"`
 	BandwidthOutMbps int `gorm:"not null;default:0"`

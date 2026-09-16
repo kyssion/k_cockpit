@@ -35,8 +35,15 @@ type VM struct {
 	OwnerID    *int64
 	TemplateID *int64
 
-	Status    string  `gorm:"size:16;not null;default:unknown"`
-	VCPU      int     `gorm:"not null;default:0"`
+	Status string `gorm:"size:16;not null;default:unknown"`
+
+	// column 必须显式声明：GORM 的命名策略按大写字母边界切分，
+	// `VCPU` 会被转成 `v_cpu`，而迁移里建的列叫 `vcpu`。
+	//
+	// 这类不一致在测试里**看不出来**——测试库由 AutoMigrate 按同一套策略
+	// 建表，两边一起错；只有连上由 SQL 迁移建的真实库才会暴露，且表现为
+	// 一个笼统的「服务内部错误」。凡是连续大写的缩写字段都要显式声明列名。
+	VCPU      int     `gorm:"column:vcpu;not null;default:0"`
 	MemoryMB  int     `gorm:"not null;default:0"`
 	DiskGB    int     `gorm:"not null;default:0"`
 	IPSummary *string `gorm:"size:255"`
