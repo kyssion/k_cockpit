@@ -9,6 +9,7 @@ import { SetupPage } from '@/views/auth/SetupPage'
 import { NetworkPage } from '@/views/network/NetworkPage'
 import { NodeDetailPage } from '@/views/node/NodeDetailPage'
 import { NodeListPage } from '@/views/node/NodeListPage'
+import { ImportPage } from '@/views/storage/ImportPage'
 import { MyStoragePage } from '@/views/storage/MyStoragePage'
 import { TemplatePage } from '@/views/template/TemplatePage'
 import { SecurityPage } from '@/views/security/SecurityPage'
@@ -65,6 +66,7 @@ export const router = createBrowserRouter([
           },
           { path: 'task', element: <TaskListPage /> },
           { path: 'my-storage', element: <MyStoragePage /> },
+          { path: 'import', element: <ImportPage /> },
           { path: 'public-ip', element: pending('公网 IP', '资源池与绑定') },
           { path: 'template', element: <TemplatePage /> },
           { path: 'node', element: <NodeListPage /> },
