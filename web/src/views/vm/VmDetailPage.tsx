@@ -24,6 +24,7 @@ import {
   type EditGroupInfo,
 } from '@/api/edit'
 import { nodeApi } from '@/api/node'
+import { ExportTab } from '@/views/vm/ExportTab'
 import { templateApi } from '@/api/template'
 import {
   SNAPSHOT_KIND_LABEL,
@@ -80,13 +81,14 @@ import {
 } from '@/utils/labels'
 
 /** 详情页的页签。取值与 FRONTEND.md §5.3.3 的表格一一对应。 */
-type TabKey = 'system' | 'snapshot' | 'network' | 'schedule' | 'console' | 'edit'
+type TabKey = 'system' | 'snapshot' | 'network' | 'schedule' | 'export' | 'console' | 'edit'
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'system', label: '系统信息' },
   { key: 'snapshot', label: '快照管理' },
   { key: 'network', label: '网络管理' },
   { key: 'schedule', label: '定时任务' },
+  { key: 'export', label: '导出' },
   { key: 'console', label: '控制台' },
   { key: 'edit', label: '编辑' },
 ]
@@ -467,6 +469,7 @@ export function VmDetailPage() {
 
       {tab === 'snapshot' && <SnapshotTab vmID={vm.id} />}
       {tab === 'schedule' && <ScheduleTab vmID={vm.id} />}
+      {tab === 'export' && <ExportTab vm={vm} />}
       {tab === 'edit' && <EditTab vmID={vm.id} onSaved={refresh} />}
 
       <Modal

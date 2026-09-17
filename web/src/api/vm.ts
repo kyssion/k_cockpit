@@ -242,6 +242,38 @@ export const vmApi = {
   purgeReinstallBackup: (id: number) =>
     del<TaskRef>(`/api/v1/vms/${id}/reinstall/backup`),
 
+  /**
+   * 导出记录列表（F-2-14）。
+   *
+   * 记录**在受理时**就创建（pending），不是等导出完才建——导出可能跑
+   * 几十分钟，用户需要在那段时间里看到「有一个导出在进行」。
+   */
+  exports: (id: number) => get<{ items: VmExport[] }>(`/api/v1/vms/${id}/exports`),
+
+  /**
+   * 发起导出。
+   *
+   * **要求关机**，理由比其它操作更强：产物会被搬到别的地方使用，因此必须是
+   * 一个干净的、自洽的镜像。运行中导出得到的是崩溃一致性快照，而导入方
+   * 往往不在你手边。
+   */
+  createExport: (id: number, input: { format: ExportFormat; include_data_disks: boolean }) =>
+    post<TaskRef>(`/api/v1/vms/${id}/exports`, input),
+
+  /** 删除导出产物。产物是副本，删掉不影响虚拟机本身。 */
+  deleteExport: (id: number, exportID: number) =>
+    del<TaskRef>(`/api/v1/vms/${id}/exports/${exportID}`),
+
+  /**
+   * 导出产物的下载地址。
+   *
+   * 返回 URL 而不是请求函数：这个接口返回的是**产物字节**，交给浏览器直接
+   * 处理最省事——它会带上会话 Cookie（同源），并自己处理大文件落盘、进度
+   * 与断点。走 fetch 再转 Blob 等于把这些重做一遍。
+   */
+  exportDownloadUrl: (id: number, exportID: number) =>
+    `/api/v1/vms/${id}/exports/${exportID}/download`,
+
   /** 实时运行指标（Hero 资源卡）。只读探测，不入队。 */
   stats: (id: number) => get<VmStats>(`/api/v1/vms/${id}/stats`),
 
@@ -258,6 +290,55 @@ export const vmApi = {
    */
   consoleFrameUrl: (id: number, stamp: number) =>
     `/api/v1/vms/${id}/console/frame?t=${stamp}`,
+}
+
+/** 导出格式。 */
+export type ExportFormat = 'qcow2' | 'ova'
+
+/** 一次导出的产物记录。 */
+export interface VmExport {
+  id: number
+  vm_id: number
+  vm_name: string
+  format: ExportFormat
+  status: 'pending' | 'running' | 'success' | 'failed'
+  include_data_disks: boolean
+  /** 只在导出完成后有值——进行中时给了会让界面显示一个点了拿不到东西的链接。 */
+  file_name?: string
+  /** 计入用户的存储配额。 */
+  size_bytes: number
+  error?: string
+  created_at: string
+  finished_at?: string
+}
+
+export const EXPORT_FORMAT_HINT: Record<ExportFormat, { label: string; detail: string }> = {
+  qcow2: {
+    label: 'QCOW2 系统盘',
+    detail: '得到一块可直接被 QEMU 使用的磁盘镜像。体积小，但只有懂 QEMU 的人能用。',
+  },
+  ova: {
+    label: 'OVA 包',
+    detail:
+      '标准 OVA 包（含 OVF 描述）。比裸镜像大一些，但可被 VirtualBox、ESXi 等直接导入——可移植性的代价是体积。',
+  },
+}
+
+export const EXPORT_STATUS_LABEL: Record<VmExport['status'], string> = {
+  pending: '排队中',
+  running: '导出中',
+  success: '已完成',
+  failed: '失败',
+}
+
+export const EXPORT_STATUS_TONE: Record<
+  VmExport['status'],
+  'idle' | 'warning' | 'success' | 'danger'
+> = {
+  pending: 'idle',
+  running: 'warning',
+  success: 'success',
+  failed: 'danger',
 }
 
 /** 虚拟机的实时运行指标。 */

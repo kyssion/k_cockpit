@@ -69,6 +69,8 @@ export const TASK_TYPE_LABEL: Record<string, string> = {
   'template.delete': '删除模板',
   'vm.reinstall': '重装系统',
   'vm.reinstall.purge': '清理重装备份',
+  'vm.export': '导出虚拟机',
+  'vm.export.delete': '删除导出产物',
 }
 
 /** 电源动作的中文名（与后端 vm.PowerAction 的取值对应）。 */
