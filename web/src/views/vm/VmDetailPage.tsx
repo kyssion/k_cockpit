@@ -16,6 +16,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 
+import { TagEditor } from './TagEditor'
+
 import { ShareTab } from './ShareTab'
 
 import { ApiError, NetworkError } from '@/api/client'
@@ -369,6 +371,14 @@ export function VmDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* 标签（F-2-16）。放在 Hero 之后、锁定提示之前：它回答
+          「这台机器有哪些属性」，是概览的一部分，而锁定提示是对当前
+          状态的告警，两者不该混在一起。 */}
+      <section className="rounded-card border border-line bg-surface p-4">
+        <h2 className="mb-2 text-sm text-ink-3">标签</h2>
+        <TagEditor vmID={vm.id} />
+      </section>
 
       <VmHero vm={vm} />
 
