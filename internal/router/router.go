@@ -12,6 +12,7 @@ import (
 	"gorm.io/gorm"
 
 	"k_cockpit/internal/api"
+	"k_cockpit/internal/apikey"
 	"k_cockpit/internal/auth"
 	"k_cockpit/internal/authz"
 	"k_cockpit/internal/firewall"
@@ -65,6 +66,8 @@ type Deps struct {
 	UserStorage *userstorage.Service
 	// Firewall 提供双层防火墙策略（F-4-11）。
 	Firewall *firewall.Service
+	// APIKey 提供 API 凭证与一次性令牌（F-1-10）。
+	APIKey *apikey.Service
 
 	SecureCookie bool
 	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
@@ -97,9 +100,14 @@ func Register(h *server.Hertz, deps Deps) {
 	sgHandler := handler.NewSecurityGroup(deps.SecurityGroup)
 	userStorageHandler := handler.NewUserStorage(deps.UserStorage)
 	firewallHandler := handler.NewFirewall(deps.Firewall)
+	apiKeyHandler := handler.NewAPIKey(deps.APIKey)
 	importerHandler := handler.NewImporter(deps.Importer)
 
-	authMW := auth.NewMiddleware(deps.Auth)
+	// 挂上 API 凭证认证：客户端可用 `Authorization: Bearer kc_...` 代替会话 Cookie。
+	//
+	// 注销、改密码这类会话管理接口在凭证认证下会拿到 nil 会话，它们的既有
+	// 判空逻辑因此会正确地拒绝——不会出现「用 API Key 把自己登出」这种操作。
+	authMW := auth.NewMiddleware(deps.Auth).WithAPIKey(deps.APIKey)
 	// 认证接口都计为真实用户活动：它们由用户显式操作触发，不是后台轮询。
 	requireAuth := authMW.Require(auth.Real)
 	adminOnly := authz.Admin()
@@ -217,6 +225,16 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/imports", requireAuth, importerHandler.Create)
 		v1.GET("/imports/:id", requireAuth, importerHandler.Get)
 		v1.DELETE("/imports/:id", requireAuth, importerHandler.Delete)
+
+		// API 凭证（F-1-10）与一次性动作令牌。
+		//
+		// 生成与撤销**只接受会话认证**（handler 内校验）：不允许用一个
+		// API Key 去轮换 API Key——那会形成一个自我延续的凭据链，原持有者
+		// 撤销它时攻击者手上那个仍然有效。
+		v1.GET("/api-keys", requireAuth, apiKeyHandler.Get)
+		v1.POST("/api-keys", requireAuth, apiKeyHandler.Create)
+		v1.DELETE("/api-keys", requireAuth, apiKeyHandler.Revoke)
+		v1.POST("/action-tokens", requireAuth, apiKeyHandler.IssueActionToken)
 
 		// 防火墙（F-4-11）。双层：节点级基线 + 虚拟机级覆盖。
 		//

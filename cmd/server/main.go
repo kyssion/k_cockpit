@@ -14,6 +14,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"k_cockpit/internal/agent"
+	"k_cockpit/internal/apikey"
 	"k_cockpit/internal/audit"
 	"k_cockpit/internal/auth"
 	"k_cockpit/internal/config"
@@ -165,6 +166,7 @@ func main() {
 	sgSvc := securitygroup.NewService(db, queue, mockAgent, recorder)
 	userStorageSvc := userstorage.NewService(db, recorder, quotaSvc)
 	firewallSvc := firewall.NewService(db, mockAgent, recorder)
+	apiKeySvc := apikey.NewService(db, recorder)
 	networkSvc := network.NewService(db, mockAgent, queue, recorder)
 
 	// vm 与 storage 都要读设置里的陈旧阈值：把 settingsSvc 作为 Provider
@@ -202,6 +204,7 @@ func main() {
 		SecurityGroup: sgSvc,
 		UserStorage:   userStorageSvc,
 		Firewall:      firewallSvc,
+		APIKey:        apiKeySvc,
 		Storage:       storageSvc,
 		Network:       networkSvc,
 		Settings:      settingsSvc,
