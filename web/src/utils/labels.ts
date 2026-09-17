@@ -74,6 +74,7 @@ export const TASK_TYPE_LABEL: Record<string, string> = {
   'vm.guest': '来宾自动化',
   'image.import': '导入镜像',
   'vm.migrate': '迁移虚拟机',
+  'public_ip.change': '公网地址变更',
 }
 
 /** 电源动作的中文名（与后端 vm.PowerAction 的取值对应）。 */
