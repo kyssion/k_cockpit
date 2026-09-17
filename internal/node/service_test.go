@@ -59,7 +59,7 @@ func newTestService(t *testing.T, runtime agent.SnapshotProvider) (*node.Service
 	if err := db.AutoMigrate(&model.Node{}, &model.AuditLog{}); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
-	return node.NewService(db, runtime, audit.NewRecorder(db)), db
+	return node.NewService(db, runtime, audit.NewRecorder(db), nil), db
 }
 
 func assertAPIError(t *testing.T, err error, status int) {
@@ -433,4 +433,22 @@ func TestRemoveIsSoftDelete(t *testing.T) {
 	}
 
 	assertAPIError(t, svc.Remove(ctx, issued.Node.ID, 1, "admin", ""), 404)
+}
+
+// newStatsDB 只建节点与虚拟机表，供指标统计用例使用。
+func newStatsDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := database.Open(config.DB{
+		Driver:       config.DriverSQLite,
+		Path:         filepath.Join(t.TempDir(), "node-stats.db"),
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	}, false)
+	if err != nil {
+		t.Fatalf("打开测试库失败: %v", err)
+	}
+	if err := db.AutoMigrate(&model.Node{}, &model.VM{}); err != nil {
+		t.Fatalf("建表失败: %v", err)
+	}
+	return db
 }

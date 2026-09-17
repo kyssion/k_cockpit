@@ -63,6 +63,25 @@ type maintenanceRequest struct {
 	Reason  string `json:"reason"`
 }
 
+// Stats 返回宿主机的实时指标（API-083 / F-6-03）。
+//
+// 响应里带 `at`（采集时刻）：指标是瞬时值，轮询失败时界面会继续显示上一组
+// 数字，没有采集时刻就分不清「当前」与「几分钟前」。
+func (h *Node) Stats(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "节点 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	stats, err := h.svc.Stats(ctx, id)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, stats)
+}
+
 // SetMaintenance 进入或退出维护模式（API-042 / F-6-05）。
 //
 // **不需要二次验证**，与删除、移除节点这类不可逆操作不同：进入维护模式

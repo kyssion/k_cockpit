@@ -104,7 +104,7 @@ func main() {
 		log.Fatalf("AGENT_TRANSPORT=%s 尚未实现（当前仅支持 %s）",
 			cfg.Agent.Transport, config.AgentTransportMock)
 	}
-	nodeSvc := node.NewService(db, mockAgent, recorder)
+	nodeSvc := node.NewService(db, mockAgent, recorder, mockAgent)
 
 	// 任务队列：所有异步操作的载体。注册各能力的 Executor，队列本身
 	// 不关心任务具体做什么——新增能力时只需在这里多注册一个。

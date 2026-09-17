@@ -279,6 +279,9 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 		// 流转需要 mock 维护一份状态，那正是 ADR-0007 明确不做的事。
 		data[StatusDataKey] = "running"
 
+	case OpNodeStats:
+		data[NodeStatsDataKey] = mockNodeStats(op.NodeID)
+
 	case OpVMStats:
 		// 指标随目标名变化，但**同一台机器每次拿到同一组值**：mock 不维护
 		// 状态，若每帧都随机，界面上的 CPU 曲线会自己抖动起来——那看起来
@@ -336,6 +339,38 @@ func (m *MockClient) reportStages(ctx context.Context, op Operation) {
 			case <-time.After(m.StageDelay):
 			}
 		}
+	}
+}
+
+// mockNodeStats 按节点 ID 生成一组**稳定**的宿主机指标。
+//
+// 稳定（而不是随机）与 mockStats 同理：随机值会让轮询界面上的数字自己抖动，
+// 看起来像真实负载在变化，而实际什么都没发生。
+//
+// 刻意让某些节点负载偏高、某些偏低，好让界面上「正常 / 偏高 / 吃紧」三种
+// 呈现都能被看到。全都给 3% 会让告警样式永远没被渲染过——而那正是最需要
+// 在演示前确认能正常显示的部分。
+func mockNodeStats(nodeID int64) NodeStats {
+	seed := uint32(nodeID*2654435761 + 12345)
+	cores := int(seed%16) + 4
+	cpu := float64(seed%95) + 3
+
+	// 负载跟着 CPU 一起抬高，但**不与占用率成正比**：真实机器上两者确实
+	// 常常不同步，而「占用率不高但负载很高」正是这条指标存在的意义。
+	load := cpu / 100 * float64(cores) * 1.15
+
+	return NodeStats{
+		CPUPercent:     cpu,
+		CPUCores:       cores,
+		LoadAvg1:       load,
+		LoadAvg5:       load * 0.92,
+		LoadAvg15:      load * 0.85,
+		MemTotalMB:     32768,
+		MemUsedMB:      32768 * (int(seed%70) + 15) / 100,
+		DiskTotalBytes: int64(seed%4000+1000) << 30,
+		DiskUsedBytes:  int64(seed%4000+1000) << 30 * int64(seed%70+10) / 100,
+		UptimeSeconds:  int64(seed%2592000) + 86400,
+		AgentStartedAt: time.Now().Add(-time.Duration(seed%259200) * time.Second),
 	}
 }
 

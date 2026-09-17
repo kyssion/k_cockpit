@@ -108,6 +108,10 @@ func Register(h *server.Hertz, deps Deps) {
 		// 节点管理：按 f-1-06 的角色表，全部仅管理员可访问。
 		v1.GET("/nodes", requireAuth, adminOnly, nodeHandler.List)
 		v1.GET("/nodes/:id", requireAuth, adminOnly, nodeHandler.Get)
+		// 宿主机指标（F-6-03）。只读探测，不入队、不写投影——指标是瞬时的，
+		// 存下来只会在下一次读取时给出一个过期的答案。
+		v1.GET("/nodes/:id/stats", requireAuth, adminOnly, nodeHandler.Stats)
+
 		// 维护模式（F-6-05 / API-042）。**同步生效，不进任务队列**——
 		// 它纯粹是控制面的标志，所有拦截都发生在受理那一刻；做成任务会
 		// 制造一个「界面说维护中、操作仍被受理」的窗口。

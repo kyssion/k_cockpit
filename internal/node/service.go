@@ -44,11 +44,22 @@ type Service struct {
 	db      *gorm.DB
 	runtime agent.SnapshotProvider
 	audit   *audit.Recorder
+	// client 用于**实时探测**宿主机指标（f-6-03）。
+	//
+	// 与 runtime 分开：运行态是 agent 周期性推送、由控制面缓存的，而指标
+	// 是用户打开页面时才去取一次的瞬时值。两者生命周期完全不同，用一个
+	// 接口同时表达会让「什么时候该探测」变得含糊。
+	//
+	// 允许为 nil（单测与轻量部署）：此时 Stats 明确返回「不支持」，而不是
+	// 给出一堆 0——0% 的 CPU 看起来是「机器很闲」，而实际是「没读到」。
+	client agent.Client
 }
 
-// NewService 构造节点服务。
-func NewService(db *gorm.DB, runtime agent.SnapshotProvider, recorder *audit.Recorder) *Service {
-	return &Service{db: db, runtime: runtime, audit: recorder}
+// NewService 构造节点服务。stats 为 nil 时指标接口返回「不支持」。
+func NewService(
+	db *gorm.DB, runtime agent.SnapshotProvider, recorder *audit.Recorder, stats agent.Client,
+) *Service {
+	return &Service{db: db, runtime: runtime, audit: recorder, client: stats}
 }
 
 // View 是节点的对外视图：元数据 + 运行态。
