@@ -22,6 +22,7 @@ import (
 	"k_cockpit/internal/quota"
 	"k_cockpit/internal/risk"
 	"k_cockpit/internal/schedule"
+	"k_cockpit/internal/securitygroup"
 	"k_cockpit/internal/settings"
 	"k_cockpit/internal/storage"
 	"k_cockpit/internal/task"
@@ -56,6 +57,8 @@ type Deps struct {
 	Importer *importer.Service
 	// PublicIP 提供公网地址池、绑定与浮动迁移（F-4-06）。
 	PublicIP *publicip.Service
+	// SecurityGroup 提供安全组与叠加生效（F-4-03 / F-4-04）。
+	SecurityGroup *securitygroup.Service
 
 	SecureCookie bool
 	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
@@ -85,6 +88,7 @@ func Register(h *server.Hertz, deps Deps) {
 	templateHandler := handler.NewTemplate(deps.Template)
 	quotaHandler := handler.NewQuota(deps.Quota)
 	publicIPHandler := handler.NewPublicIP(deps.PublicIP)
+	sgHandler := handler.NewSecurityGroup(deps.SecurityGroup)
 	importerHandler := handler.NewImporter(deps.Importer)
 
 	authMW := auth.NewMiddleware(deps.Auth)
@@ -205,6 +209,27 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/imports", requireAuth, importerHandler.Create)
 		v1.GET("/imports/:id", requireAuth, importerHandler.Get)
 		v1.DELETE("/imports/:id", requireAuth, importerHandler.Delete)
+
+		// 安全组（F-4-03）与 ACL 汇总应用（F-4-04）。
+		//
+		// **组内只有允许规则**：叠加生效意味着生效规则是各组的并集，而在
+		// 并集模型里「拒绝」没法定义——A 组拒绝 22、B 组允许 22，合并后通不通
+		// 取决于谁先算，而那是用户看不见的实现细节。默认拒绝由组的整体语义
+		// 给出：不在任何允许规则里的流量一律不通。
+		v1.GET("/security-groups", requireAuth, sgHandler.ListGroups)
+		v1.POST("/security-groups", requireAuth, sgHandler.CreateGroup)
+		v1.DELETE("/security-groups/:id", requireAuth, sgHandler.DeleteGroup)
+		v1.GET("/security-groups/:id/rules", requireAuth, sgHandler.ListRules)
+		v1.POST("/security-groups/:id/rules", requireAuth, sgHandler.CreateRule)
+		v1.PATCH("/security-groups/:id/rules/:ruleID", requireAuth, sgHandler.UpdateRule)
+		v1.DELETE("/security-groups/:id/rules/:ruleID", requireAuth, sgHandler.DeleteRule)
+		v1.POST("/security-groups/:id/interfaces/:interfaceID", requireAuth, sgHandler.Attach)
+		v1.DELETE("/security-groups/:id/interfaces/:interfaceID", requireAuth, sgHandler.Detach)
+
+		// 生效规则的汇总与下发（F-4-04）。应用必须带回预览版本号：
+		// 用户确认的必须正是他看到的那一套规则。
+		v1.GET("/vms/:id/security-groups/effective", requireAuth, sgHandler.Effective)
+		v1.POST("/vms/:id/security-groups/apply", requireAuth, sgHandler.Apply)
 
 		// 公网 IP（F-4-06）。
 		//

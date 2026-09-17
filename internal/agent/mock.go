@@ -187,6 +187,12 @@ func stagePlan(kind OpKind) [][2]string {
 			{"target.define", "在目标节点定义"},
 			{"source.cleanup", "清理源侧"},
 		}
+	case OpSecurityGroupApply:
+		return [][2]string{
+			{"render_rules", "渲染规则"},
+			{"apply_chain", "写入规则链"},
+			{"verify_chain", "校验链状态"},
+		}
 	case OpPublicIPChange:
 		// 顺序体现「先撤旧、再加新」——迁移中途失败时旧规则仍然有效，
 		// 地址不会悬空。
@@ -293,6 +299,16 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 			// 「我原来接的网络、配的转发还在不在」。
 			Moved:           []string{"系统盘与数据盘", "全部网卡", "静态地址与端口转发"},
 			DurationSeconds: 47,
+		}
+
+	case OpSecurityGroupApply:
+		n := 0
+		if list, ok := op.Params["rules"].([]map[string]any); ok {
+			n = len(list)
+		}
+		data[SecurityGroupDataKey] = SecurityGroupInfo{
+			Applied: n,
+			Message: "规则已写入运行域",
 		}
 
 	case OpPublicIPChange:

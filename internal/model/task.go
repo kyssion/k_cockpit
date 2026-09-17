@@ -109,6 +109,9 @@ const (
 	// 跨节点迁移（f-2-09）。要搬运整块磁盘，是最耗时的操作之一。
 	TaskVMMigrate = "vm.migrate"
 
+	// 安全组规则应用（f-4-04）。下发的是**汇总去重后**的生效规则。
+	TaskSecurityGroupApply = "security_group.apply"
+
 	// 公网地址变更（f-4-06）：绑定、解绑、浮动迁移。
 	//
 	// 三者共用一个任务类型：对节点而言都是「让这个地址指向这里 /

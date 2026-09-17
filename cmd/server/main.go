@@ -27,6 +27,7 @@ import (
 	"k_cockpit/internal/risk"
 	"k_cockpit/internal/router"
 	"k_cockpit/internal/schedule"
+	"k_cockpit/internal/securitygroup"
 	"k_cockpit/internal/settings"
 	"k_cockpit/internal/storage"
 	"k_cockpit/internal/task"
@@ -140,6 +141,8 @@ func main() {
 	queue.Register(vm.NewMigrateExecutor(db, mockAgent))
 	// 公网地址变更要动宿主机的 iptables 与路由。
 	queue.Register(publicip.NewChangeExecutor(db, mockAgent))
+	// 安全组规则要写进宿主机运行域的规则链。
+	queue.Register(securitygroup.NewApplyExecutor(db, mockAgent))
 	// 网络变更（F-2-03）：三种资源各一个执行器，共用 vm:<id> 资源锁。
 	queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
 	queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))
@@ -155,6 +158,7 @@ func main() {
 	quotaSvc := quota.NewService(db, recorder)
 	importerSvc := importer.NewService(db, queue, mockAgent, recorder, quotaSvc)
 	publicIPSvc := publicip.NewService(db, queue, mockAgent, recorder)
+	sgSvc := securitygroup.NewService(db, queue, mockAgent, recorder)
 	networkSvc := network.NewService(db, mockAgent, queue, recorder)
 
 	// vm 与 storage 都要读设置里的陈旧阈值：把 settingsSvc 作为 Provider
@@ -189,6 +193,7 @@ func main() {
 		Quota:         quotaSvc,
 		Importer:      importerSvc,
 		PublicIP:      publicIPSvc,
+		SecurityGroup: sgSvc,
 		Storage:       storageSvc,
 		Network:       networkSvc,
 		Settings:      settingsSvc,
