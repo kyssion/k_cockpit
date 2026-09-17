@@ -19,6 +19,7 @@ import (
 	"k_cockpit/internal/config"
 	"k_cockpit/internal/cryptoutil"
 	"k_cockpit/internal/database"
+	"k_cockpit/internal/importer"
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/node"
 	"k_cockpit/internal/quota"
@@ -132,6 +133,8 @@ func main() {
 	queue.Register(vm.NewExportDeleteExecutor(db, mockAgent))
 	// 来宾自动化要进系统内部执行，同样是异步的。
 	queue.Register(vm.NewGuestExecutor(db, mockAgent))
+	// 镜像导入要转换格式，可能处理几十 GB 的文件。
+	queue.Register(importer.NewImportExecutor(db, mockAgent))
 	// 网络变更（F-2-03）：三种资源各一个执行器，共用 vm:<id> 资源锁。
 	queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
 	queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))
@@ -145,6 +148,7 @@ func main() {
 	settingsSvc := settings.NewService(db, recorder)
 	// 存储配额（f-9-02）：按用户按节点。
 	quotaSvc := quota.NewService(db, recorder)
+	importerSvc := importer.NewService(db, queue, mockAgent, recorder, quotaSvc)
 	networkSvc := network.NewService(db, mockAgent, queue, recorder)
 
 	// vm 与 storage 都要读设置里的陈旧阈值：把 settingsSvc 作为 Provider
@@ -177,6 +181,7 @@ func main() {
 		Schedule:      scheduleSvc,
 		Template:      templateSvc,
 		Quota:         quotaSvc,
+		Importer:      importerSvc,
 		Storage:       storageSvc,
 		Network:       networkSvc,
 		Settings:      settingsSvc,

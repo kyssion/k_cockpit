@@ -176,6 +176,13 @@ func stagePlan(kind OpKind) [][2]string {
 		return [][2]string{
 			{"export_remove", "删除导出文件"},
 		}
+	case OpImageImport:
+		return [][2]string{
+			{"source_verify", "校验源文件"},
+			{"format_convert", "转换格式"},
+			{"disk_place", "放入存储池"},
+			{"template_register", "登记为模板"},
+		}
 	case OpVMGuest:
 		// 阶段按 `host.` / `guest.` 前缀分成两段。
 		//
@@ -259,6 +266,31 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 
 	case OpVMExportDelete:
 		// 没有返回值：删除的结果只由 Success 表达。
+
+	case OpImageParse:
+		// 模拟从 OVA 内的 OVF 描述解析出的配置。
+		//
+		// 给一组**非默认**的值（4 核 / 8 GB）：mock 若返回默认值，界面与
+		// 流程里「用解析出来的值覆盖默认值」那段逻辑就永远走不到——而它
+		// 正是「先解析预览」这个功能存在的意义。
+		data[ImageParseDataKey] = ImagePreview{
+			VCPU: 4, MemoryMB: 8192, DiskGB: 40,
+			OSType: "linux", OSVariant: "ubuntu24.04",
+			Sources: map[string]string{"vcpu": "ovf", "memory_mb": "ovf", "disk_gb": "ovf"},
+		}
+
+	case OpImageImport:
+		format, _ := op.Params["source_format"].(string)
+		var notes []string
+		if format != "" && format != "qcow2" {
+			notes = append(notes, "源格式 "+format+" 已转换为 qcow2")
+		}
+		data[ImageImportDataKey] = ImageImportInfo{
+			DiskPath: "/var/lib/k_cockpit/imports/" + op.Target + ".qcow2",
+			SizeGB:   40,
+			Format:   "qcow2",
+			Notes:    notes,
+		}
 
 	case OpVMGuest:
 		action, _ := op.Params["action"].(string)

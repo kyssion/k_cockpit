@@ -15,6 +15,7 @@ import (
 	"k_cockpit/internal/auth"
 	"k_cockpit/internal/authz"
 	"k_cockpit/internal/handler"
+	"k_cockpit/internal/importer"
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/node"
 	"k_cockpit/internal/quota"
@@ -50,6 +51,8 @@ type Deps struct {
 	Template *template.Service
 	// Quota 提供按用户按节点的存储配额（F-9-02）。
 	Quota *quota.Service
+	// Importer 提供磁盘与镜像导入（F-2-13）。
+	Importer *importer.Service
 
 	SecureCookie bool
 	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
@@ -78,6 +81,7 @@ func Register(h *server.Hertz, deps Deps) {
 	consoleHandler := handler.NewConsole(deps.VM, deps.Risk)
 	templateHandler := handler.NewTemplate(deps.Template)
 	quotaHandler := handler.NewQuota(deps.Quota)
+	importerHandler := handler.NewImporter(deps.Importer)
 
 	authMW := auth.NewMiddleware(deps.Auth)
 	// 认证接口都计为真实用户活动：它们由用户显式操作触发，不是后台轮询。
@@ -178,6 +182,19 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/templates", requireAuth, templateHandler.CreateFromVM)
 		v1.PATCH("/templates/:id", requireAuth, templateHandler.Update)
 		v1.DELETE("/templates/:id", requireAuth, templateHandler.Delete)
+
+		// 镜像导入（F-2-13）。
+		//
+		// **本面板不接收真实文件内容**：受理时只提交文件名、大小与格式
+		// （都是浏览器能直接读到的元数据）。整条链路——受理、状态流转、
+		// 转换后建模板、配额记账——都能被验证，唯独「字节怎么从浏览器到
+		// 宿主机」这一段留空。那一段必须真实实现，且它是最难的部分之一。
+		v1.GET("/imports/format", requireAuth, importerHandler.GuessFormat)
+		v1.POST("/imports/parse", requireAuth, importerHandler.Parse)
+		v1.GET("/imports", requireAuth, importerHandler.List)
+		v1.POST("/imports", requireAuth, importerHandler.Create)
+		v1.GET("/imports/:id", requireAuth, importerHandler.Get)
+		v1.DELETE("/imports/:id", requireAuth, importerHandler.Delete)
 
 		// 存储配额（F-9-02）。
 		//

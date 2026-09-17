@@ -102,6 +102,9 @@ const (
 	// 骨架完全一致，差异只在具体命令上。拆成四个类型会让四份几乎相同的
 	// 受理与执行逻辑各自演化。
 	TaskVMGuest = "vm.guest"
+
+	// 镜像导入（f-2-13）。格式转换可能要处理几十 GB 的文件，因此走队列。
+	TaskImageImport = "image.import"
 )
 
 // 阶段的执行状态。取值与 task.status 保持同一套词汇，避免界面上出现
