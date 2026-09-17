@@ -112,6 +112,21 @@ func stagePlan(kind OpKind) [][2]string {
 			{"rule_write", "写入转发规则"},
 			{"firewall_apply", "应用防火墙规则"},
 		}
+	case OpVMRescueEnter:
+		// 救援进入：先改配置再启动。顺序反了会让虚拟机先按原配置起来，
+		// 而那时已经是「救援中」的状态——用户连上去看到的还是自己的系统。
+		return [][2]string{
+			{"boot_config", "调整为救援引导"},
+			{"device_swap", "切换盘型与网卡"},
+			{"domain_define", "重写域配置"},
+			{"domain_start", "从救援镜像启动"},
+		}
+	case OpVMRescueExit:
+		return [][2]string{
+			{"device_restore", "还原盘型与网卡"},
+			{"boot_config", "还原引导顺序"},
+			{"domain_define", "重写域配置"},
+		}
 	case OpVPCSwitchChange:
 		return [][2]string{
 			{"bridge_create", "创建网桥"},

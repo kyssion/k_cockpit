@@ -68,6 +68,17 @@ const (
 	// 控制面记录的「上次开机成功时间」会因重启、快照恢复等原因与实际不符。
 	OpVMStats OpKind = "vm.stats"
 
+	// OpVMRescueEnter / OpVMRescueExit 进入与退出救援模式（F-2-12）。
+	//
+	// 两个独立操作而不是一个带 action 的：它们各自要重启虚拟机、各自可能
+	// 失败，合并会让「进入成功了但退出失败」这种情况无法分别重试。
+	//
+	// 两者的参数都带**配置快照**：进入时节点据此知道原配置是什么（救援档案
+	// 要在此基础上调整），退出时据此还原。把快照交给节点、而不是让节点
+	// 自己记忆——节点重启或重装后就再也说不出「原来是怎样」了。
+	OpVMRescueEnter OpKind = "vm.rescue.enter"
+	OpVMRescueExit  OpKind = "vm.rescue.exit"
+
 	// OpVMConsoleFrame 抓取一帧控制台画面（f-2-01 的 Hero 控制台预览卡）。
 	//
 	// 与 OpVMStatus 一样是只读的，但它**较慢**（要等 hypervisor 出一帧），

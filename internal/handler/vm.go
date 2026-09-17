@@ -767,6 +767,48 @@ func (h *VM) RemovePortForward(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
 }
 
+// EnterRescue 让虚拟机从救援镜像启动（API-074 / F-2-12）。
+//
+// 不需要二次验证：救援**不破坏数据**（它只改引导与盘型，磁盘内容原样保留，
+// 退出时还原），而且它恰恰是用户遇到故障时的出路——给出路加验证，只会让人
+// 在系统已经出问题的时候再被挡一道。
+func (h *VM) EnterRescue(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.EnterRescue(ctx, id, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
+// ExitRescue 退出救援并按进入前的快照还原配置（API-075 / F-2-12）。
+func (h *VM) ExitRescue(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.ExitRescue(ctx, id, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
 // Stats 返回虚拟机的实时运行指标（Hero 的资源卡）。
 //
 // 响应里带 `at`（采集时刻）：指标是瞬时值，轮询失败时界面会继续显示上一组

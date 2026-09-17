@@ -129,6 +129,13 @@ type View struct {
 	// LockReason 是加锁时填写的原因，供界面解释「为什么锁着」。
 	LockReason string     `json:"lock_reason,omitempty"`
 	LockedAt   *time.Time `json:"locked_at,omitempty"`
+
+	// RescueActive 表示该虚拟机当前从救援镜像启动（F-2-12）。
+	//
+	// 界面据此显示醒目提示：救援模式下看到的系统**不是用户自己的系统**
+	// （盘型、网卡、引导顺序都改过），把它当成日常状态会让人做出错误判断。
+	RescueActive bool       `json:"rescue_active"`
+	RescueSince  *time.Time `json:"rescue_since,omitempty"`
 }
 
 // ListFilter 是列表查询条件。
@@ -615,6 +622,8 @@ func toView(vm *model.VM, lock *model.VMLock, now time.Time, threshold time.Dura
 		// 会以实时探测为准重新校验（f-2-01 R-004）。
 		AvailableActions: AvailableActions(vm.Status),
 		HasConsole:       vm.HasConsole(),
+		RescueActive:     vm.RescueActive,
+		RescueSince:      vm.RescueSince,
 	}
 	if vm.UUID != nil {
 		view.UUID = *vm.UUID

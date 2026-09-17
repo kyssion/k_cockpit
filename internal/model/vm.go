@@ -127,6 +127,22 @@ type VM struct {
 	DiskIOPSRead  int `gorm:"column:disk_iops_read;not null;default:0"`
 	DiskIOPSWrite int `gorm:"column:disk_iops_write;not null;default:0"`
 
+	// --- 救援系统（F-2-12）---
+
+	// RescueActive 表示该虚拟机当前处于救援模式。
+	RescueActive bool `gorm:"not null;default:false"`
+	// RescueConfig 是**进入救援之前**的那份配置快照（JSON 文本）。
+	//
+	// 没有它，退出救援时只能猜一个默认值填回去——而那是悄悄改掉用户的配置：
+	// 他进入救援是为了修系统，退出后发现引导顺序被重置成了默认值，机器起不来了。
+	//
+	// 用 JSON 而不是拆成多列：快照的字段集合会随救援能力扩展而变化（将来
+	// 可能要改 BIOS、CPU 型号），拆列意味着每加一项都要一次迁移，而这份数据
+	// 只是「原样存、原样还」，控制面从不按字段查询它。
+	RescueConfig *string `gorm:"type:text"`
+	// RescueSince 是进入救援的时刻。
+	RescueSince *time.Time
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
