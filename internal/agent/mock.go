@@ -45,8 +45,12 @@ func (m *MockClient) WithStageDelay(d time.Duration) *MockClient {
 // 未登记的操作返回 nil，调用方照常执行、只是没有阶段——这比编几个通用步骤
 // 要好：一个显示「执行中 → 完成」的时间线不提供任何定位能力，却会让人以为
 // 阶段是齐全的。
-func stagePlan(kind OpKind) [][2]string {
-	switch kind {
+//
+// 接收整个 Operation 而不只是 Kind：同一个 Kind 下也可能有不同的步骤序列
+// （目录共享的挂载与卸载就是如此），而真实节点同样是按参数来决定的——
+// 控制面不该替它猜。
+func stagePlan(op Operation) [][2]string {
+	switch op.Kind {
 	case OpVMCreate:
 		return [][2]string{
 			{"resource_check", "校验宿主机资源"},
@@ -187,6 +191,19 @@ func stagePlan(kind OpKind) [][2]string {
 			{"target.define", "在目标节点定义"},
 			{"source.cleanup", "清理源侧"},
 		}
+	case OpShareMount:
+		action, _ := op.Params["action"].(string)
+		if action == "unmount" {
+			return [][2]string{
+				{"detach_device", "摘下 virtu1o 设备"},
+				{"release_dir", "释放目录访问"},
+			}
+		}
+		return [][2]string{
+			{"validate_path", "校验共享路径"},
+			{"attach_device", "挂入 virtu1o 设备"},
+			{"propagate", "等待来宾识别"},
+		}
 	case OpSecurityGroupApply:
 		return [][2]string{
 			{"render_rules", "渲染规则"},
@@ -225,7 +242,7 @@ func stagePlan(kind OpKind) [][2]string {
 	}
 	// 电源类操作是单步的，但仍然会上报一项：否则界面上这类任务的时间线是
 	// 空的，而「空空如也」与「不支持展示」看起来是同一件事。
-	switch kind {
+	switch op.Kind {
 	case OpVMStart, OpVMShutdown, OpVMPoweroff, OpVMReboot, OpVMReset:
 		return [][2]string{{"node_exec", "节点执行"}}
 	}
@@ -300,6 +317,20 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 			Moved:           []string{"系统盘与数据盘", "全部网卡", "静态地址与端口转发"},
 			DurationSeconds: 47,
 		}
+
+	case OpShareMount:
+		action, _ := op.Params["action"].(string)
+		msg := "共享目录已挂载"
+		if action == "unmount" {
+			msg = "共享已卸载"
+		}
+		tag, _ := op.Params["tag"].(string)
+		info := ShareInfo{Tag: tag, Message: msg}
+		// 只读共享下提示一次：这是用户最容易忽略、而后果最实际的一项。
+		if ro, _ := op.Params["read_only"].(bool); ro && action != "unmount" {
+			info.Warnings = []string{"该共享以只读方式挂载，来宾内无法写入"}
+		}
+		data[ShareDataKey] = info
 
 	case OpSecurityGroupApply:
 		n := 0
@@ -498,7 +529,7 @@ func (m *MockClient) reportStages(ctx context.Context, op Operation) {
 	if op.OnStage == nil {
 		return
 	}
-	plan := stagePlan(op.Kind)
+	plan := stagePlan(op)
 	for i, s := range plan {
 		select {
 		case <-ctx.Done():

@@ -109,6 +109,9 @@ const (
 	// 跨节点迁移（f-2-09）。要搬运整块磁盘，是最耗时的操作之一。
 	TaskVMMigrate = "vm.migrate"
 
+	// 目录共享的挂载与卸载（f-5-06）。
+	TaskShareMount = "share.mount"
+
 	// 安全组规则应用（f-4-04）。下发的是**汇总去重后**的生效规则。
 	TaskSecurityGroupApply = "security_group.apply"
 

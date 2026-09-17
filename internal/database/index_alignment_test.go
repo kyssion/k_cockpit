@@ -43,6 +43,7 @@ func TestUniqueIndexesMatchBetweenModelAndMigration(t *testing.T) {
 		&model.VMInterface{}, &model.StaticIP{}, &model.Template{},
 		&model.PublicIP{}, &model.PublicIPBinding{},
 		&model.SecurityGroup{}, &model.SecurityGroupRule{}, &model.InterfaceSecurityGroup{},
+		&model.ShareMount{},
 	}
 
 	var cache sync.Map

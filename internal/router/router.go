@@ -210,6 +210,18 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/imports/:id", requireAuth, importerHandler.Get)
 		v1.DELETE("/imports/:id", requireAuth, importerHandler.Delete)
 
+		// 目录共享到虚拟机（F-5-06，9p VirtFS）。
+		//
+		// **接口只接受相对路径**（相对于调用者的存储根），这是整块功能的
+		// 安全前提：共享是一个跨越虚拟化边界的读取入口，而参数来自用户。
+		// 允许绝对路径意味着一个租户可以把 /etc 挂进自己的虚拟机读出来，
+		// 而这不会触发任何权限检查——qemu 是以一个有权读它的用户在跑。
+		//
+		// 卸载不需要二次验证：目录还在宿主机上，随时可以再挂回去。
+		v1.GET("/vms/:id/shares", requireAuth, storageHandler.ListShares)
+		v1.POST("/vms/:id/shares", requireAuth, storageHandler.MountShare)
+		v1.DELETE("/vms/:id/shares/:tag", requireAuth, storageHandler.UnmountShare)
+
 		// 安全组（F-4-03）与 ACL 汇总应用（F-4-04）。
 		//
 		// **组内只有允许规则**：叠加生效意味着生效规则是各组的并集，而在

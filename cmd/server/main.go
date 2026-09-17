@@ -143,6 +143,8 @@ func main() {
 	queue.Register(publicip.NewChangeExecutor(db, mockAgent))
 	// 安全组规则要写进宿主机运行域的规则链。
 	queue.Register(securitygroup.NewApplyExecutor(db, mockAgent))
+	// 目录共享要往虚拟机的域配置里加一块 virtio-9p 设备。
+	queue.Register(storage.NewShareExecutor(db, mockAgent))
 	// 网络变更（F-2-03）：三种资源各一个执行器，共用 vm:<id> 资源锁。
 	queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
 	queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))
