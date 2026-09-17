@@ -85,6 +85,10 @@ const (
 	// 是同一件事，界面上也是同一个入口。
 	TaskTemplatePrepare = "template.prepare"
 	TaskTemplateDelete  = "template.delete"
+
+	// 重装系统（f-2-11）。两者都是磁盘操作，因此都走队列。
+	TaskVMReinstall      = "vm.reinstall"
+	TaskVMReinstallPurge = "vm.reinstall.purge"
 )
 
 // 阶段的执行状态。取值与 task.status 保持同一套词汇，避免界面上出现

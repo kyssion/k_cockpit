@@ -44,6 +44,12 @@ const (
 	// 这一类，与删除同级。用户点下恢复时往往想的是「回到那个时间点」，
 	// 而实际发生的是一次不可逆的回滚。
 	ActionVMSnapshotRestore Action = "vm.snapshot.restore"
+
+	// 重装系统（F-2-11）。
+	//
+	// 它会**替换整块系统盘**——原系统上的所有配置、安装的软件、没放在数据盘
+	// 上的数据都随之消失。比删除轻一档（机器还在、数据盘还在），但同样不可逆。
+	ActionVMReinstall Action = "vm.reinstall"
 )
 
 // Entry 是清单中的一条，用于对外下发（API-034）。
@@ -100,6 +106,11 @@ var policy = []Entry{
 		Action: ActionVMSnapshotRestore,
 		Label:  "恢复快照",
 		Reason: "快照之后产生的磁盘改动会被丢弃，且无法撤销",
+	},
+	{
+		Action: ActionVMReinstall,
+		Label:  "重装系统",
+		Reason: "整块系统盘会被替换，原系统上的软件与配置全部消失（数据盘保留）",
 	},
 }
 

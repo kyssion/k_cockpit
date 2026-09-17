@@ -819,6 +819,70 @@ func (h *VM) ExitRescue(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
 }
 
+type reinstallRequest struct {
+	// TemplateID 是要用来重建系统盘的模板。
+	TemplateID int64 `json:"template_id"`
+}
+
+// Reinstall 重装系统（API-081 / F-2-11）。
+//
+// **高风险，需二次验证**：整块系统盘会被替换，原系统上的软件与配置全部消失
+// （数据盘保留）。这是本项目里对单台虚拟机破坏性最强的操作——比删除轻一档，
+// 但同样不可逆。
+func (h *VM) Reinstall(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	var req reinstallRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+	if req.TemplateID <= 0 {
+		api.Fail(c, api.InvalidParameter("必须指定用于重装的模板"))
+		return
+	}
+
+	if !h.risk.Require(c, risk.ActionVMReinstall) {
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.Reinstall(ctx, id, req.TemplateID, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
+// PurgeReinstallBackup 清理重装留下的备份盘（API-082 / F-2-11）。
+//
+// **不需要二次验证**：删掉的是已经不再被使用的备份，虚拟机的当前运行不受
+// 任何影响。给它加验证只会稀释真正危险操作的份量。
+func (h *VM) PurgeReinstallBackup(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.PurgeBackup(ctx, id, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
 // Stats 返回虚拟机的实时运行指标（Hero 的资源卡）。
 //
 // 响应里带 `at`（采集时刻）：指标是瞬时值，轮询失败时界面会继续显示上一组

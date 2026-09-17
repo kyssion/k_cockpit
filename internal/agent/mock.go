@@ -150,6 +150,21 @@ func stagePlan(kind OpKind) [][2]string {
 			{"domain_define", "生成域配置"},
 			{"domain_start", "定义并启动"},
 		}
+	case OpVMReinstall:
+		// 顺序体现「先备份、再重建」：先删旧的再重建会让失败时的还原变得
+		// 不可能——而重装失败往往正是因为磁盘空间不足或模板有问题，
+		// 那恰恰是最不能丢数据的时刻。
+		return [][2]string{
+			{"disk_backup", "备份原系统盘"},
+			{"disk_create", "按模板创建系统盘"},
+			{"data_disk_attach", "挂载数据盘"},
+			{"domain_update", "更新域配置"},
+			{"domain_start", "启动虚拟机"},
+		}
+	case OpVMReinstallPurge:
+		return [][2]string{
+			{"backup_remove", "删除备份盘"},
+		}
 	}
 	// 电源类操作是单步的，但仍然会上报一项：否则界面上这类任务的时间线是
 	// 空的，而「空空如也」与「不支持展示」看起来是同一件事。
@@ -194,6 +209,16 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 
 	case OpTemplateDelete:
 		// 没有返回值：删除的结果只由 Success 表达。
+
+	case OpVMReinstall:
+		data[ReinstallDataKey] = ReinstallInfo{
+			BackupPath: "/var/lib/k_cockpit/backups/" + op.Target + ".qcow2.bak",
+			DiskPath:   "/var/lib/k_cockpit/images/" + op.Target + ".qcow2",
+		}
+		data["uuid"] = mockUUID(op.NodeID, op.Target)
+
+	case OpVMReinstallPurge:
+		// 没有返回值：清理的结果只由 Success 表达。
 	case OpNodeDisks:
 		// 返回三块有代表性的盘，覆盖界面需要处理的三种状态：系统盘
 		// （不可选）、空闲盘（可直接用）、已含数据的盘（需显式确认）。

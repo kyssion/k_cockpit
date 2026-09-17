@@ -123,6 +123,9 @@ func main() {
 	// 模板制备要复制整块系统盘，因此与其它磁盘操作一样走队列。
 	queue.Register(template.NewPrepareExecutor(db, mockAgent))
 	queue.Register(template.NewDeleteExecutor(db, mockAgent))
+	// 重装要备份并重建系统盘，同样是磁盘操作。
+	queue.Register(vm.NewReinstallExecutor(db, mockAgent))
+	queue.Register(vm.NewPurgeExecutor(db, mockAgent))
 	// 网络变更（F-2-03）：三种资源各一个执行器，共用 vm:<id> 资源锁。
 	queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
 	queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))

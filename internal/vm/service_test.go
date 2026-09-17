@@ -77,6 +77,8 @@ func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task
 	queue.Register(vm.NewPortForwardChangeExecutor(db, client))
 	queue.Register(vm.NewEnterRescueExecutor(db, client))
 	queue.Register(vm.NewExitRescueExecutor(db, client))
+	queue.Register(vm.NewReinstallExecutor(db, client))
+	queue.Register(vm.NewPurgeExecutor(db, client))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	queue.Start(ctx)

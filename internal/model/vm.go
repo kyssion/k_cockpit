@@ -163,6 +163,19 @@ type VM struct {
 	// RescueSince 是进入救援的时刻。
 	RescueSince *time.Time
 
+	// --- 重装系统（F-2-11）---
+
+	// ReinstallBackup 是重装时留下的**原系统盘备份**路径。
+	//
+	// 它有两个用途：重装过程中任何一步失败时还原；以及重装**成功之后**继续
+	// 存在——那是用户的数据，什么时候回收由他决定，系统不能替他做主删掉。
+	//
+	// 只有一份：第二次重装会覆盖上一次的。服务层会**显式拒绝**而不是静默
+	// 覆盖——静默覆盖会让用户失去「回到上一个系统」这个唯一的退路。
+	ReinstallBackup *string `gorm:"size:512"`
+	// ReinstallAt 是最近一次重装的时刻。
+	ReinstallAt *time.Time
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

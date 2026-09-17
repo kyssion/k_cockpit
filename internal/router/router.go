@@ -171,6 +171,11 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.PATCH("/templates/:id", requireAuth, templateHandler.Update)
 		v1.DELETE("/templates/:id", requireAuth, templateHandler.Delete)
 
+		// 重装系统（F-2-11）。重建走二次验证（整块系统盘被替换，不可逆）；
+		// 清理备份不需要——它删的是已不再被使用的备份，当前运行不受影响。
+		v1.POST("/vms/:id/reinstall", requireAuth, vmHandler.Reinstall)
+		v1.DELETE("/vms/:id/reinstall/backup", requireAuth, vmHandler.PurgeReinstallBackup)
+
 		// 救援系统（F-2-12）。进入与退出都是任务：两者都要改虚拟机的硬件
 		// 配置并重启，是宿主机上的实际操作。
 		v1.POST("/vms/:id/rescue", requireAuth, vmHandler.EnterRescue)

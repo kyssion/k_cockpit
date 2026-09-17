@@ -144,6 +144,14 @@ type View struct {
 	// 关系，就无法理解为什么「删掉一个模板」会让自己的机器出事。
 	TemplateID *int64 `json:"template_id,omitempty"`
 	CloneMode  string `json:"clone_mode,omitempty"`
+
+	// HasReinstallBackup 表示重装留下了一份原系统盘备份，可以清理。
+	//
+	// **只下发有无，不下发路径**：路径是宿主机上的内部细节，暴露出去会诱使
+	// 用户去宿主机上直接操作那个文件。界面需要知道的只是「有一份备份、可以
+	// 清理」，以及「它挡着下一次重装」。
+	HasReinstallBackup bool       `json:"has_reinstall_backup"`
+	ReinstallAt        *time.Time `json:"reinstall_at,omitempty"`
 }
 
 // ListFilter 是列表查询条件。
@@ -719,6 +727,10 @@ func toView(vm *model.VM, lock *model.VMLock, now time.Time, threshold time.Dura
 		RescueSince:      vm.RescueSince,
 		TemplateID:       vm.TemplateID,
 		CloneMode:        vm.CloneMode,
+		ReinstallAt:      vm.ReinstallAt,
+		// 空串与 nil 都算「没有备份」：两种写法都可能出现（列可空、历史数据
+		// 可能是空串），让调用方去分辨只会让每个使用点都写一遍判断。
+		HasReinstallBackup: vm.ReinstallBackup != nil && *vm.ReinstallBackup != "",
 	}
 	if vm.UUID != nil {
 		view.UUID = *vm.UUID
