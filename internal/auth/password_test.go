@@ -56,7 +56,18 @@ func TestHashIsSalted(t *testing.T) {
 
 // 哈希串必须自描述：含算法与参数，将来调整参数时旧密码才仍可校验（R-001）。
 func TestHashIsSelfDescribing(t *testing.T) {
-	encoded, err := auth.HashPassword("pw")
+	// 密码**必须足够长且有辨识度**，返回值不能缩短。
+	//
+	// 这里曾经用的是 "pw"，于是 `strings.Contains(encoded, "pw")` 会在
+	// 约 3% 的运行里偶然命中——encoded 是盐与摘要的 base64，而两字符子串
+	// 出现在约 90 字符的 base64 串里本就是小概率事件。实测 200 次里失败 6 次。
+	//
+	// 一个 3% 概率失败的用例比没有这个用例更糟：它训练人「重跑一次就好」，
+	// 于是真正的失败也被重跑掩盖过去。密码取到 27 字符之后，偶然出现的
+	// 概率降到 64^-27 量级，这个断言才真正在验证「明文没有被写进哈希串」。
+	const password = "correct-horse-battery-staple"
+
+	encoded, err := auth.HashPassword(password)
 	if err != nil {
 		t.Fatalf("生成哈希失败: %v", err)
 	}
@@ -66,7 +77,7 @@ func TestHashIsSelfDescribing(t *testing.T) {
 			t.Errorf("哈希串缺少 %q: %s", want, encoded)
 		}
 	}
-	if strings.Contains(encoded, "pw") {
+	if strings.Contains(encoded, password) {
 		t.Error("哈希串中出现了明文密码")
 	}
 }
