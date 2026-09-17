@@ -21,6 +21,7 @@ import { MyStoragePage } from '@/views/storage/MyStoragePage'
 import { TemplatePage } from '@/views/template/TemplatePage'
 import { APIKeyPage } from '@/views/security/APIKeyPage'
 import { SecurityPage } from '@/views/security/SecurityPage'
+import { QuotaPage } from '@/views/settings/QuotaPage'
 import { SettingsPage } from '@/views/settings/SettingsPage'
 import { StoragePoolPage } from '@/views/storage/StoragePoolPage'
 import { TaskListPage } from '@/views/task/TaskListPage'
@@ -89,6 +90,7 @@ export const router = createBrowserRouter([
           // 后者是欠账，对使用者是两件事。
           { path: 'user', element: <UserAdminPage /> },
           { path: 'audit', element: <AuditLogPage /> },
+          { path: 'quota', element: <QuotaPage /> },
           { path: 'settings', element: <SettingsPage /> },
           { path: 'security', element: <SecurityPage /> },
           { path: '*', element: <Placeholder title="页面不存在" planned="请检查地址是否正确" /> },

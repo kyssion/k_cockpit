@@ -18,6 +18,13 @@ export interface QuotaUsage {
   exports_bytes: number
   /** 模板合计（按配置大小）。 */
   templates_bytes: number
+  /**
+   * 用户存储里的文件合计（按**实际大小**：已上传的文件不会再长大）。
+   *
+   * 这一项是后来加进来的——在此之前的配额里**完全没有它**，于是上传的
+   * 文件不受任何限制，用户可以把镜像塞满宿主机磁盘而面板显示用量为 0。
+   */
+  files_bytes: number
 
   total_bytes: number
   /** 为 0 表示不限制。 */
