@@ -19,6 +19,7 @@ import (
 	"k_cockpit/internal/handler"
 	"k_cockpit/internal/importer"
 	"k_cockpit/internal/network"
+	"k_cockpit/internal/networkbridge"
 	"k_cockpit/internal/node"
 	"k_cockpit/internal/portmirror"
 	"k_cockpit/internal/publicip"
@@ -71,6 +72,8 @@ type Deps struct {
 	APIKey *apikey.Service
 	// PortMirror 提供端口镜像与自动撤销看门狗（F-4-09）。
 	PortMirror *portmirror.Service
+	// NetworkBridge 提供网络底座状态与自愈（F-4-01 / F-4-13）。
+	NetworkBridge *networkbridge.Service
 
 	SecureCookie bool
 	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
@@ -105,6 +108,7 @@ func Register(h *server.Hertz, deps Deps) {
 	firewallHandler := handler.NewFirewall(deps.Firewall)
 	apiKeyHandler := handler.NewAPIKey(deps.APIKey)
 	mirrorHandler := handler.NewPortMirror(deps.PortMirror)
+	netHandler := handler.NewNetworkBridge(deps.NetworkBridge)
 	importerHandler := handler.NewImporter(deps.Importer)
 
 	// 挂上 API 凭证认证：客户端可用 `Authorization: Bearer kc_...` 代替会话 Cookie。
@@ -229,6 +233,22 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/imports", requireAuth, importerHandler.Create)
 		v1.GET("/imports/:id", requireAuth, importerHandler.Get)
 		v1.DELETE("/imports/:id", requireAuth, importerHandler.Delete)
+
+		// 网络底座与自愈（F-4-01 / F-4-13）。
+		//
+		// Overview 与 Repair **几乎不会失败**：探测不到节点、桥列表读不出来，
+		// 都以字段形式返回，整体仍是 200。这是规格里「网络配置失败不得阻断
+		// 主流程」的具体实现——用户点进这个页面本来就是为了看网络出了什么
+		// 问题，给他白屏等于把唯一的诊断入口也关掉了。
+		v1.GET("/networks", requireAuth, adminOnly, netHandler.Overview)
+		v1.GET("/networks/bridges", requireAuth, adminOnly, netHandler.List)
+		v1.POST("/networks/bridges", requireAuth, adminOnly, netHandler.CreateBridge)
+		v1.DELETE("/networks/bridges/:id", requireAuth, adminOnly, netHandler.DeleteBridge)
+		v1.POST("/networks/bridges/:id/uplink", requireAuth, adminOnly, netHandler.AttachUplink)
+		v1.POST("/networks/bridges/:id/uplink/confirm", requireAuth, adminOnly, netHandler.ConfirmUplink)
+		// 摘出入口不设门槛：一个已经切断管理通道的桥要能一键摘掉。
+		v1.DELETE("/networks/bridges/:id/uplink", requireAuth, adminOnly, netHandler.DetachUplink)
+		v1.POST("/networks/repair", requireAuth, adminOnly, netHandler.Repair)
 
 		// 端口镜像（F-4-09）。
 		//

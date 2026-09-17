@@ -46,7 +46,7 @@ func TestUniqueIndexesMatchBetweenModelAndMigration(t *testing.T) {
 		&model.ShareMount{},
 		&model.FirewallPolicy{}, &model.FirewallRule{}, &model.FirewallVMPolicy{},
 		&model.UserAPIKey{}, &model.AuthActionToken{},
-		&model.PortMirror{},
+		&model.PortMirror{}, &model.NetworkBridge{},
 	}
 
 	var cache sync.Map

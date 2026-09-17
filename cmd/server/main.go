@@ -23,6 +23,7 @@ import (
 	"k_cockpit/internal/firewall"
 	"k_cockpit/internal/importer"
 	"k_cockpit/internal/network"
+	"k_cockpit/internal/networkbridge"
 	"k_cockpit/internal/node"
 	"k_cockpit/internal/portmirror"
 	"k_cockpit/internal/publicip"
@@ -169,6 +170,7 @@ func main() {
 	firewallSvc := firewall.NewService(db, mockAgent, recorder)
 	apiKeySvc := apikey.NewService(db, recorder)
 	mirrorSvc := portmirror.NewService(db, mockAgent, recorder)
+	netSvc := networkbridge.NewService(db, mockAgent, recorder)
 	networkSvc := network.NewService(db, mockAgent, queue, recorder)
 
 	// vm 与 storage 都要读设置里的陈旧阈值：把 settingsSvc 作为 Provider
@@ -208,6 +210,7 @@ func main() {
 		Firewall:      firewallSvc,
 		APIKey:        apiKeySvc,
 		PortMirror:    mirrorSvc,
+		NetworkBridge: netSvc,
 		Storage:       storageSvc,
 		Network:       networkSvc,
 		Settings:      settingsSvc,

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
+	"strconv"
 	"time"
 )
 
@@ -191,6 +192,35 @@ func stagePlan(op Operation) [][2]string {
 			{"target.define", "在目标节点定义"},
 			{"source.cleanup", "清理源侧"},
 		}
+	case OpNetworkProbe:
+		return [][2]string{
+			{"detect_ovs", "检测 Open vSwitch"},
+			{"detect_modules", "检查内核模块"},
+			{"list_uplinks", "枚举可用物理口"},
+		}
+	case OpNetworkUplinkAttach:
+		// watch_arm 排在 apply 之前：顺序反了就意味着有一个「已生效、
+		// 没兜底」的窗口。
+		return [][2]string{
+			{"validate_port", "校验物理口"},
+			{"watch_arm", "启动自动回滚窗口"},
+			{"add_to_bridge", "把物理口加入桥"},
+			{"verify_uplink", "确认上行可达"},
+		}
+	case OpNetworkUplinkConfirm:
+		return [][2]string{{"watch_disarm", "取消自动回滚窗口"}}
+	case OpNetworkUplinkDetach:
+		return [][2]string{
+			{"watch_disarm", "取消自动回滚窗口"},
+			{"remove_from_bridge", "把物理口移出桥"},
+			{"restore_ip", "恢复该口的 IP 配置"},
+		}
+	case OpNetworkRepair:
+		return [][2]string{
+			{"inspect_state", "查看当前状态"},
+			{"converge", "收敛到期望状态"},
+			{"verify_flow", "验证转发"},
+		}
 	case OpPortMirrorEnable:
 		// **看门狗与镜像在同一次调用里建立**，因此阶段里能看到 watch_arm
 		// 排在 apply 之前——顺序反了就意味着有一个「已生效、没兜底」的窗口。
@@ -350,6 +380,43 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 			// 「我原来接的网络、配的转发还在不在」。
 			Moved:           []string{"系统盘与数据盘", "全部网卡", "静态地址与端口转发"},
 			DurationSeconds: 47,
+		}
+
+	case OpNetworkProbe:
+		data[NetworkCapabilityKey] = NetworkCapability{
+			OVSAvailable:  false,
+			KernelModules: []string{"br_netfilter", "vhost_net"},
+			UplinkCandidates: []UplinkCandidate{
+				{Name: "eth0", Up: true, HasIP: true, Speed: "1000Mb/s"},
+				{Name: "eth1", Up: true, HasIP: false, Speed: "10000Mb/s"},
+				{Name: "eth2", Up: false, HasIP: false},
+			},
+			Notes: []string{"未检测到 Open vSwitch，已降级到 Linux 网桥"},
+		}
+
+	case OpNetworkBridgeApply:
+		data[NetworkRepairKey] = NetworkRepairInfo{Message: "网络已建立"}
+
+	case OpNetworkBridgeDelete:
+		data[NetworkRepairKey] = NetworkRepairInfo{Message: "网络已删除"}
+
+	case OpNetworkUplinkAttach:
+		seconds, _ := op.Params["watchdog_seconds"].(int)
+		data[NetworkRepairKey] = NetworkRepairInfo{
+			Message: "物理口已入桥，自动回滚窗口 " + strconv.Itoa(seconds) + " 秒",
+		}
+
+	case OpNetworkUplinkConfirm:
+		data[NetworkRepairKey] = NetworkRepairInfo{Message: "已确认保持"}
+
+	case OpNetworkUplinkDetach:
+		data[NetworkRepairKey] = NetworkRepairInfo{Message: "物理口已摘出"}
+
+	case OpNetworkRepair:
+		data[NetworkRepairKey] = NetworkRepairInfo{
+			Fixed:     []string{"默认网络的 DHCP 服务已重新拉起"},
+			Remaining: []string{"节点未安装 Open vSwitch，增强模式仍不可用"},
+			Message:   "修复已完成，仍有 1 项需要人工处理",
 		}
 
 	case OpPortMirrorEnable:
