@@ -996,6 +996,64 @@ func (h *VM) DownloadExport(ctx context.Context, c *app.RequestContext) {
 	c.Response.SetBody(data)
 }
 
+type guestRequest struct {
+	Action   string `json:"action"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	DiskID   string `json:"disk_id"`
+	DiskGB   int    `json:"disk_gb"`
+}
+
+// GuestCapabilities 返回当前状态下可用的来宾自动化动作（API-088）。
+func (h *VM) GuestCapabilities(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	view, err := h.svc.GuestCapabilities(ctx, id, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, view)
+}
+
+// GuestAction 受理一次来宾自动化（API-089 / F-2-10）。
+//
+// 四种动作共用这一个入口：它们都要「先做宿主机侧的准备、再进来宾执行」，
+// 骨架一致，差异只在具体命令上。拆成四个接口会让四份几乎相同的受理逻辑
+// 各自演化。
+func (h *VM) GuestAction(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	var req guestRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, view, err := h.svc.GuestAction(ctx, id, vm.GuestRequest{
+		Action: req.Action, Username: req.Username, Password: req.Password,
+		DiskID: req.DiskID, DiskGB: req.DiskGB,
+	}, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{
+		"task_id": t.ID, "status": t.Status, "capabilities": view,
+	})
+}
+
 // Stats 返回虚拟机的实时运行指标（Hero 的资源卡）。
 //
 // 响应里带 `at`（采集时刻）：指标是瞬时值，轮询失败时界面会继续显示上一组

@@ -175,6 +175,14 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.PATCH("/templates/:id", requireAuth, templateHandler.Update)
 		v1.DELETE("/templates/:id", requireAuth, templateHandler.Delete)
 
+		// 来宾自动化（F-2-10）。四种动作共用一个入口。
+		//
+		// 不需要二次验证：改密与附加磁盘都**不是不可逆的数据操作**——
+		// 密码可以再改回来，附加磁盘影响的是新盘（既有数据不受影响），
+		// 扩容只是把盘变大。给可逆操作加验证只会稀释验证本身的分量。
+		v1.GET("/vms/:id/guest-actions", requireAuth, vmHandler.GuestCapabilities)
+		v1.POST("/vms/:id/guest-actions", requireAuth, vmHandler.GuestAction)
+
 		// 导出（F-2-14）与产物下载。
 		//
 		// 都不需要二次验证：导出是只读地把系统盘打成镜像，删产物删的是一份

@@ -129,6 +129,8 @@ func main() {
 	// 导出要打包整块磁盘，可能跑到几十分钟。
 	queue.Register(vm.NewExportExecutor(db, mockAgent))
 	queue.Register(vm.NewExportDeleteExecutor(db, mockAgent))
+	// 来宾自动化要进系统内部执行，同样是异步的。
+	queue.Register(vm.NewGuestExecutor(db, mockAgent))
 	// 网络变更（F-2-03）：三种资源各一个执行器，共用 vm:<id> 资源锁。
 	queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
 	queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))

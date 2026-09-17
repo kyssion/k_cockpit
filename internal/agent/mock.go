@@ -176,6 +176,19 @@ func stagePlan(kind OpKind) [][2]string {
 		return [][2]string{
 			{"export_remove", "删除导出文件"},
 		}
+	case OpVMGuest:
+		// 阶段按 `host.` / `guest.` 前缀分成两段。
+		//
+		// 这个分界必须在时间线上体现出来：宿主机阶段失败通常是权限、路径、
+		// 设备占用；来宾阶段失败通常是系统没起来、agent 没装、密码策略拒绝。
+		// 两者的排查方向完全不同，混在一条线里会让人找错方向。
+		return [][2]string{
+			{"host.prepare", "准备宿主机环境"},
+			{"host.attach", "挂载磁盘"},
+			{"guest.connect", "连接 Guest Agent"},
+			{"guest.execute", "在来宾内执行"},
+			{"host.detach", "卸载并清理"},
+		}
 	}
 	// 电源类操作是单步的，但仍然会上报一项：否则界面上这类任务的时间线是
 	// 空的，而「空空如也」与「不支持展示」看起来是同一件事。
@@ -246,6 +259,14 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 
 	case OpVMExportDelete:
 		// 没有返回值：删除的结果只由 Success 表达。
+
+	case OpVMGuest:
+		action, _ := op.Params["action"].(string)
+		data[GuestDataKey] = GuestInfo{
+			// 用 agent 的动作：在线改密、附加磁盘、扩容；离线改密不用。
+			GuestAgentUsed: action != "password_offline",
+			Message:        guestMessage(action),
+		}
 
 	case OpVMExportFetch:
 		// 返回一段**一眼能看出是占位**的内容，而不是伪造一个像真的镜像。
@@ -379,6 +400,25 @@ func (m *MockClient) reportStages(ctx context.Context, op Operation) {
 			case <-time.After(m.StageDelay):
 			}
 		}
+	}
+}
+
+// guestMessage 给出一句面向用户的补充说明。
+//
+// 按动作分别写而不是给一句通用的「执行成功」：这四个动作的**结果形态**完全
+// 不同（改了谁的密码、分区挂在哪儿、扩到多大），一句通用的话等于什么都没说。
+func guestMessage(action string) string {
+	switch action {
+	case "password_online":
+		return "已通过 Guest Agent 在线修改密码"
+	case "password_offline":
+		return "已离线挂载系统盘并修改密码"
+	case "disk_attach":
+		return "磁盘已分区、格式化并挂载到 /data"
+	case "expand_disk":
+		return "已加长虚拟磁盘并扩展文件系统"
+	default:
+		return "已完成"
 	}
 }
 
