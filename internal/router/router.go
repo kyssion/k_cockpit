@@ -27,6 +27,7 @@ import (
 	"k_cockpit/internal/storage"
 	"k_cockpit/internal/task"
 	"k_cockpit/internal/template"
+	"k_cockpit/internal/userstorage"
 	"k_cockpit/internal/vm"
 )
 
@@ -59,6 +60,8 @@ type Deps struct {
 	PublicIP *publicip.Service
 	// SecurityGroup 提供安全组与叠加生效（F-4-03 / F-4-04）。
 	SecurityGroup *securitygroup.Service
+	// UserStorage 提供用户存储空间与分片上传（F-5-03/04/05）。
+	UserStorage *userstorage.Service
 
 	SecureCookie bool
 	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
@@ -89,6 +92,7 @@ func Register(h *server.Hertz, deps Deps) {
 	quotaHandler := handler.NewQuota(deps.Quota)
 	publicIPHandler := handler.NewPublicIP(deps.PublicIP)
 	sgHandler := handler.NewSecurityGroup(deps.SecurityGroup)
+	userStorageHandler := handler.NewUserStorage(deps.UserStorage)
 	importerHandler := handler.NewImporter(deps.Importer)
 
 	authMW := auth.NewMiddleware(deps.Auth)
@@ -209,6 +213,20 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/imports", requireAuth, importerHandler.Create)
 		v1.GET("/imports/:id", requireAuth, importerHandler.Get)
 		v1.DELETE("/imports/:id", requireAuth, importerHandler.Delete)
+
+		// 用户存储空间与文件管理（F-5-03/04/05）。
+		//
+		// 上传分两步：创建会话（可命中**秒传**）→ 登记分片 → 收尾。
+		// 会话把「已经收到了哪些分片」变成可持久化的事实，于是断点续传
+		// 只是「问服务端我还要传哪几片」。
+		v1.GET("/my-storage", requireAuth, userStorageHandler.Get)
+		v1.POST("/my-storage", requireAuth, userStorageHandler.Ensure)
+		v1.GET("/my-storage/files", requireAuth, userStorageHandler.ListFiles)
+		v1.DELETE("/my-storage/files/:id", requireAuth, userStorageHandler.DeleteFile)
+		v1.POST("/my-storage/uploads", requireAuth, userStorageHandler.CreateUpload)
+		v1.GET("/my-storage/uploads/:uploadID", requireAuth, userStorageHandler.GetUpload)
+		v1.PUT("/my-storage/uploads/:uploadID/chunks", requireAuth, userStorageHandler.UploadChunk)
+		v1.POST("/my-storage/uploads/:uploadID/complete", requireAuth, userStorageHandler.CompleteUpload)
 
 		// 目录共享到虚拟机（F-5-06，9p VirtFS）。
 		//

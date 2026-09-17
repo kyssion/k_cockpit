@@ -54,6 +54,12 @@ type Usage struct {
 	ExportsBytes int64 `json:"exports_bytes"`
 	// TemplatesBytes 是名下模板的合计（按配置大小算，理由同虚拟机磁盘）。
 	TemplatesBytes int64 `json:"templates_bytes"`
+	// FilesBytes 是用户存储里的文件合计（按**实际大小**算，理由同导出产物）。
+	//
+	// 这一项此前一直缺席：storage_file 表建了很久而没有代码，于是「用户上传
+	// 的文件」完全不在配额里——一个用户可以把镜像塞满宿主机磁盘，而面板上
+	// 他的用量始终是 0。加进来之后，上传（f-5-04）才有配额可言。
+	FilesBytes int64 `json:"files_bytes"`
 
 	TotalBytes int64 `json:"total_bytes"`
 	// QuotaBytes 为 0 表示不限制。
@@ -121,7 +127,20 @@ func (s *Service) Usage(ctx context.Context, userID, nodeID int64) (*Usage, erro
 	}
 	usage.TemplatesBytes = tplGB * bPerGB
 
-	usage.TotalBytes = usage.VMDisksBytes + usage.ExportsBytes + usage.TemplatesBytes
+	// 用户存储里的文件：按实际大小。只算内容已就绪的——受理中的上传在
+	// storage_file 里也有一行（见 userstorage.CompleteUpload），把还没写完的
+	// 也算进用量，用户会看到一份自己无法解释的占用。
+	var files int64
+	if err := s.db.WithContext(ctx).Model(&model.StorageFile{}).
+		Where("user_id = ? AND node_id = ? AND uploaded_at IS NOT NULL", userID, nodeID).
+		Select("COALESCE(SUM(size_bytes), 0)").Scan(&files).Error; err != nil {
+		log.Printf("[quota] 统计用户文件失败: %v", err)
+		return nil, api.Internal()
+	}
+	usage.FilesBytes = files
+
+	usage.TotalBytes = usage.VMDisksBytes + usage.ExportsBytes +
+		usage.TemplatesBytes + usage.FilesBytes
 
 	row, err := s.loadStorage(ctx, userID, nodeID)
 	if err != nil {

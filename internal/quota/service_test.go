@@ -31,7 +31,7 @@ func newTestEnv(t *testing.T) (*quota.Service, *gorm.DB) {
 	}
 	if err := db.AutoMigrate(
 		&model.UserStorage{}, &model.VM{}, &model.VMExport{},
-		&model.Template{}, &model.AuditLog{},
+		&model.Template{}, &model.StorageFile{}, &model.AuditLog{},
 	); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
