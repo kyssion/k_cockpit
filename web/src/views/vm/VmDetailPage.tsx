@@ -25,6 +25,7 @@ import {
 } from '@/api/edit'
 import { nodeApi } from '@/api/node'
 import { ExportTab } from '@/views/vm/ExportTab'
+import { GuestActionsSection } from '@/views/vm/GuestActionsSection'
 import { templateApi } from '@/api/template'
 import {
   SNAPSHOT_KIND_LABEL,
@@ -458,11 +459,17 @@ export function VmDetailPage() {
 
       {/* 惰性挂载：条件渲染而非 CSS 隐藏，未选中的页签不会发任何请求。 */}
       {tab === 'system' && (
-        <SystemTab
-          vm={vm}
-          nodeName={nodeName}
-          tasks={tasks.data?.items ?? []}
-        />
+        <div className="flex flex-col gap-4">
+          <SystemTab
+            vm={vm}
+            nodeName={nodeName}
+            tasks={tasks.data?.items ?? []}
+          />
+          {/* 来宾自动化（f-2-10）挂在「系统信息」下而不是另开一个页签：
+              它是对这台机器的运维动作，与「这台机器是什么样」属于同一处
+              上下文，而页签已经七个了。 */}
+          <GuestActionsSection vm={vm} />
+        </div>
       )}
       {tab === 'network' && <NetworkTab vmID={vm.id} />}
       {tab === 'console' && <ConsoleTab vmID={vm.id} />}

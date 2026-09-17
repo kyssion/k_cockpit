@@ -71,6 +71,7 @@ export const TASK_TYPE_LABEL: Record<string, string> = {
   'vm.reinstall.purge': '清理重装备份',
   'vm.export': '导出虚拟机',
   'vm.export.delete': '删除导出产物',
+  'vm.guest': '来宾自动化',
 }
 
 /** 电源动作的中文名（与后端 vm.PowerAction 的取值对应）。 */

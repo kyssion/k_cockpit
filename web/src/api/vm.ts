@@ -274,6 +274,27 @@ export const vmApi = {
   exportDownloadUrl: (id: number, exportID: number) =>
     `/api/v1/vms/${id}/exports/${exportID}/download`,
 
+  /**
+   * 当前可用的来宾自动化动作（F-2-10）。
+   *
+   * 由**后端按当前状态算好下发**，界面不自行判断：可用性与「是否装了
+   * Guest Agent」「是否运行中」都相关，前端各判一遍迟早会与后端不一致——
+   * 那会出现「按钮可点、点下去被拒」这类最让人烦躁的交互。
+   */
+  guestActions: (id: number) => get<GuestCapabilities>(`/api/v1/vms/${id}/guest-actions`),
+
+  /**
+   * 执行一次来宾自动化。
+   *
+   * 四种动作共用一个入口：它们都要「先做宿主机侧的准备、再进来宾执行」。
+   * **密码只在请求里传一次**——入队时写入任务参数供执行器取用，执行完成后
+   * 立即从参数里清除，审计流水里也不含它（R-009）。
+   */
+  runGuestAction: (
+    id: number,
+    input: { action: GuestAction; username?: string; password?: string; disk_id?: string; disk_gb?: number },
+  ) => post<TaskRef>(`/api/v1/vms/${id}/guest-actions`, input),
+
   /** 实时运行指标（Hero 资源卡）。只读探测，不入队。 */
   stats: (id: number) => get<VmStats>(`/api/v1/vms/${id}/stats`),
 
@@ -290,6 +311,52 @@ export const vmApi = {
    */
   consoleFrameUrl: (id: number, stamp: number) =>
     `/api/v1/vms/${id}/console/frame?t=${stamp}`,
+}
+
+/** 来宾自动化动作（F-2-10）。 */
+export type GuestAction = 'password_online' | 'password_offline' | 'disk_attach' | 'expand_disk'
+
+export interface GuestCapabilities {
+  action?: string
+  /** 该动作是否依赖来宾里的 QEMU Guest Agent。 */
+  requires_guest_agent: boolean
+  /** **探测到的** agent 状态。与上面分开：前者是「要不要」，后者是「有没有」。 */
+  guest_agent_ready: boolean
+  requires_running: boolean
+  /** 当前状态下可执行的动作。 */
+  available_actions: string[]
+}
+
+/**
+ * 来宾自动化动作的说明。
+ *
+ * 文案写清「走哪条路」：在线与离线改密对用户来说都是「改密码」，但前者经
+ * Guest Agent 进来宾执行，后者绕开来宾直接挂盘——事后追查「为什么改完密码
+ * 后 SELinux 上下文不对」时，这一条是第一个要看的线索。
+ */
+export const GUEST_ACTION_HINT: Record<GuestAction, { label: string; detail: string; requiresRunning: boolean }> = {
+  password_online: {
+    label: '在线改密',
+    detail: '经 Guest Agent 在运行的来宾里修改。最安全：不挂载磁盘，也不碰文件系统元数据。需要虚拟机运行中且装了 Guest Agent。',
+    requiresRunning: true,
+  },
+  password_offline: {
+    label: '离线改密',
+    detail:
+      '把系统盘挂到宿主机上直接改。用在来宾起不来或没装 agent 的时候——但它是绕开来宾系统改的，改完首次开机时可能要做一次上下文修复。需要关机。',
+    requiresRunning: false,
+  },
+  disk_attach: {
+    label: '附加磁盘并自动挂载',
+    detail: '为磁盘分区、格式化并挂载进来宾。**格式化不可逆**，请先确认目标盘上没有需要的数据。需要运行中且装了 Guest Agent。',
+    requiresRunning: true,
+  },
+  expand_disk: {
+    label: '系统盘扩容',
+    detail:
+      '先加长虚拟磁盘，再进来宾扩展文件系统。部分文件系统不支持在线扩容，那时需要重启后再做一次。需要关机。',
+    requiresRunning: false,
+  },
 }
 
 /** 导出格式。 */
