@@ -44,6 +44,7 @@ func TestUniqueIndexesMatchBetweenModelAndMigration(t *testing.T) {
 		&model.PublicIP{}, &model.PublicIPBinding{},
 		&model.SecurityGroup{}, &model.SecurityGroupRule{}, &model.InterfaceSecurityGroup{},
 		&model.ShareMount{},
+		&model.FirewallPolicy{}, &model.FirewallRule{}, &model.FirewallVMPolicy{},
 	}
 
 	var cache sync.Map
@@ -69,6 +70,11 @@ func TestUniqueIndexesMatchBetweenModelAndMigration(t *testing.T) {
 		// 这是**危险的那个方向**：测试库没有这条约束，于是「依赖约束才会
 		// 拦住」的路径在测试里畅通无阻，缺陷只在生产暴露。
 		for _, name := range sortedIndexNames(fromMigration[parsed.Table]) {
+			// 已知例外：这些索引无法在模型上声明，约束由服务层承担。
+			if reason, exempt := modelIndexExemptions[parsed.Table+"."+name]; exempt {
+				t.Logf("跳过 %s.%s：%s", parsed.Table, name, reason)
+				continue
+			}
 			want := fromMigration[parsed.Table][name]
 			got, ok := fromModel[name]
 			if !ok {
@@ -122,6 +128,21 @@ func TestUniqueIndexesMatchBetweenModelAndMigration(t *testing.T) {
 // 唯一），模型里没有条件（组名一辈子唯一）。只比名字的话两者看着一样，
 // 而测试库拿到的是无条件那版：删掉的组会永久占住名字，用户重建同名组时
 // 撞上一句他无法理解的唯一约束冲突。
+// modelIndexExemptions 是无法在 GORM 模型上声明、因而由服务层承担约束的
+// 唯一索引。
+//
+// **每一项都必须写明理由**，并且对应的服务层实现要真的做了这件事——否则
+// 这个表就变成了一个「把报错藏起来」的地方，而它存在的全部意义恰恰是
+// 不让分叉被藏起来。
+var modelIndexExemptions = map[string]string{
+	"firewall_rule.uniq_firewall_rule_dedup": "" +
+		"表达式索引（coalesce 把 port_start/port_end/source_cidr 的 NULL 归一化），" +
+		"而 GORM 的索引选项以逗号分隔，coalesce 的参数里就有逗号——写进 tag 会生成" +
+		"残缺的 SQL（AutoMigrate 直接报错）。约束由 firewall.Service.duplicateOf 按" +
+		"**同一套归一化口径**承担。两者不等价（并发写入仍可能挤进两条），因而是" +
+		"一个已知的、可接受的缺口，而不是「已经处理好了」。",
+}
+
 var createIndexRe = regexp.MustCompile(
 	`(?is)CREATE\s+(UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?["` + "`" + `]?(\w+)["` + "`" + `]?\s+ON\s+["` + "`" + `]?(\w+)["` + "`" + `]?[^;]*?(?:\bWHERE\s+([^;]+))?;`)
 

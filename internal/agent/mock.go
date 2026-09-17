@@ -191,6 +191,22 @@ func stagePlan(op Operation) [][2]string {
 			{"target.define", "在目标节点定义"},
 			{"source.cleanup", "清理源侧"},
 		}
+	case OpFirewallApply:
+		return [][2]string{
+			{"render_rules", "渲染规则集"},
+			{"backup_chain", "备份现有规则链"},
+			{"apply_chain", "写入防火墙链"},
+			{"verify_chain", "校验链状态"},
+		}
+	case OpFirewallRollback:
+		// 三步：恢复备份 → 清空本次规则 → 确认不拦截。
+		// 最后一步是**验证**而不是记录：回滚的价值在于「确实能进去」，
+		// 而不是「命令执行成功了」。
+		return [][2]string{
+			{"restore_backup", "恢复规则备份"},
+			{"flush_rules", "清空本次规则"},
+			{"verify_open", "确认已不拦截"},
+		}
 	case OpShareMount:
 		action, _ := op.Params["action"].(string)
 		if action == "unmount" {
@@ -316,6 +332,22 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 			// 「我原来接的网络、配的转发还在不在」。
 			Moved:           []string{"系统盘与数据盘", "全部网卡", "静态地址与端口转发"},
 			DurationSeconds: 47,
+		}
+
+	case OpFirewallApply:
+		n := 0
+		if list, ok := op.Params["rules"].([]map[string]any); ok {
+			n = len(list)
+		}
+		data[FirewallDataKey] = FirewallInfo{
+			Applied: n,
+			Message: "防火墙规则已写入宿主机链",
+		}
+
+	case OpFirewallRollback:
+		// 回滚**不应该失败**：一个恢复入口如果自己会失败，它就不是恢复入口。
+		data[FirewallDataKey] = FirewallInfo{
+			Message: "已撤销本次下发，防火墙恢复为不拦截",
 		}
 
 	case OpShareMount:

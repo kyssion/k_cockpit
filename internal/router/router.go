@@ -14,6 +14,7 @@ import (
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/auth"
 	"k_cockpit/internal/authz"
+	"k_cockpit/internal/firewall"
 	"k_cockpit/internal/handler"
 	"k_cockpit/internal/importer"
 	"k_cockpit/internal/network"
@@ -62,6 +63,8 @@ type Deps struct {
 	SecurityGroup *securitygroup.Service
 	// UserStorage 提供用户存储空间与分片上传（F-5-03/04/05）。
 	UserStorage *userstorage.Service
+	// Firewall 提供双层防火墙策略（F-4-11）。
+	Firewall *firewall.Service
 
 	SecureCookie bool
 	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
@@ -93,6 +96,7 @@ func Register(h *server.Hertz, deps Deps) {
 	publicIPHandler := handler.NewPublicIP(deps.PublicIP)
 	sgHandler := handler.NewSecurityGroup(deps.SecurityGroup)
 	userStorageHandler := handler.NewUserStorage(deps.UserStorage)
+	firewallHandler := handler.NewFirewall(deps.Firewall)
 	importerHandler := handler.NewImporter(deps.Importer)
 
 	authMW := auth.NewMiddleware(deps.Auth)
@@ -213,6 +217,28 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/imports", requireAuth, importerHandler.Create)
 		v1.GET("/imports/:id", requireAuth, importerHandler.Get)
 		v1.DELETE("/imports/:id", requireAuth, importerHandler.Delete)
+
+		// 防火墙（F-4-11）。双层：节点级基线 + 虚拟机级覆盖。
+		//
+		// 整体归 admin：它作用于宿主机，一次配错会影响该节点上所有虚拟机，
+		// 而且**可能把管理员自己关在门外**——那不是租户该有的能力。
+		//
+		// 应用与回滚都是**同步调用节点、不经队列**（见 firewall.Service.Apply）：
+		// 管理员点下按钮后立刻需要一个答复，而回滚更不能排在几十个
+		// 虚拟机创建之后——那时他已经连不上面板了。
+		v1.GET("/firewall/policy", requireAuth, adminOnly, firewallHandler.GetPolicy)
+		v1.PATCH("/firewall/policy", requireAuth, adminOnly, firewallHandler.UpdatePolicy)
+		v1.GET("/firewall/rules", requireAuth, adminOnly, firewallHandler.ListRules)
+		v1.POST("/firewall/rules", requireAuth, adminOnly, firewallHandler.CreateRule)
+		v1.DELETE("/firewall/rules/:ruleID", requireAuth, adminOnly, firewallHandler.DeleteRule)
+		v1.GET("/firewall/precheck", requireAuth, adminOnly, firewallHandler.Precheck)
+		v1.POST("/firewall/apply", requireAuth, adminOnly, firewallHandler.Apply)
+		// 紧急回滚不设任何门槛。见 handler 上的说明。
+		v1.POST("/firewall/rollback", requireAuth, adminOnly, firewallHandler.Rollback)
+
+		v1.GET("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.GetVMPolicy)
+		v1.PUT("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.SetVMPolicy)
+		v1.DELETE("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.ClearVMPolicy)
 
 		// 用户存储空间与文件管理（F-5-03/04/05）。
 		//
