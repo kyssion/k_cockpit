@@ -9,6 +9,7 @@ import { SetupPage } from '@/views/auth/SetupPage'
 import { NetworkPage } from '@/views/network/NetworkPage'
 import { NetworkPage2 } from '@/views/network/NetworkPage2'
 import { NodeDetailPage } from '@/views/node/NodeDetailPage'
+import { AuditLogPage } from '@/views/audit/AuditLogPage'
 import { NodeListPage } from '@/views/node/NodeListPage'
 import { PublicIPPage } from '@/views/network/PublicIPPage'
 import { FirewallPage } from '@/views/network/FirewallPage'
@@ -90,6 +91,7 @@ export const router = createBrowserRouter([
           // 这个能力」与「这个能力还没做」看起来一样——前者是设计判断，
           // 后者是欠账，对使用者是两件事。
           { path: 'user', element: pending('用户管理', '账号与配额') },
+          { path: 'audit', element: <AuditLogPage /> },
           { path: 'settings', element: <SettingsPage /> },
           { path: 'security', element: <SecurityPage /> },
           { path: '*', element: <Placeholder title="页面不存在" planned="请检查地址是否正确" /> },

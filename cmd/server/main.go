@@ -16,6 +16,7 @@ import (
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/apikey"
 	"k_cockpit/internal/audit"
+	"k_cockpit/internal/auditlog"
 	"k_cockpit/internal/auth"
 	"k_cockpit/internal/config"
 	"k_cockpit/internal/cryptoutil"
@@ -171,6 +172,7 @@ func main() {
 	apiKeySvc := apikey.NewService(db, recorder)
 	mirrorSvc := portmirror.NewService(db, mockAgent, recorder)
 	netSvc := networkbridge.NewService(db, mockAgent, recorder)
+	auditLogSvc := auditlog.NewService(db)
 	networkSvc := network.NewService(db, mockAgent, queue, recorder)
 
 	// vm 与 storage 都要读设置里的陈旧阈值：把 settingsSvc 作为 Provider
@@ -211,6 +213,7 @@ func main() {
 		APIKey:        apiKeySvc,
 		PortMirror:    mirrorSvc,
 		NetworkBridge: netSvc,
+		AuditLog:      auditLogSvc,
 		Storage:       storageSvc,
 		Network:       networkSvc,
 		Settings:      settingsSvc,

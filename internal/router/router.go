@@ -13,6 +13,7 @@ import (
 
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/apikey"
+	"k_cockpit/internal/auditlog"
 	"k_cockpit/internal/auth"
 	"k_cockpit/internal/authz"
 	"k_cockpit/internal/firewall"
@@ -74,6 +75,8 @@ type Deps struct {
 	PortMirror *portmirror.Service
 	// NetworkBridge 提供网络底座状态与自愈（F-4-01 / F-4-13）。
 	NetworkBridge *networkbridge.Service
+	// AuditLog 提供审计流水查询（F-1-12）。
+	AuditLog *auditlog.Service
 
 	SecureCookie bool
 	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
@@ -109,6 +112,7 @@ func Register(h *server.Hertz, deps Deps) {
 	apiKeyHandler := handler.NewAPIKey(deps.APIKey)
 	mirrorHandler := handler.NewPortMirror(deps.PortMirror)
 	netHandler := handler.NewNetworkBridge(deps.NetworkBridge)
+	auditHandler := handler.NewAuditLog(deps.AuditLog)
 	importerHandler := handler.NewImporter(deps.Importer)
 
 	// 挂上 API 凭证认证：客户端可用 `Authorization: Bearer kc_...` 代替会话 Cookie。
@@ -233,6 +237,16 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/imports", requireAuth, importerHandler.Create)
 		v1.GET("/imports/:id", requireAuth, importerHandler.Get)
 		v1.DELETE("/imports/:id", requireAuth, importerHandler.Delete)
+
+		// 审计流水（F-1-12）。
+		//
+		// 在此之前审计只有写入没有读取——Recorder 一直在记，但没有人能查。
+		// **权限隔离在服务层**：租户只看得到自己的记录，且看不到系统动作
+		// （operator_id 为空）。返回别人的记录时用 404 而非 403——403 会
+		// 确认「这个 id 存在」。
+		v1.GET("/audit", requireAuth, auditHandler.List)
+		v1.GET("/audit/facets", requireAuth, auditHandler.Facets)
+		v1.GET("/audit/:id", requireAuth, auditHandler.Get)
 
 		// 网络底座与自愈（F-4-01 / F-4-13）。
 		//

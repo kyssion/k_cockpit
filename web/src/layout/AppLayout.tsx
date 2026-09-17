@@ -39,6 +39,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/network/base', label: '网络底座', roles: ['admin'] },
   { to: '/firewall', label: '防火墙', roles: ['admin'] },
   { to: '/user', label: '用户管理', roles: ['admin'] },
+  { to: '/audit', label: '审计日志', roles: ['admin'] },
   { to: '/settings', label: '系统设置', roles: ['admin'] },
   { to: '/security', label: '安全中心' },
 ]
