@@ -53,6 +53,18 @@ export const TASK_TYPE_LABEL: Record<string, string> = {
   'vm.create': '创建虚拟机',
   'vm.power': '电源操作',
   'vm.delete': '删除虚拟机',
+  'vm.config.update': '修改配置',
+  'vm.interface.change': '网卡变更',
+  'vm.staticip.change': '静态地址变更',
+  'vm.portforward.change': '端口转发变更',
+  'vm.snapshot.create': '创建快照',
+  'vm.snapshot.restore': '恢复快照',
+  'vm.snapshot.delete': '删除快照',
+  'vm.rescue.enter': '进入救援模式',
+  'vm.rescue.exit': '退出救援模式',
+  'storage.pool.create': '创建存储池',
+  'storage.pool.delete': '删除存储池',
+  'vpc.switch.change': '交换机变更',
 }
 
 /** 电源动作的中文名（与后端 vm.PowerAction 的取值对应）。 */

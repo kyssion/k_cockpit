@@ -100,6 +100,7 @@ export function VmDetailPage() {
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [lockOpen, setLockOpen] = useState(false)
   const [lockReason, setLockReason] = useState('')
+  const [rescueOpen, setRescueOpen] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
@@ -159,6 +160,27 @@ export function VmDetailPage() {
     },
     onError: (err) => {
       setLockOpen(false)
+      setError(describe(err))
+    },
+  })
+
+  // 救援进入 / 退出。两者都是任务：都要改硬件配置并重启，因此提交后按
+  // 任务跟踪，页面不等待。
+  const rescue = useMutation({
+    mutationFn: (action: 'enter' | 'exit') =>
+      action === 'enter' ? vmApi.enterRescue(vmID) : vmApi.exitRescue(vmID),
+    onSuccess: (result, action) => {
+      setRescueOpen(false)
+      setError('')
+      setNotice(
+        action === 'enter'
+          ? `已提交进入救援，任务 #${result.task_id} 正在执行`
+          : `已提交退出救援，任务 #${result.task_id} 正在执行`,
+      )
+      refresh()
+    },
+    onError: (err) => {
+      setRescueOpen(false)
       setError(describe(err))
     },
   })
@@ -246,6 +268,31 @@ export function VmDetailPage() {
                 锁定
               </Button>
             )}
+            {/* 救援入口只在关机时可用：它改动的是引导顺序与盘型，热改会让
+                控制面记录的配置与虚拟化层实际分叉。禁用 + 说明原因，而不是
+                点下去才被后端拒绝。 */}
+            {vm.rescue_active ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={vm.status !== 'stopped'}
+                loading={rescue.isPending}
+                title={vm.status !== 'stopped' ? '退出救援需要先关机' : ''}
+                onClick={() => rescue.mutate('exit')}
+              >
+                退出救援
+              </Button>
+            ) : (
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={vm.status !== 'stopped'}
+                title={vm.status !== 'stopped' ? '进入救援需要先关机' : ''}
+                onClick={() => setRescueOpen(true)}
+              >
+                进入救援
+              </Button>
+            )}
             <Button
               variant="danger"
               size="sm"
@@ -262,6 +309,23 @@ export function VmDetailPage() {
       </div>
 
       <VmHero vm={vm} />
+
+      {/* 救援提示放在锁定提示之前：救援改变的是「你现在看到的是什么系统」，
+          比「能不能删」更根本。救援模式下盘型、网卡、引导顺序都被改过，
+          把它当成日常状态会让人做出错误判断。 */}
+      {vm.rescue_active && (
+        <div className="rounded-card border border-warning/40 bg-warning/5 px-4 py-3">
+          <p className="text-base font-medium text-warning">此虚拟机处于救援模式</p>
+          <p className="mt-1 text-base text-ink-2">
+            它当前从救援镜像启动，盘型、网卡与引导顺序均已调整——
+            <span className="font-medium text-ink">画面里看到的不是你的系统</span>。
+            磁盘内容原样保留，退出救援时会按进入前的配置自动还原。
+            {vm.rescue_since && (
+              <span className="text-ink-3"> · 自 {formatDateTime(vm.rescue_since)}</span>
+            )}
+          </p>
+        </div>
+      )}
 
       {vm.locked && (
         <div className="rounded-card border border-warning/40 bg-warning/5 px-4 py-3">
@@ -351,6 +415,43 @@ export function VmDetailPage() {
           navigate('/vm')
         }}
       />
+
+      <Modal
+        open={rescueOpen}
+        title={`让「${vm.name}」进入救援模式`}
+        description="虚拟机会从救援镜像启动，盘型、网卡与引导顺序会被调整。磁盘内容原样保留，退出时按进入前的配置自动还原。"
+        onClose={() => setRescueOpen(false)}
+        footer={
+          <>
+            <Button variant="secondary" size="sm" onClick={() => setRescueOpen(false)}>
+              取消
+            </Button>
+            <Button
+              size="sm"
+              loading={rescue.isPending}
+              onClick={() => rescue.mutate('enter')}
+            >
+              进入救援
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-2 text-base text-ink-2">
+          <p>
+            进入前会保存一份配置快照（引导顺序、机型、固件、网卡与显示设备），
+            退出时按它还原。
+          </p>
+          <p className="text-ink-3">
+            快照只覆盖救援过程会改动的字段——你在这期间通过编辑页改的其它配置
+            不会被回滚，因为那属于「你的改动」，不属于「救援过程」。
+          </p>
+          <p>
+            当前为
+            <span className="text-ink">{VM_STATUS_LABEL[vm.status]}</span>
+            ，进入救援需要保持关机状态。
+          </p>
+        </div>
+      </Modal>
 
       <Modal
         open={lockOpen}

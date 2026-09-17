@@ -56,6 +56,17 @@ export interface VmView {
   /** 加锁原因，供界面解释「为什么锁着」。 */
   lock_reason?: string
   locked_at?: string
+
+  /**
+   * 是否处于救援模式（F-2-12）。
+   *
+   * 界面必须显示醒目提示：救援模式下看到的系统**不是用户自己的系统**
+   * ——盘型、网卡、引导顺序都被改过，而磁盘内容原样保留。把它当成日常
+   * 状态会让人做出错误判断（比如以为系统没问题了）。
+   */
+  rescue_active: boolean
+  /** 进入救援的时刻。 */
+  rescue_since?: string
 }
 
 export interface VmListParams {
@@ -166,6 +177,17 @@ export const vmApi = {
 
   /** 静态地址列表。 */
   staticIPs: (id: number) => get<{ items: StaticIP[] }>(`/api/v1/vms/${id}/static-ips`),
+
+  /**
+   * 进入救援模式（F-2-12）。
+   *
+   * **必须已关机**：救援改动的是引导顺序与盘型，热改会让控制面记录的配置
+   * 与虚拟化层实际的配置分叉。进入前会把当前配置存成快照，退出时按它还原。
+   */
+  enterRescue: (id: number) => post<TaskRef>(`/api/v1/vms/${id}/rescue`),
+
+  /** 退出救援并按快照还原配置。同样需要先关机。 */
+  exitRescue: (id: number) => del<TaskRef>(`/api/v1/vms/${id}/rescue`),
 
   /** 实时运行指标（Hero 资源卡）。只读探测，不入队。 */
   stats: (id: number) => get<VmStats>(`/api/v1/vms/${id}/stats`),
