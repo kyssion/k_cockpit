@@ -15,6 +15,7 @@ import { SecurityGroupPage } from '@/views/network/SecurityGroupPage'
 import { ImportPage } from '@/views/storage/ImportPage'
 import { MyStoragePage } from '@/views/storage/MyStoragePage'
 import { TemplatePage } from '@/views/template/TemplatePage'
+import { APIKeyPage } from '@/views/security/APIKeyPage'
 import { SecurityPage } from '@/views/security/SecurityPage'
 import { SettingsPage } from '@/views/settings/SettingsPage'
 import { StoragePoolPage } from '@/views/storage/StoragePoolPage'
@@ -73,6 +74,7 @@ export const router = createBrowserRouter([
           { path: 'public-ip', element: <PublicIPPage /> },
           { path: 'security-group', element: <SecurityGroupPage /> },
           { path: 'firewall', element: <FirewallPage /> },
+          { path: 'api-keys', element: <APIKeyPage /> },
           { path: 'my-storage', element: <MyStoragePage /> },
           { path: 'public-ip', element: pending('公网 IP', '资源池与绑定') },
           { path: 'template', element: <TemplatePage /> },

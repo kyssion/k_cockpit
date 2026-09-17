@@ -11,20 +11,36 @@ interface ModalProps {
   footer?: ReactNode
   /** 宽度档位：表单用 md，展示命令或大段文本用 lg。 */
   size?: 'md' | 'lg'
+  /**
+   * 是否允许用 Esc 关闭。默认允许——键盘用户不该被弹窗困住。
+   *
+   * 设为 false 只用于**内容只出现一次**的场合（如刚生成的 API 凭证）：
+   * 按一下 Esc 就再也拿不回来的东西，值得多一步确认。
+   */
+  dismissable?: boolean
 }
 
 const sizes = { md: 'max-w-[420px]', lg: 'max-w-[640px]' }
 
-export function Modal({ open, title, description, onClose, children, footer, size = 'md' }: ModalProps) {
+export function Modal({
+  open,
+  title,
+  description,
+  onClose,
+  children,
+  footer,
+  size = 'md',
+  dismissable = true,
+}: ModalProps) {
   // Esc 关闭：键盘用户不该被弹窗困住。
   useEffect(() => {
-    if (!open) return
+    if (!open || !dismissable) return
     function onKey(event: KeyboardEvent) {
       if (event.key === 'Escape') onClose()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [open, onClose])
+  }, [open, onClose, dismissable])
 
   if (!open) return null
 
