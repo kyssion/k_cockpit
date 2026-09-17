@@ -2,7 +2,7 @@
  * 虚拟机详情页（F-2-03）。
  *
  * 结构对齐 FRONTEND.md §5.3.3：Hero（状态与电源操作）+ 标签页
- * （系统信息 / 快照管理 / 网络管理 / 定时任务 / 控制台 / 编辑）。
+ * （系统信息 / 快照管理 / 网络管理 / 目录共享 / 定时任务 / 控制台 / 编辑）。
  *
  * 两条贯穿全页的约定：
  *
@@ -15,6 +15,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
+
+import { ShareTab } from './ShareTab'
 
 import { ApiError, NetworkError } from '@/api/client'
 import {
@@ -83,12 +85,21 @@ import {
 } from '@/utils/labels'
 
 /** 详情页的页签。取值与 FRONTEND.md §5.3.3 的表格一一对应。 */
-type TabKey = 'system' | 'snapshot' | 'network' | 'schedule' | 'export' | 'console' | 'edit'
+type TabKey =
+  | 'system'
+  | 'snapshot'
+  | 'network'
+  | 'share'
+  | 'schedule'
+  | 'export'
+  | 'console'
+  | 'edit'
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'system', label: '系统信息' },
   { key: 'snapshot', label: '快照管理' },
   { key: 'network', label: '网络管理' },
+  { key: 'share', label: '目录共享' },
   { key: 'schedule', label: '定时任务' },
   { key: 'export', label: '导出' },
   { key: 'console', label: '控制台' },
@@ -479,6 +490,7 @@ export function VmDetailPage() {
       {tab === 'console' && <ConsoleTab vmID={vm.id} />}
 
       {tab === 'snapshot' && <SnapshotTab vmID={vm.id} />}
+      {tab === 'share' && <ShareTab vmID={vm.id} />}
       {tab === 'schedule' && <ScheduleTab vmID={vm.id} />}
       {tab === 'export' && <ExportTab vm={vm} />}
       {tab === 'edit' && <EditTab vmID={vm.id} onSaved={refresh} />}
