@@ -232,6 +232,11 @@ export function post<T>(path: string, body?: unknown): Promise<T> {
   return request<T>(path, { method: 'POST', body })
 }
 
+/** 发起 PUT 请求。 */
+export function put<T>(path: string, body?: unknown): Promise<T> {
+  return request<T>(path, { method: 'PUT', body })
+}
+
 /** 发起 PATCH 请求。 */
 export function patch<T>(path: string, body?: unknown): Promise<T> {
   return request<T>(path, { method: 'PATCH', body })
