@@ -32,6 +32,7 @@ import (
 	"k_cockpit/internal/storage"
 	"k_cockpit/internal/task"
 	"k_cockpit/internal/template"
+	"k_cockpit/internal/useradmin"
 	"k_cockpit/internal/userstorage"
 	"k_cockpit/internal/vm"
 )
@@ -77,6 +78,8 @@ type Deps struct {
 	NetworkBridge *networkbridge.Service
 	// AuditLog 提供审计流水查询（F-1-12）。
 	AuditLog *auditlog.Service
+	// UserAdmin 提供用户管理（F-1-07）。
+	UserAdmin *useradmin.Service
 
 	SecureCookie bool
 	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
@@ -113,6 +116,7 @@ func Register(h *server.Hertz, deps Deps) {
 	mirrorHandler := handler.NewPortMirror(deps.PortMirror)
 	netHandler := handler.NewNetworkBridge(deps.NetworkBridge)
 	auditHandler := handler.NewAuditLog(deps.AuditLog)
+	userAdminHandler := handler.NewUserAdmin(deps.UserAdmin)
 	importerHandler := handler.NewImporter(deps.Importer)
 
 	// 挂上 API 凭证认证：客户端可用 `Authorization: Bearer kc_...` 代替会话 Cookie。
@@ -237,6 +241,21 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/imports", requireAuth, importerHandler.Create)
 		v1.GET("/imports/:id", requireAuth, importerHandler.Get)
 		v1.DELETE("/imports/:id", requireAuth, importerHandler.Delete)
+
+		// 用户管理（F-1-07）。整体归管理员。
+		//
+		// 封禁是一个**级联动作**（置状态 → 撤销会话 → 停运行中的虚拟机），
+		// 且**单步失败仅告警**：封禁的实质是置状态，那一步就达成了目的；
+		// 后两步是减少暴露面的加固，它们的失败不该把整个操作判为失败——
+		// 那会让界面显示「封禁失败」，而那人其实已经被封了。
+		//
+		// 几处不可逆的自锁被显式挡住：不能改自己的角色、不能封禁自己、
+		// 不能把最后一个可用管理员降级或删除。
+		v1.GET("/users", requireAuth, adminOnly, userAdminHandler.List)
+		v1.POST("/users", requireAuth, adminOnly, userAdminHandler.Create)
+		v1.PATCH("/users/:id", requireAuth, adminOnly, userAdminHandler.Update)
+		v1.PUT("/users/:id/status", requireAuth, adminOnly, userAdminHandler.SetStatus)
+		v1.DELETE("/users/:id", requireAuth, adminOnly, userAdminHandler.Delete)
 
 		// 审计流水（F-1-12）。
 		//

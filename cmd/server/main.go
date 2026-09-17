@@ -37,6 +37,7 @@ import (
 	"k_cockpit/internal/storage"
 	"k_cockpit/internal/task"
 	"k_cockpit/internal/template"
+	"k_cockpit/internal/useradmin"
 	"k_cockpit/internal/userstorage"
 	"k_cockpit/internal/vm"
 )
@@ -173,6 +174,7 @@ func main() {
 	mirrorSvc := portmirror.NewService(db, mockAgent, recorder)
 	netSvc := networkbridge.NewService(db, mockAgent, recorder)
 	auditLogSvc := auditlog.NewService(db)
+	userAdminSvc := useradmin.NewService(db, recorder, quotaAdapter{svc: quotaSvc})
 	networkSvc := network.NewService(db, mockAgent, queue, recorder)
 
 	// vm 与 storage 都要读设置里的陈旧阈值：把 settingsSvc 作为 Provider
@@ -214,6 +216,7 @@ func main() {
 		PortMirror:    mirrorSvc,
 		NetworkBridge: netSvc,
 		AuditLog:      auditLogSvc,
+		UserAdmin:     userAdminSvc,
 		Storage:       storageSvc,
 		Network:       networkSvc,
 		Settings:      settingsSvc,
@@ -224,4 +227,20 @@ func main() {
 	// Spin 阻塞运行，并在收到 SIGINT / SIGTERM / SIGHUP 时触发优雅退出。
 	log.Printf("HTTP 服务启动，监听 %s", cfg.HTTP.Addr())
 	h.Spin()
+}
+
+// quotaAdapter 把 quota 服务适配成 useradmin 需要的最小接口。
+//
+// 转换发生在装配处（一次），而不是让每个调用点都背上 quota 包的完整依赖。
+type quotaAdapter struct{ svc *quota.Service }
+
+func (a quotaAdapter) Set(
+	ctx context.Context, req useradmin.QuotaRequest,
+	operatorID int64, operatorName, clientIP string,
+) error {
+	_, err := a.svc.Set(ctx, quota.SetQuotaRequest{
+		UserID: req.UserID, NodeID: req.NodeID,
+		QuotaBytes: req.QuotaBytes, Enabled: req.Enabled,
+	}, operatorID, operatorName, clientIP)
+	return err
 }
