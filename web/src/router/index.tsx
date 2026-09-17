@@ -10,6 +10,7 @@ import { NetworkPage } from '@/views/network/NetworkPage'
 import { NetworkPage2 } from '@/views/network/NetworkPage2'
 import { NodeDetailPage } from '@/views/node/NodeDetailPage'
 import { AuditLogPage } from '@/views/audit/AuditLogPage'
+import { UserAdminPage } from '@/views/user/UserAdminPage'
 import { NodeListPage } from '@/views/node/NodeListPage'
 import { PublicIPPage } from '@/views/network/PublicIPPage'
 import { FirewallPage } from '@/views/network/FirewallPage'
@@ -41,10 +42,6 @@ import { RequireAuth } from './RequireAuth'
 import { RequireInitialized } from './RequireInitialized'
 
 /** 未实现页面的占位：明确写出「尚未实现」，而不是假装成空数据。 */
-function pending(title: string, planned: string) {
-  return <Placeholder title={title} planned={planned} />
-}
-
 export const router = createBrowserRouter([
   {
     // 最外层：系统尚无管理员时，所有入口都导向初始化页。
@@ -90,7 +87,7 @@ export const router = createBrowserRouter([
           // 保留一个**明确的占位**而不是把它藏起来：隐藏会让「这个产品没有
           // 这个能力」与「这个能力还没做」看起来一样——前者是设计判断，
           // 后者是欠账，对使用者是两件事。
-          { path: 'user', element: pending('用户管理', '账号与配额') },
+          { path: 'user', element: <UserAdminPage /> },
           { path: 'audit', element: <AuditLogPage /> },
           { path: 'settings', element: <SettingsPage /> },
           { path: 'security', element: <SecurityPage /> },
