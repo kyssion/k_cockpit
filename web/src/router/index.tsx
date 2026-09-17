@@ -7,6 +7,7 @@ import { DashboardPage } from '@/views/dashboard/DashboardPage'
 import { LoginPage } from '@/views/auth/LoginPage'
 import { SetupPage } from '@/views/auth/SetupPage'
 import { NetworkPage } from '@/views/network/NetworkPage'
+import { NetworkPage2 } from '@/views/network/NetworkPage2'
 import { NodeDetailPage } from '@/views/node/NodeDetailPage'
 import { NodeListPage } from '@/views/node/NodeListPage'
 import { PublicIPPage } from '@/views/network/PublicIPPage'
@@ -84,6 +85,7 @@ export const router = createBrowserRouter([
           { path: 'node/:id', element: <NodeDetailPage /> },
           { path: 'storage-pool', element: <StoragePoolPage /> },
           { path: 'network', element: <NetworkPage /> },
+          { path: 'network/base', element: <NetworkPage2 /> },
           { path: 'firewall', element: pending('防火墙', '规则与连接管理') },
           { path: 'user', element: pending('用户管理', '账号与配额') },
           { path: 'settings', element: <SettingsPage /> },
