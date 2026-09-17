@@ -78,15 +78,17 @@ export const router = createBrowserRouter([
           { path: 'firewall', element: <FirewallPage /> },
           { path: 'port-mirror', element: <PortMirrorPage /> },
           { path: 'api-keys', element: <APIKeyPage /> },
-          { path: 'my-storage', element: <MyStoragePage /> },
-          { path: 'public-ip', element: pending('公网 IP', '资源池与绑定') },
           { path: 'template', element: <TemplatePage /> },
           { path: 'node', element: <NodeListPage /> },
           { path: 'node/:id', element: <NodeDetailPage /> },
           { path: 'storage-pool', element: <StoragePoolPage /> },
           { path: 'network', element: <NetworkPage /> },
           { path: 'network/base', element: <NetworkPage2 /> },
-          { path: 'firewall', element: pending('防火墙', '规则与连接管理') },
+          // 用户管理（F-1-07）仍是占位。
+          //
+          // 保留一个**明确的占位**而不是把它藏起来：隐藏会让「这个产品没有
+          // 这个能力」与「这个能力还没做」看起来一样——前者是设计判断，
+          // 后者是欠账，对使用者是两件事。
           { path: 'user', element: pending('用户管理', '账号与配额') },
           { path: 'settings', element: <SettingsPage /> },
           { path: 'security', element: <SecurityPage /> },
