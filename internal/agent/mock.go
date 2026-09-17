@@ -165,6 +165,17 @@ func stagePlan(kind OpKind) [][2]string {
 		return [][2]string{
 			{"backup_remove", "删除备份盘"},
 		}
+	case OpVMExport:
+		return [][2]string{
+			{"disk_snapshot_read", "读取磁盘"},
+			{"image_convert", "转换镜像格式"},
+			{"manifest_write", "生成描述清单"},
+			{"export_register", "登记导出产物"},
+		}
+	case OpVMExportDelete:
+		return [][2]string{
+			{"export_remove", "删除导出文件"},
+		}
 	}
 	// 电源类操作是单步的，但仍然会上报一项：否则界面上这类任务的时间线是
 	// 空的，而「空空如也」与「不支持展示」看起来是同一件事。
@@ -219,6 +230,35 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 
 	case OpVMReinstallPurge:
 		// 没有返回值：清理的结果只由 Success 表达。
+
+	case OpVMExport:
+		ext := "qcow2"
+		if f, ok := op.Params["format"].(string); ok && f != "" {
+			ext = f
+		}
+		data[ExportDataKey] = ExportInfo{
+			FilePath: "/var/lib/k_cockpit/exports/" + op.Target + "." + ext,
+			FileName: op.Target + "." + ext,
+			// 大小刻意给一个**非整值**：整数 GB 会让格式化逻辑里
+			// 「不足 1 GB 显示 MB」那条分支永远走不到。
+			SizeBytes: int64(3_421_000_000),
+		}
+
+	case OpVMExportDelete:
+		// 没有返回值：删除的结果只由 Success 表达。
+
+	case OpVMExportFetch:
+		// 返回一段**一眼能看出是占位**的内容，而不是伪造一个像真的镜像。
+		//
+		// 与控制台截帧同一个理由：一份看起来像真实 OVA 的字节流会让人以为
+		// 导出通路已经打通了，从而不去验证真实链路（大文件分块、断点续传、
+		// 校验）。占位内容不会造成这种误解。
+		data[ExportContentKey] = ExportContent{
+			Data: []byte("k_cockpit mock export placeholder\n" +
+				"真实实现会由节点流式返回导出产物。\n" +
+				"target=" + op.Target + "\n"),
+			MIME: "application/octet-stream",
+		}
 	case OpNodeDisks:
 		// 返回三块有代表性的盘，覆盖界面需要处理的三种状态：系统盘
 		// （不可选）、空闲盘（可直接用）、已含数据的盘（需显式确认）。

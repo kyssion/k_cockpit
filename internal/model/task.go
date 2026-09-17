@@ -89,6 +89,11 @@ const (
 	// 重装系统（f-2-11）。两者都是磁盘操作，因此都走队列。
 	TaskVMReinstall      = "vm.reinstall"
 	TaskVMReinstallPurge = "vm.reinstall.purge"
+
+	// 导出（f-2-14）。导出要打包整块磁盘，可能跑到几十分钟；删除产物是
+	// 一次文件删除，但它们共用同一套「受理 → 执行 → 回写状态」的形状。
+	TaskVMExport       = "vm.export"
+	TaskVMExportDelete = "vm.export.delete"
 )
 
 // 阶段的执行状态。取值与 task.status 保持同一套词汇，避免界面上出现

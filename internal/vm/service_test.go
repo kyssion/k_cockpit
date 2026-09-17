@@ -48,7 +48,7 @@ func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task
 		&model.VM{}, &model.Task{}, &model.TaskStage{}, &model.AuditLog{}, &model.Node{},
 		&model.VMCredential{}, &model.VMInterface{}, &model.StaticIP{},
 		&model.VpcSwitch{}, &model.VMSnapshot{}, &model.SystemSetting{},
-		&model.PortForward{}, &model.VMLock{}, &model.Template{},
+		&model.PortForward{}, &model.VMLock{}, &model.Template{}, &model.VMExport{},
 	); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
@@ -79,6 +79,8 @@ func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task
 	queue.Register(vm.NewExitRescueExecutor(db, client))
 	queue.Register(vm.NewReinstallExecutor(db, client))
 	queue.Register(vm.NewPurgeExecutor(db, client))
+	queue.Register(vm.NewExportExecutor(db, client))
+	queue.Register(vm.NewExportDeleteExecutor(db, client))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	queue.Start(ctx)

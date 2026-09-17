@@ -175,6 +175,15 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.PATCH("/templates/:id", requireAuth, templateHandler.Update)
 		v1.DELETE("/templates/:id", requireAuth, templateHandler.Delete)
 
+		// 导出（F-2-14）与产物下载。
+		//
+		// 都不需要二次验证：导出是只读地把系统盘打成镜像，删产物删的是一份
+		// 副本——两者都不影响虚拟机本身。
+		v1.GET("/vms/:id/exports", requireAuth, vmHandler.Exports)
+		v1.POST("/vms/:id/exports", requireAuth, vmHandler.CreateExport)
+		v1.DELETE("/vms/:id/exports/:exportID", requireAuth, vmHandler.DeleteExport)
+		v1.GET("/vms/:id/exports/:exportID/download", requireAuth, vmHandler.DownloadExport)
+
 		// 重装系统（F-2-11）。重建走二次验证（整块系统盘被替换，不可逆）；
 		// 清理备份不需要——它删的是已不再被使用的备份，当前运行不受影响。
 		v1.POST("/vms/:id/reinstall", requireAuth, vmHandler.Reinstall)

@@ -126,6 +126,9 @@ func main() {
 	// 重装要备份并重建系统盘，同样是磁盘操作。
 	queue.Register(vm.NewReinstallExecutor(db, mockAgent))
 	queue.Register(vm.NewPurgeExecutor(db, mockAgent))
+	// 导出要打包整块磁盘，可能跑到几十分钟。
+	queue.Register(vm.NewExportExecutor(db, mockAgent))
+	queue.Register(vm.NewExportDeleteExecutor(db, mockAgent))
 	// 网络变更（F-2-03）：三种资源各一个执行器，共用 vm:<id> 资源锁。
 	queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
 	queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))

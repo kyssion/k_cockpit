@@ -2,12 +2,15 @@ package handler
 
 import (
 	"context"
+	"net/url"
+	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
 
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/auth"
 	"k_cockpit/internal/authz"
+	"k_cockpit/internal/model"
 	"k_cockpit/internal/risk"
 	"k_cockpit/internal/vm"
 )
@@ -883,6 +886,116 @@ func (h *VM) PurgeReinstallBackup(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
 }
 
+type createExportRequest struct {
+	// Format 取值 qcow2 / ova。留空按 qcow2 处理。
+	Format string `json:"format"`
+	// IncludeDataDisks 是否连同数据盘一起导出；**默认不包含**——
+	// 数据盘可能远大于系统盘，而多数导出是为了复用系统环境，不是搬数据。
+	IncludeDataDisks bool `json:"include_data_disks"`
+}
+
+// Exports 返回虚拟机的导出记录（API-084）。
+func (h *VM) Exports(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	items, err := h.svc.ListExports(ctx, id, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"items": items})
+}
+
+// CreateExport 受理一次导出（API-084 / F-2-14）。
+func (h *VM) CreateExport(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	var req createExportRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+	if req.Format == "" {
+		req.Format = model.ExportQCOW2
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.Export(ctx, id, vm.ExportRequest{
+		Format: req.Format, IncludeDataDisks: req.IncludeDataDisks,
+	}, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
+// DeleteExport 删除一个导出产物（API-085）。
+func (h *VM) DeleteExport(ctx context.Context, c *app.RequestContext) {
+	vmID, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	exportID, err := namedPathID(c, "exportID", "导出 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.DeleteExport(ctx, vmID, exportID, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
+// DownloadExport 下载导出产物（API-086）。
+//
+// 直接返回**产物字节**而不是一个节点上的直链：直链意味着要把节点的访问凭据
+// 或一个匿名可访问的地址暴露出去，而产物里是整台机器的数据。控制面转发多花
+// 一次带宽，但权限判断留在一处。
+func (h *VM) DownloadExport(ctx context.Context, c *app.RequestContext) {
+	vmID, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	exportID, err := namedPathID(c, "exportID", "导出 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	name, data, mime, err := h.svc.ExportFile(ctx, vmID, exportID, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	// 产物可能很大，且一旦生成就不再变化，因此**允许**浏览器缓存——与
+	// 控制台截帧相反（那是「此刻的样子」，缓存住会误导）。
+	c.Header("Cache-Control", "private, max-age=3600")
+	// 中文文件名要用 RFC 5987 的 filename* 形式，否则浏览器会得到乱码。
+	c.Header("Content-Disposition", contentDisposition(name))
+	c.SetContentType(mime)
+	c.Response.SetBody(data)
+}
+
 // Stats 返回虚拟机的实时运行指标（Hero 的资源卡）。
 //
 // 响应里带 `at`（采集时刻）：指标是瞬时值，轮询失败时界面会继续显示上一组
@@ -941,4 +1054,29 @@ func (h *VM) StaticIPs(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	api.OK(c, map[string]any{"items": items})
+}
+
+// contentDisposition 构造下载响应头，兼容非 ASCII 文件名。
+//
+// 分两段写是 RFC 6266 / 5987 的要求：老客户端只认 ASCII 的 filename，
+// 新客户端优先用 filename*。**只写 filename** 会让中文/空格文件名变成乱码；
+// **只写 filename*** 会让老客户端拿到一个没有文件名、叫 "download" 的落盘
+// 文件——两边各丢一半，因此两段都要给。
+func contentDisposition(name string) string {
+	// ASCII 兜底：非 ASCII 字符替换成下划线。替换而不是丢弃，是为了让
+	// 兜底文件名仍然保留长度与大致形状，用户至少能分辨是哪个文件。
+	var ascii strings.Builder
+	for _, r := range name {
+		if r < 0x20 || r > 0x7e || r == '"' || r == '\\' {
+			ascii.WriteByte('_')
+			continue
+		}
+		ascii.WriteRune(r)
+	}
+	fallback := ascii.String()
+	if fallback == "" {
+		fallback = "download"
+	}
+	return `attachment; filename="` + fallback + `"; filename*=UTF-8''` +
+		url.PathEscape(name)
 }
