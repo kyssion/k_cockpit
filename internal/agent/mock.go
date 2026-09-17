@@ -187,6 +187,15 @@ func stagePlan(kind OpKind) [][2]string {
 			{"target.define", "在目标节点定义"},
 			{"source.cleanup", "清理源侧"},
 		}
+	case OpPublicIPChange:
+		// 顺序体现「先撤旧、再加新」——迁移中途失败时旧规则仍然有效，
+		// 地址不会悬空。
+		return [][2]string{
+			{"validate_addr", "校验收敛地址状态"},
+			{"flush_old", "移除旧规则"},
+			{"apply_new", "应用新规则"},
+			{"verify_reach", "验证可达性"},
+		}
 	case OpImageImport:
 		return [][2]string{
 			{"source_verify", "校验源文件"},
@@ -285,6 +294,43 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 			Moved:           []string{"系统盘与数据盘", "全部网卡", "静态地址与端口转发"},
 			DurationSeconds: 47,
 		}
+
+	case OpPublicIPChange:
+		action, _ := op.Params["action"].(string)
+		msg := "地址已绑定"
+		switch action {
+		case "unbind":
+			msg = "地址已解绑"
+		case "migrate":
+			msg = "地址已迁移到新虚拟机"
+		}
+		data[PublicIPDataKey] = PublicIPInfo{Message: msg}
+
+	case OpPublicIPPreview:
+		// 预览要给**具体的规则文本**，而不是一句「将会新增若干规则」：
+		// f-4-06 要求预览的全部意义就是让用户看清将要发生什么，
+		// 一句概括等于什么都没说。
+		mode, _ := op.Params["mode"].(string)
+		vmName, _ := op.Params["vm_name"].(string)
+		preview := PublicIPPreview{
+			Added: []string{
+				"iptables -t nat -A PREROUTING -d " + op.Target + " -j DNAT --to-destination 192.168.122.10",
+				"iptables -t nat -A POSTROUTING -s 192.168.122.10 -j SNAT --to-source " + op.Target,
+			},
+		}
+		if mode == "routed" {
+			preview.Added = []string{
+				"ip route replace " + op.Target + "/32 dev kbr0",
+				"arp -s " + op.Target + " <guest-mac>",
+			}
+		}
+		if vmName != "" {
+			preview.Added = append(preview.Added, "# 目标虚拟机："+vmName)
+		}
+		preview.Warnings = []string{
+			"该地址在宿主机上已有一条手工添加的路由，应用后将以控制面的规则为准",
+		}
+		data[PublicIPPreviewKey] = preview
 
 	case OpImageParse:
 		// 模拟从 OVA 内的 OVF 描述解析出的配置。

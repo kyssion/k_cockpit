@@ -22,6 +22,7 @@ import (
 	"k_cockpit/internal/importer"
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/node"
+	"k_cockpit/internal/publicip"
 	"k_cockpit/internal/quota"
 	"k_cockpit/internal/risk"
 	"k_cockpit/internal/router"
@@ -137,6 +138,8 @@ func main() {
 	queue.Register(importer.NewImportExecutor(db, mockAgent))
 	// 迁移要搬运整块磁盘，是最耗时的操作之一。
 	queue.Register(vm.NewMigrateExecutor(db, mockAgent))
+	// 公网地址变更要动宿主机的 iptables 与路由。
+	queue.Register(publicip.NewChangeExecutor(db, mockAgent))
 	// 网络变更（F-2-03）：三种资源各一个执行器，共用 vm:<id> 资源锁。
 	queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
 	queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))
@@ -151,6 +154,7 @@ func main() {
 	// 存储配额（f-9-02）：按用户按节点。
 	quotaSvc := quota.NewService(db, recorder)
 	importerSvc := importer.NewService(db, queue, mockAgent, recorder, quotaSvc)
+	publicIPSvc := publicip.NewService(db, queue, mockAgent, recorder)
 	networkSvc := network.NewService(db, mockAgent, queue, recorder)
 
 	// vm 与 storage 都要读设置里的陈旧阈值：把 settingsSvc 作为 Provider
@@ -184,6 +188,7 @@ func main() {
 		Template:      templateSvc,
 		Quota:         quotaSvc,
 		Importer:      importerSvc,
+		PublicIP:      publicIPSvc,
 		Storage:       storageSvc,
 		Network:       networkSvc,
 		Settings:      settingsSvc,

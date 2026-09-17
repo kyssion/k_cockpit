@@ -41,6 +41,7 @@ func TestUniqueIndexesMatchBetweenModelAndMigration(t *testing.T) {
 		&model.VM{}, &model.VMSnapshot{}, &model.VMSchedule{},
 		&model.VMLock{}, &model.PortForward{},
 		&model.VMInterface{}, &model.StaticIP{}, &model.Template{},
+		&model.PublicIP{}, &model.PublicIPBinding{},
 	}
 
 	var cache sync.Map
@@ -101,7 +102,19 @@ func TestUniqueIndexesMatchBetweenModelAndMigration(t *testing.T) {
 var createIndexRe = regexp.MustCompile(
 	`(?is)CREATE\s+(UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?["` + "`" + `]?(\w+)["` + "`" + `]?\s+ON\s+["` + "`" + `]?(\w+)["` + "`" + `]?`)
 
-// migrationUniqueIndexes 解析迁移目录，返回「表名 → 唯一索引名集合」。
+// dropIndexRe 匹配 DROP INDEX，用于把已删除的索引从集合里去掉。
+//
+// 不处理它的话，一条「建了又删」的索引会永远停在集合里：模型那边已经按
+// 最终状态声明（或不需要声明），而这里还在要求它存在——一个永远修不好的
+// 失败。DROP 不知道表名（SQL 语法里本就不需要），因此按索引名全局移除。
+var dropIndexRe = regexp.MustCompile(
+	`(?is)DROP\s+INDEX\s+(?:IF\s+EXISTS\s+)?["` + "`" + `]?(\w+)["` + "`" + `]?`)
+
+// migrationUniqueIndexes 解析迁移目录，返回「表名 → **最终存在**的唯一索引名集合」。
+//
+// 按文件名顺序处理（os.ReadDir 已排序），因此「先 CREATE、后 DROP」的写法
+// 会得到正确结果；反过来写成「先 DROP、后 CREATE」同样成立——我们关心的是
+// 全部迁移跑完之后的最终状态。
 func migrationUniqueIndexes(t *testing.T) map[string]map[string]bool {
 	t.Helper()
 
@@ -119,8 +132,9 @@ func migrationUniqueIndexes(t *testing.T) map[string]map[string]bool {
 		if err != nil {
 			t.Fatalf("读取 %s 失败: %v", e.Name(), err)
 		}
+		text := string(raw)
 
-		for _, m := range createIndexRe.FindAllStringSubmatch(string(raw), -1) {
+		for _, m := range createIndexRe.FindAllStringSubmatch(text, -1) {
 			// m[1] 非空表示这是 UNIQUE 索引。
 			if strings.TrimSpace(m[1]) == "" {
 				continue
@@ -130,6 +144,14 @@ func migrationUniqueIndexes(t *testing.T) map[string]map[string]bool {
 				out[table] = make(map[string]bool)
 			}
 			out[table][strings.ToLower(m[2])] = true
+		}
+
+		// 删除：DROP 不带表名，因此在所有表上按名字移除。
+		for _, m := range dropIndexRe.FindAllStringSubmatch(text, -1) {
+			name := strings.ToLower(m[1])
+			for table := range out {
+				delete(out[table], name)
+			}
 		}
 	}
 

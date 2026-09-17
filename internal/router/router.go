@@ -18,6 +18,7 @@ import (
 	"k_cockpit/internal/importer"
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/node"
+	"k_cockpit/internal/publicip"
 	"k_cockpit/internal/quota"
 	"k_cockpit/internal/risk"
 	"k_cockpit/internal/schedule"
@@ -53,6 +54,8 @@ type Deps struct {
 	Quota *quota.Service
 	// Importer 提供磁盘与镜像导入（F-2-13）。
 	Importer *importer.Service
+	// PublicIP 提供公网地址池、绑定与浮动迁移（F-4-06）。
+	PublicIP *publicip.Service
 
 	SecureCookie bool
 	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
@@ -81,6 +84,7 @@ func Register(h *server.Hertz, deps Deps) {
 	consoleHandler := handler.NewConsole(deps.VM, deps.Risk)
 	templateHandler := handler.NewTemplate(deps.Template)
 	quotaHandler := handler.NewQuota(deps.Quota)
+	publicIPHandler := handler.NewPublicIP(deps.PublicIP)
 	importerHandler := handler.NewImporter(deps.Importer)
 
 	authMW := auth.NewMiddleware(deps.Auth)
@@ -201,6 +205,22 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/imports", requireAuth, importerHandler.Create)
 		v1.GET("/imports/:id", requireAuth, importerHandler.Get)
 		v1.DELETE("/imports/:id", requireAuth, importerHandler.Delete)
+
+		// 公网 IP（F-4-06）。
+		//
+		// 地址池是**节点级资源**，整体归 admin（与节点、存储池同一档）。
+		// 「谁能绑哪个地址」属于配额范畴（f-1-08 把公网 IP 列为配额维度），
+		// 那是后续的事——先让地址能录进来、能绑上去。
+		//
+		// 绑定、解绑、迁移都不需要二次验证：它们都不会造成不可逆的结果，
+		// 而连通性中断是**立刻可见**的——用户马上就知道发生了什么。
+		v1.GET("/public-ips", requireAuth, adminOnly, publicIPHandler.List)
+		v1.POST("/public-ips", requireAuth, adminOnly, publicIPHandler.Create)
+		v1.DELETE("/public-ips/:id", requireAuth, adminOnly, publicIPHandler.Delete)
+		v1.GET("/public-ips/:id/preview", requireAuth, adminOnly, publicIPHandler.Preview)
+		v1.POST("/public-ips/:id/bind", requireAuth, adminOnly, publicIPHandler.Bind)
+		v1.POST("/public-ips/:id/migrate", requireAuth, adminOnly, publicIPHandler.Migrate)
+		v1.DELETE("/public-ips/:id/bind", requireAuth, adminOnly, publicIPHandler.Unbind)
 
 		// 存储配额（F-9-02）。
 		//
