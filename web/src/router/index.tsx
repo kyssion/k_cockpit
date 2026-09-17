@@ -11,6 +11,7 @@ import { NodeDetailPage } from '@/views/node/NodeDetailPage'
 import { NodeListPage } from '@/views/node/NodeListPage'
 import { PublicIPPage } from '@/views/network/PublicIPPage'
 import { FirewallPage } from '@/views/network/FirewallPage'
+import { PortMirrorPage } from '@/views/network/PortMirrorPage'
 import { SecurityGroupPage } from '@/views/network/SecurityGroupPage'
 import { ImportPage } from '@/views/storage/ImportPage'
 import { MyStoragePage } from '@/views/storage/MyStoragePage'
@@ -74,6 +75,7 @@ export const router = createBrowserRouter([
           { path: 'public-ip', element: <PublicIPPage /> },
           { path: 'security-group', element: <SecurityGroupPage /> },
           { path: 'firewall', element: <FirewallPage /> },
+          { path: 'port-mirror', element: <PortMirrorPage /> },
           { path: 'api-keys', element: <APIKeyPage /> },
           { path: 'my-storage', element: <MyStoragePage /> },
           { path: 'public-ip', element: pending('公网 IP', '资源池与绑定') },
