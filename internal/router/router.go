@@ -22,6 +22,7 @@ import (
 	"k_cockpit/internal/settings"
 	"k_cockpit/internal/storage"
 	"k_cockpit/internal/task"
+	"k_cockpit/internal/template"
 	"k_cockpit/internal/vm"
 )
 
@@ -44,6 +45,8 @@ type Deps struct {
 	Risk *risk.Guard
 	// Schedule 提供虚拟机的定时任务（F-7-05）。
 	Schedule *schedule.Service
+	// Template 提供模板管理与模板克隆（F-3-01 / F-3-02）。
+	Template *template.Service
 
 	SecureCookie bool
 	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
@@ -70,6 +73,7 @@ func Register(h *server.Hertz, deps Deps) {
 	networkHandler := handler.NewNetwork(deps.Network)
 	settingsHandler := handler.NewSettings(deps.Settings)
 	consoleHandler := handler.NewConsole(deps.VM, deps.Risk)
+	templateHandler := handler.NewTemplate(deps.Template)
 
 	authMW := auth.NewMiddleware(deps.Auth)
 	// 认证接口都计为真实用户活动：它们由用户显式操作触发，不是后台轮询。
@@ -155,6 +159,17 @@ func Register(h *server.Hertz, deps Deps) {
 		// 业务软锁（F-2-12）。同步生效——锁只在控制面，虚拟化层不知道它。
 		// 解锁需要二次验证，因此下面这条路由也受 risk 保护（在 handler 内声明）。
 		v1.PATCH("/vms/:id/lock", requireAuth, vmHandler.SetLock)
+
+		// 模板管理与模板克隆（F-3-01 / F-3-02）。
+		//
+		// 读接口对所有登录用户开放——可见性（已发布 / 自己创建的）由服务层
+		// 过滤，不在路由层按角色一刀切：私有模板的所有者本来就应该能看到
+		// 自己的东西，哪怕他只是 tenant。
+		v1.GET("/templates", requireAuth, templateHandler.List)
+		v1.GET("/templates/:id", requireAuth, templateHandler.Get)
+		v1.POST("/templates", requireAuth, templateHandler.CreateFromVM)
+		v1.PATCH("/templates/:id", requireAuth, templateHandler.Update)
+		v1.DELETE("/templates/:id", requireAuth, templateHandler.Delete)
 
 		// 救援系统（F-2-12）。进入与退出都是任务：两者都要改虚拟机的硬件
 		// 配置并重启，是宿主机上的实际操作。

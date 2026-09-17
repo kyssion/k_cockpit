@@ -30,6 +30,16 @@ type createParams struct {
 	Remark    string `json:"remark"`
 	GroupName string `json:"group_name"`
 	OwnerID   int64  `json:"owner_id"`
+
+	// --- 从模板克隆（f-3-02）；TemplateID 为零表示从零安装 ---
+
+	TemplateID int64  `json:"template_id,omitempty"`
+	CloneMode  string `json:"clone_mode,omitempty"`
+	// TemplateDiskPath 是模板盘在宿主机上的路径，随任务持久化。
+	//
+	// 不在这里回查模板表：任务可能排很久才执行，那时模板已被删除或改名，
+	// 回查会得到空值或另一份路径。**入队那一刻的路径才是这次要用的**。
+	TemplateDiskPath string `json:"template_disk_path,omitempty"`
 }
 
 // CreateExecutor 执行 vm.create 任务。
@@ -62,7 +72,12 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 		return api.Internal()
 	}
 
-	result, err := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, agent.Operation{
+	// 有模板就走克隆，没有就从零安装。
+	//
+	// 两者在控制面是**同一个任务类型、同一套受理逻辑**（对用户来说「从模板
+	// 建一台机器」与「新建一台机器」是同一件事），只在最后下发时分开——
+	// 节点侧也只需要实现「给我一块盘，从它派生」，而不必理解模板的概念。
+	op := agent.Operation{
 		Kind:   agent.OpVMCreate,
 		NodeID: p.NodeID,
 		Target: p.Name,
@@ -71,7 +86,15 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 			"memory_mb": p.MemoryMB,
 			"disk_gb":   p.DiskGB,
 		},
-	})
+	}
+	if p.TemplateID > 0 {
+		op.Kind = agent.OpVMClone
+		op.Params["template_id"] = p.TemplateID
+		op.Params["clone_mode"] = p.CloneMode
+		op.Params["template_disk_path"] = p.TemplateDiskPath
+	}
+
+	result, err := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, op)
 	if err != nil {
 		// 指令未送达与执行失败是两回事，但对用户而言都需要一个可操作的说法。
 		return api.Unavailable("节点不可达，创建指令未送达")
@@ -97,6 +120,22 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 		Present:      true,
 		LastSyncedAt: &now,
 	}
+	if p.TemplateID > 0 {
+		vm.TemplateID = &p.TemplateID
+		vm.CloneMode = p.CloneMode
+		if vm.CloneMode == "" {
+			vm.CloneMode = model.CloneFull
+		}
+		// 链式克隆的父盘路径由**节点返回**，不按模板路径推算：真实实现
+		// 可能为了性能把模板盘放到别处（比如 SSD 缓存层），由节点说了算
+		// 才不会对不上。它是排查「克隆机起不来」时第一个要看的东西。
+		if info, ok := result.Data[agent.CloneDataKey].(agent.CloneInfo); ok && info.BackingPath != "" {
+			vm.BackingPath = &info.BackingPath
+		}
+	} else {
+		vm.CloneMode = model.CloneFull
+	}
+
 	if uuid, ok := result.Data["uuid"].(string); ok && uuid != "" {
 		vm.UUID = &uuid
 	}

@@ -136,6 +136,14 @@ type View struct {
 	// （盘型、网卡、引导顺序都改过），把它当成日常状态会让人做出错误判断。
 	RescueActive bool       `json:"rescue_active"`
 	RescueSince  *time.Time `json:"rescue_since,omitempty"`
+
+	// TemplateID / CloneMode 描述这台机器的来源（f-3-02）。
+	//
+	// 界面必须把它们显示出来：`linked` 的磁盘只是模板之上的一层覆盖，
+	// **模板被删后数据就不可用了**，而且不会立刻报错。用户看不到这条依赖
+	// 关系，就无法理解为什么「删掉一个模板」会让自己的机器出事。
+	TemplateID *int64 `json:"template_id,omitempty"`
+	CloneMode  string `json:"clone_mode,omitempty"`
 }
 
 // ListFilter 是列表查询条件。
@@ -244,6 +252,58 @@ type CreateRequest struct {
 	DiskGB    int
 	Remark    string
 	GroupName string
+
+	// TemplateID 非零表示从模板克隆（f-3-02）；为零表示从零安装。
+	TemplateID int64
+	// CloneMode 取值 full / linked（model.CloneFull / CloneLinked）。
+	// 模板ID 非零时生效；留空时按 full 处理——**链式克隆必须是显式选择**，
+	// 因为它引入了「父盘没了数据就没了」这个依赖，不该是默认行为。
+	CloneMode string
+}
+
+// loadTemplateForClone 取出并校验要克隆的模板。
+//
+// 校验放在受理时而不是执行时：模板不可克隆是一个**当下的确定事实**，
+// 排进队列等几分钟后再失败，用户会在收到通知时已经忘了自己点过什么。
+func (s *Service) loadTemplateForClone(
+	ctx context.Context, req CreateRequest, owner authz.Viewer,
+) (*model.Template, error) {
+	var tpl model.Template
+	err := s.db.WithContext(ctx).Where("id = ?", req.TemplateID).First(&tpl).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return nil, api.NotFound("模板不存在")
+	case err != nil:
+		log.Printf("[vm] 查询模板失败: %v", err)
+		return nil, api.Internal()
+	}
+
+	// 可见性：管理员不限；普通用户可用已发布的，或自己创建的私有模板。
+	// 用 404 而非 403——403 会确认「这个 ID 存在」。
+	if !owner.IsAdmin && !tpl.Published && (tpl.CreatedBy == nil || *tpl.CreatedBy != owner.UserID) {
+		return nil, api.NotFound("模板不存在")
+	}
+
+	switch {
+	case !tpl.IsReady():
+		// 制备中与失败分开说：前者要等，后者要重建。都说成「不可用」
+		// 会让用户在等待一个永远不会就绪的模板。
+		if tpl.Status == model.TemplatePreparing {
+			return nil, api.ValidationFailed("模板正在制备中，完成后才能用于创建虚拟机")
+		}
+		return nil, api.ValidationFailed("模板制备失败，请删除后重新制备")
+	case !tpl.CloneEnabled:
+		return nil, api.ValidationFailed("该模板已停止提供克隆")
+	}
+
+	// 模板是**节点内**资源：磁盘文件就在那个节点的存储池里。跨节点使用
+	// 需要先导出再导入（f-2-14），而不是让它去挂载一个不存在的路径。
+	if tpl.NodeID != req.NodeID {
+		return nil, api.ValidationFailed(
+			"模板与目标节点不在同一台宿主机上；跨节点使用需要先导出再导入")
+	}
+
+	return &tpl, nil
 }
 
 // Create 入队一个创建任务并立即返回。
@@ -273,6 +333,39 @@ func (s *Service) Create(
 		Remark:    req.Remark,
 		GroupName: req.GroupName,
 		OwnerID:   owner.UserID,
+	}
+
+	// 从模板克隆（f-3-02）。
+	if req.TemplateID > 0 {
+		// 先归一化再传下去：loadTemplateForClone 收到的是**值拷贝**，
+		// 在它里面改 req.CloneMode 不会影响这里——那样 params.CloneMode
+		// 会一直是空串，而空串在下游会被当成「未指定」。
+		if req.CloneMode == "" {
+			req.CloneMode = model.CloneFull
+		}
+		if req.CloneMode != model.CloneFull && req.CloneMode != model.CloneLinked {
+			return nil, api.InvalidParameter("克隆方式非法，可选 full 或 linked")
+		}
+
+		tpl, err := s.loadTemplateForClone(ctx, req, owner)
+		if err != nil {
+			return nil, err
+		}
+		params.TemplateID = tpl.ID
+		params.CloneMode = req.CloneMode
+		params.TemplateDiskPath = tpl.DiskPathOf()
+		// 磁盘不能小于模板自身：overlay 建在比父盘小的空间上会直接失败，
+		// 而报错信息通常是一句「write beyond end of device」，从它出发
+		// 几乎不可能定位到「你在创建时把磁盘调小了」。
+		if params.DiskGB < tpl.MinDiskGB {
+			params.DiskGB = tpl.MinDiskGB
+		}
+		if params.VCPU <= 0 {
+			params.VCPU = tpl.DefaultCPU
+		}
+		if params.MemoryMB <= 0 {
+			params.MemoryMB = tpl.DefaultMemoryMB
+		}
 	}
 
 	// 幂等键由业务语义构成：同名同节点的创建意图只应产生一个任务。
@@ -624,6 +717,8 @@ func toView(vm *model.VM, lock *model.VMLock, now time.Time, threshold time.Dura
 		HasConsole:       vm.HasConsole(),
 		RescueActive:     vm.RescueActive,
 		RescueSince:      vm.RescueSince,
+		TemplateID:       vm.TemplateID,
+		CloneMode:        vm.CloneMode,
 	}
 	if vm.UUID != nil {
 		view.UUID = *vm.UUID

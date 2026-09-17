@@ -33,11 +33,18 @@ type Node struct {
 	ID int64 `gorm:"primaryKey"`
 	// Name 带唯一索引：节点名是用户识别机器的唯一凭据，重名会让「哪台是哪台」
 	// 无法回答。索引名与迁移中的 uniq_node_name 对应。
-	Name              string `gorm:"size:64;not null;uniqueIndex:uniq_node_name"`
-	Enabled           bool   `gorm:"not null;default:true"`
-	Status            string `gorm:"size:16;not null;default:unknown"`
-	MaintenanceMode   bool   `gorm:"not null;default:false"`
-	IsMigrationTarget bool   `gorm:"not null;default:true"`
+	Name string `gorm:"size:64;not null;uniqueIndex:uniq_node_name"`
+	// ⚠️ **GORM 陷阱**（同 model/schedule.go 的 Enabled）：`default:true` 时
+	// 值为 `false` 会被当作零值省略，数据库填入 `true`。
+	//
+	// 节点创建时总是启用（注册流程不会建一个停用的节点），因此当前不受影响；
+	// 若要支持「先建后启用」，必须改走 Update。
+	Enabled         bool   `gorm:"not null;default:true"`
+	Status          string `gorm:"size:16;not null;default:unknown"`
+	MaintenanceMode bool   `gorm:"not null;default:false"`
+	// ⚠️ 同上的零值陷阱：`IsMigrationTarget: false` 在 Create 时会被省略
+	// 并变成 true。当前创建路径总是用默认值，因此不受影响。
+	IsMigrationTarget bool `gorm:"not null;default:true"`
 
 	// MaintenanceReason / MaintenanceAt 描述**当前这次**维护。
 	//

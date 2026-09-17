@@ -39,8 +39,21 @@ type VM struct {
 	// 空值不参与唯一性判定，因此多台未同步的虚拟机不会互相冲突。
 	UUID *string `gorm:"size:64;uniqueIndex:uniq_vm_node_uuid,priority:2"`
 
-	OwnerID    *int64
-	TemplateID *int64
+	OwnerID *int64
+	// TemplateID 指向制备这台虚拟机所用的模板；为空表示从零安装或来源已删。
+	TemplateID *int64 `gorm:"index:idx_vm_template_id"`
+
+	// CloneMode 取值 full / linked（见 model.CloneFull / CloneLinked）。
+	//
+	// 它不只是个标签：完整克隆与模板**完全独立**，链式克隆的磁盘只是一个
+	// overlay——**父盘缺失或被改，数据就不可用了**。界面据此显示依赖链，
+	// 删除父模板时也据此拒绝或明确告知会破坏多少个克隆体。
+	CloneMode string `gorm:"size:16;not null;default:full"`
+	// BackingPath 是链式克隆的父磁盘路径，由节点在克隆时返回。
+	//
+	// 没有它就无法回答「这个克隆体依赖谁」——而那是排查「虚拟机起不来」
+	// 时第一个要看的东西。控制面只保存不解释这个路径。
+	BackingPath *string `gorm:"size:512"`
 
 	Status string `gorm:"size:16;not null;default:unknown"`
 
@@ -62,6 +75,11 @@ type VM struct {
 	//
 	// 为 false 说明它在面板之外被删除了。界面应把它标记为「已失效」而不是
 	// 直接隐藏——直接消失会让用户以为自己误删了。
+	// ⚠️ **GORM 陷阱**（同 model/schedule.go 的 Enabled）：`default:true` 时
+	// 值为 `false` 会被当作零值省略，数据库填入 `true`。
+	//
+	// 虚拟机的 present 只在**删除任务**里被改成 false，走的是 Update
+	// （显式列名），因此不受影响。
 	Present bool `gorm:"not null;default:true"`
 	// LastSyncedAt 是最近一次与虚拟化层对账的时间，用于计算数据新鲜度。
 	LastSyncedAt *time.Time
@@ -107,8 +125,10 @@ type VM struct {
 	CPUType         string `gorm:"column:cpu_type;size:32;not null;default:host"`
 	CPULimitPercent int    `gorm:"column:cpu_limit_percent;not null;default:0"`
 	MemoryHugepages bool   `gorm:"not null;default:false"`
-	APIC            bool   `gorm:"column:apic;not null;default:true"`
-	PAE             bool   `gorm:"column:pae;not null;default:true"`
+	// APIC / PAE 同样是 default:true 的字段：创建时如果传 false 会被省略
+	// 而变成 true。当前它们只出现在编辑矩阵（走 Update），不受影响。
+	APIC bool `gorm:"column:apic;not null;default:true"`
+	PAE  bool `gorm:"column:pae;not null;default:true"`
 	// GuestAgent 是**探测结果**而非配置：由 agent 上报「来宾里是否运行了
 	// QEMU Guest Agent」。放在这里是因为「来宾自动化」（f-2-10）的每项能力
 	// 都以它为前置，界面上需要有地方显示这个状态。

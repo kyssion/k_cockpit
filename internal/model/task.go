@@ -76,6 +76,15 @@ const (
 	// 「进入成功了但退出失败」这种情况无法分别重试。
 	TaskVMRescueEnter = "vm.rescue.enter"
 	TaskVMRescueExit  = "vm.rescue.exit"
+
+	// 模板（F-3-01 / F-3-02）与模板克隆。
+	//
+	// 制备与删除是耗时的磁盘操作（复制整块系统盘、删除可能很大的镜像），
+	// 因此都走队列。克隆本身复用 vm.create（见 vm.createParams.TemplateID），
+	// 不另立任务类型——对用户来说「从模板建一台机器」与「新建一台机器」
+	// 是同一件事，界面上也是同一个入口。
+	TaskTemplatePrepare = "template.prepare"
+	TaskTemplateDelete  = "template.delete"
 )
 
 // 阶段的执行状态。取值与 task.status 保持同一套词汇，避免界面上出现

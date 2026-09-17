@@ -27,6 +27,7 @@ import (
 	"k_cockpit/internal/settings"
 	"k_cockpit/internal/storage"
 	"k_cockpit/internal/task"
+	"k_cockpit/internal/template"
 	"k_cockpit/internal/vm"
 )
 
@@ -119,6 +120,9 @@ func main() {
 	queue.Register(vm.NewConfigUpdateExecutor(db, mockAgent))
 	queue.Register(vm.NewEnterRescueExecutor(db, mockAgent))
 	queue.Register(vm.NewExitRescueExecutor(db, mockAgent))
+	// 模板制备要复制整块系统盘，因此与其它磁盘操作一样走队列。
+	queue.Register(template.NewPrepareExecutor(db, mockAgent))
+	queue.Register(template.NewDeleteExecutor(db, mockAgent))
 	// 网络变更（F-2-03）：三种资源各一个执行器，共用 vm:<id> 资源锁。
 	queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
 	queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))
@@ -141,6 +145,7 @@ func main() {
 	// 定时任务（F-7-05）：调度器到点把**已有的任务类型**入队，自己不做任何
 	// 节点操作，因此不需要新的执行器——这也是它能在 mock 之上完整跑通的原因。
 	scheduleSvc := schedule.NewService(db)
+	templateSvc := template.NewService(db, queue, recorder, mockAgent)
 	scheduler := schedule.New(db, queue, schedule.Options{})
 	scheduler.Start(context.Background())
 
@@ -159,6 +164,7 @@ func main() {
 		Task:          queue,
 		Risk:          riskGuard,
 		Schedule:      scheduleSvc,
+		Template:      templateSvc,
 		Storage:       storageSvc,
 		Network:       networkSvc,
 		Settings:      settingsSvc,

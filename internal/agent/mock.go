@@ -134,6 +134,22 @@ func stagePlan(kind OpKind) [][2]string {
 			{"dhcp_config", "配置 DHCP 服务"},
 			{"nat_config", "配置出网转发"},
 		}
+	case OpTemplatePrepare:
+		return [][2]string{
+			{"disk_clone", "复制系统盘"},
+			{"disk_convert", "转换为模板格式"},
+			{"template_register", "登记模板"},
+		}
+	case OpTemplateDelete:
+		return [][2]string{
+			{"disk_remove", "删除模板盘"},
+		}
+	case OpVMClone:
+		return [][2]string{
+			{"disk_clone", "克隆系统盘"},
+			{"domain_define", "生成域配置"},
+			{"domain_start", "定义并启动"},
+		}
 	}
 	// 电源类操作是单步的，但仍然会上报一项：否则界面上这类任务的时间线是
 	// 空的，而「空空如也」与「不支持展示」看起来是同一件事。
@@ -157,6 +173,27 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 	switch op.Kind {
 	case OpVMCreate:
 		data["uuid"] = mockUUID(op.NodeID, op.Target)
+
+	case OpVMClone:
+		data["uuid"] = mockUUID(op.NodeID, op.Target)
+		// 只有链式克隆才有 backing_path。完整克隆**刻意不给**：给了会让
+		// 控制面记下一条不存在的依赖，界面上就会显示出一个假的依赖链——
+		// 而依赖链的存在与否，决定了删除模板时该不该拒绝。
+		info := CloneInfo{DiskPath: "/var/lib/k_cockpit/images/" + op.Target + ".qcow2"}
+		if mode, ok := op.Params["clone_mode"].(string); ok && mode == "linked" {
+			info.BackingPath, _ = op.Params["template_disk_path"].(string)
+		}
+		data[CloneDataKey] = info
+
+	case OpTemplatePrepare:
+		data[TemplateDataKey] = TemplateInfo{
+			DiskPath: "/var/lib/k_cockpit/templates/" + op.Target + ".qcow2",
+			SizeGB:   20,
+			Format:   "qcow2",
+		}
+
+	case OpTemplateDelete:
+		// 没有返回值：删除的结果只由 Success 表达。
 	case OpNodeDisks:
 		// 返回三块有代表性的盘，覆盖界面需要处理的三种状态：系统盘
 		// （不可选）、空闲盘（可直接用）、已含数据的盘（需显式确认）。

@@ -40,7 +40,7 @@ func TestUniqueIndexesMatchBetweenModelAndMigration(t *testing.T) {
 		&model.StoragePool{}, &model.Task{}, &model.TaskStage{}, &model.User{},
 		&model.VM{}, &model.VMSnapshot{}, &model.VMSchedule{},
 		&model.VMLock{}, &model.PortForward{},
-		&model.VMInterface{}, &model.StaticIP{},
+		&model.VMInterface{}, &model.StaticIP{}, &model.Template{},
 	}
 
 	var cache sync.Map

@@ -216,6 +216,9 @@ type PortForward struct {
 	// 「该功能尚未生效」，而不是把它藏起来。
 	AllowedRegions *string `gorm:"size:255"`
 
+	// ⚠️ **GORM 陷阱**（同 model/schedule.go 的 Enabled）：`default:true` 时
+	// 值为 `false` 会被当作零值省略，数据库填入 `true`。生产代码创建时总是
+	// true，不受影响；改动这里之前请先确认这一点。
 	Enabled bool `gorm:"not null;default:true"`
 
 	// LastAppliedAt 为空表示规则尚未下发到节点，即**当前并不生效**。

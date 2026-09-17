@@ -71,6 +71,14 @@ type createVMRequest struct {
 	DiskGB    int    `json:"disk_gb"`
 	Remark    string `json:"remark"`
 	GroupName string `json:"group_name"`
+
+	// TemplateID 非零表示从模板克隆（F-3-02）。
+	TemplateID int64 `json:"template_id"`
+	// CloneMode 取值 full / linked；留空按 full 处理。
+	//
+	// **链式克隆必须是显式选择**：它引入了「父盘没了数据就没了」这个
+	// 依赖，不该是默认行为。
+	CloneMode string `json:"clone_mode"`
 }
 
 // Create 创建虚拟机。
@@ -91,13 +99,15 @@ func (h *VM) Create(ctx context.Context, c *app.RequestContext) {
 	info := auth.ClientInfoOf(c)
 
 	t, err := h.svc.Create(ctx, vm.CreateRequest{
-		Name:      req.Name,
-		NodeID:    req.NodeID,
-		VCPU:      req.VCPU,
-		MemoryMB:  req.MemoryMB,
-		DiskGB:    req.DiskGB,
-		Remark:    req.Remark,
-		GroupName: req.GroupName,
+		Name:       req.Name,
+		NodeID:     req.NodeID,
+		VCPU:       req.VCPU,
+		MemoryMB:   req.MemoryMB,
+		DiskGB:     req.DiskGB,
+		Remark:     req.Remark,
+		GroupName:  req.GroupName,
+		TemplateID: req.TemplateID,
+		CloneMode:  req.CloneMode,
 	}, authz.ViewerOf(c), user.Username, info.IP)
 	if err != nil {
 		api.Fail(c, err)
