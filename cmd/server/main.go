@@ -90,8 +90,8 @@ func main() {
 			"============================================================", token)
 	}
 
-	// 装配 agent 通道。真实实现（gRPC 双向流）尚未开发，本期由 mock 直接
-	// 返回结果——业务代码只依赖内部接口，接入真实节点时无需改动（ADR-0007）。
+	// 装配 agent 通道。gRPC 双向流实现尚未开发，本期由 mock 直接
+	// 返回结果——业务代码只依赖内部接口，替换 agent 实现时无需改动（ADR-0007）。
 	var mockAgent *agent.MockClient
 	switch cfg.Agent.Transport {
 	case config.AgentTransportMock:
@@ -101,7 +101,7 @@ func main() {
 		// 真实感**——每个用例多等一秒只会让人不愿跑测试。而演示时所有阶段
 		// 落在同一毫秒里，时间线虽然是对的，却看不出它是一条时间线。
 		mockAgent = agent.NewMockClient().WithStageDelay(220 * time.Millisecond)
-		log.Printf("[agent] 通道 = mock：节点运行态与领域操作为假数据，不连接真实节点")
+		log.Printf("[agent] 通道 = mock：节点运行态与领域操作由 mock 提供，不与节点通信")
 	default:
 		log.Fatalf("AGENT_TRANSPORT=%s 尚未实现（当前仅支持 %s）",
 			cfg.Agent.Transport, config.AgentTransportMock)

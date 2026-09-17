@@ -199,7 +199,7 @@ func TestCloneFullHasNoBackingDependency(t *testing.T) {
 
 // TestCloneRaisesDiskToTemplateMinimum 覆盖一条会产生**误导性报错**的校验。
 //
-// overlay 建在比父盘小的空间上会直接失败，而真实实现的报错通常是一句
+// overlay 建在比父盘小的空间上会直接失败，而节点侧的报错通常是一句
 // 「write beyond end of device」——从它出发几乎不可能定位到「你在创建时
 // 把磁盘调小了」。
 func TestCloneRaisesDiskToTemplateMinimum(t *testing.T) {

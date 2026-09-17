@@ -13,11 +13,11 @@ import (
 // MockClient 是 Client 的假实现。
 //
 // 它**只保证接口有返回值**，不模拟节点行为：不模拟耗时、进度推进、失败注入
-// 与离线（见 docs/06-decisions/0007-mock-agent-first.md）。接入真实 agent 前，
+// 与离线（见 docs/06-decisions/0007-mock-agent-first.md）。在仅使用 mock 的阶段，
 // 执行失败、超时、节点离线等分支不会被触发，需在联调时集中验证。
 //
 // 有一个例外：**阶段会上报**。阶段不是「节点行为的模拟」，而是节点向控制面
-// 传递信息的一种方式——不上报的话，本项目的任务时间线在接入真实 agent 之前
+// 传递信息的一种方式——不上报的话，本项目的任务时间线在此之前
 // 根本没有任何数据流过，那条链路（模型、写入、查询、渲染）就始终是未验证的。
 // 因此这里按每类操作的真实步骤上报，让整条链路在 mock 下也能被走通和验收。
 type MockClient struct {
@@ -308,7 +308,7 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 		// 校验）。占位内容不会造成这种误解。
 		data[ExportContentKey] = ExportContent{
 			Data: []byte("k_cockpit mock export placeholder\n" +
-				"真实实现会由节点流式返回导出产物。\n" +
+				"节点侧会由节点流式返回导出产物。\n" +
 				"target=" + op.Target + "\n"),
 			MIME: "application/octet-stream",
 		}
@@ -387,7 +387,7 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 	case OpVMSnapshotCreate:
 		// 回显控制面给的标识，让调用方走完整的「写入 domain_name」路径。
 		//
-		// 不在这里自己生成：真实 agent 会把它实际使用的名字返回，
+		// 不在这里自己生成：节点会把它实际使用的名字返回，
 		// 而控制面必须能处理「返回的名字与请求的不同」这一情况。
 		if name, ok := op.Params["domain_name"].(string); ok {
 			data["domain_name"] = name
@@ -409,7 +409,7 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 // 在真正返回之前一次性报完，而不是边做边报：mock 本身不做任何事，把阶段
 // 分散到「执行过程中」需要伪造一套并发时序，而那是 ADR-0007 明确不做的。
 // 调用方按「开始即记录、下一个开始时收尾上一个」处理，因此顺序上报得到的
-// 时间线形状与真实节点一致。
+// 时间线形状与节点侧一致。
 //
 // ctx 取消时立即停止：任务被取消后还继续报阶段，会让界面在「已取消」之后
 // 又冒出新的步骤。
@@ -533,7 +533,7 @@ func mockUUID(nodeID int64, name string) string {
 // 心跳时间用 `time.Now()` 而不是固定值，是为了让界面上的「最后心跳」
 // 不至于随着服务运行时间推移显示成几小时前——那看起来像故障。
 //
-// 注意：这意味着**离线分支在接入真实 agent 前不会被触发**，
+// 注意：这意味着**离线分支在仅使用 mock 的阶段不会被触发**，
 // 包括「离线标记」与「离线时不派发任务」等逻辑，需在联调时集中验证
 // （见 docs/06-decisions/0007-mock-agent-first.md）。
 func (m *MockClient) Snapshot(_ context.Context, _ int64) (*Snapshot, error) {
@@ -557,7 +557,7 @@ func (m *MockClient) Snapshot(_ context.Context, _ int64) (*Snapshot, error) {
 // 「已连接但永远黑屏」的状态，而那种现象看起来像前端坏了。返回明确的
 // 不支持，前端就能给出「通路已建立，当前为模拟模式」这类可理解的提示。
 //
-// 这属于 ADR-0007 接受的代价：控制台的真实画面需接入真实 agent 后验证。
+// 这属于 ADR-0007 接受的代价：控制台画面当前由 mock 提供。
 func (m *MockClient) OpenStream(
 	_ context.Context, _ StreamKind, _ int64, _ string,
 ) (Stream, error) {

@@ -235,8 +235,8 @@ function EnrollNodeModal({ open, onClose }: { open: boolean; onClose: () => void
             <>
               <CopyField label="模拟接入命令（开发期）" value={result.simulate_command} mono wrap />
               <p className="text-sm text-ink-3">
-                当前 agent 尚未实现，该命令会走与真实 agent 相同的注册逻辑，
-                用于验证完整流程。接入真实 agent 后此处将变为安装命令。
+                当前 agent 尚未实现；该命令走与节点注册相同的逻辑，
+                用于验证完整流程（mock 专用）。
               </p>
             </>
           )}

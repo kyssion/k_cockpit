@@ -147,7 +147,7 @@ func (s *Service) PurgeBackup(
 		return nil, api.ValidationFailed("该虚拟机没有需要清理的备份")
 	}
 
-	// 运行中不允许清理：备份盘此时可能正被当作底层链的一部分（真实实现
+	// 运行中不允许清理：备份盘此时可能正被当作底层链的一部分（节点侧
 	// 里系统盘可能是从备份派生的 overlay），删掉它会让运行中的虚拟机
 	// 在读到某块未缓存的数据时崩掉。
 	current, err := s.probeStatus(ctx, target)

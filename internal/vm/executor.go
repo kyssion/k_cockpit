@@ -126,7 +126,7 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 		if vm.CloneMode == "" {
 			vm.CloneMode = model.CloneFull
 		}
-		// 链式克隆的父盘路径由**节点返回**，不按模板路径推算：真实实现
+		// 链式克隆的父盘路径由**节点返回**，不按模板路径推算：节点侧
 		// 可能为了性能把模板盘放到别处（比如 SSD 缓存层），由节点说了算
 		// 才不会对不上。它是排查「克隆机起不来」时第一个要看的东西。
 		if info, ok := result.Data[agent.CloneDataKey].(agent.CloneInfo); ok && info.BackingPath != "" {

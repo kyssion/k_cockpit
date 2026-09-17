@@ -104,7 +104,7 @@ func TestReinstallRejectedWhenBackupExists(t *testing.T) {
 
 // TestPurgeBackupRequiresStopped 覆盖清理备份的前置条件。
 //
-// 运行中不允许清理：真实实现里系统盘可能是从备份派生的 overlay，
+// 运行中不允许清理：节点侧系统盘可能是从备份派生的 overlay，
 // 删掉它会让运行中的虚拟机在读到某块未缓存的数据时崩掉。
 func TestPurgeBackupRequiresStopped(t *testing.T) {
 	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})

@@ -167,7 +167,7 @@ export function ConsolePage() {
         <Notice
           tone="idle"
           title="当前 agent 不支持控制台通道"
-          text="控制面已就绪，但该节点以模拟模式运行，不提供画面数据。接入真实 agent 后此处会显示虚拟机画面。"
+          text="控制面已就绪，但该节点以模拟模式运行，控制台画面暂不可用。"
         />
       )}
 

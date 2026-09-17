@@ -128,8 +128,8 @@ const (
 // 它当前停在「配置网络」，就看不出前三步是快是慢、哪一步重试过。
 //
 // 阶段**由节点上报**（agent.Operation.OnStage）：控制面不知道一次创建在
-// 宿主机上分了几步、每步多长。控制面自己编一条时间线，在真实 agent 接入
-// 后会立刻对不上号——而那种「看起来对、其实不对」的时间线比没有更糟。
+// 宿主机上分了几步、每步多长。控制面自己编一条时间线，在换成节点侧实现后
+// 会立刻对不上号——而那种「看起来对、其实不对」的时间线比没有更糟。
 type TaskStage struct {
 	ID     int64 `gorm:"primaryKey"`
 	TaskID int64 `gorm:"not null;index:idx_task_stage_task_seq,priority:1"`

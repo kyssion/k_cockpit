@@ -60,7 +60,7 @@ const ReinstallDataKey = "reinstall"
 type ReinstallInfo struct {
 	// BackupPath 是原系统盘被改名到的位置。
 	//
-	// 由**节点返回**而不是控制面按命名规则推算：真实实现可能因为存储池
+	// 由**节点返回**而不是控制面按命名规则推算：节点侧可能因为存储池
 	// 不同、快照链不同而把备份放在别处。控制面推算出来的路径一旦对不上，
 	// 「还原」与「清理」都会作用在一个不存在的文件上。
 	BackupPath string
@@ -80,7 +80,7 @@ type CloneInfo struct {
 	DiskPath string
 	// BackingPath 是链式克隆的父盘路径；完整克隆为空。
 	//
-	// 由**节点返回**而不是控制面按模板路径推算：真实实现可能会为了性能
+	// 由**节点返回**而不是控制面按模板路径推算：节点侧可能会为了性能
 	// 把模板盘放到别处（比如 SSD 缓存层），由节点说了算才不会对不上。
 	BackingPath string
 }

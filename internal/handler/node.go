@@ -20,7 +20,7 @@ import (
 type Node struct {
 	svc *node.Service
 	// simulateAgent 为 true 时暴露开发期的模拟注册入口。
-	// 仅在 AGENT_TRANSPORT=mock 时启用；接入真实 agent 后该路由不再注册。
+	// 仅在 AGENT_TRANSPORT=mock 时启用；该路由为 mock 专用，不随 agent 通道一起启用。
 	simulateAgent bool
 	risk          *risk.Guard
 }
@@ -152,7 +152,7 @@ type createEnrollTokenResponse struct {
 	// InstallCommand 是在目标机器上执行的 agent 安装命令。
 	// agent 尚未开发，接入后填充（见 docs/06-decisions/0007-mock-agent-first.md）。
 	InstallCommand string `json:"install_command"`
-	// SimulateCommand 是开发期的模拟注册命令：执行它会走与真实 agent
+	// SimulateCommand 是开发期的模拟注册命令：执行它走的是与节点注册
 	// **相同的注册逻辑**，区别只是把「在目标机器上执行」换成了直接调用。
 	SimulateCommand string `json:"simulate_command,omitempty"`
 }
@@ -209,8 +209,8 @@ type simulateRegisterRequest struct {
 
 // SimulateRegister 是**开发期**的模拟注册入口。
 //
-// 它调用与真实 agent **同一个** Register 方法（ADR-0007）：注册逻辑因此
-// 是被真实验证过的，接入真实 agent 时无需改动本方法所依赖的任何代码。
+// 它调用与节点注册**同一段** Register 逻辑（ADR-0007）：注册逻辑因此
+// 是被真实验证过的，替换 agent 实现时无需改动本方法所依赖的任何代码。
 // 该路由仅在 AGENT_TRANSPORT=mock 时注册，生产环境不存在。
 func (h *Node) SimulateRegister(ctx context.Context, c *app.RequestContext) {
 	var req simulateRegisterRequest

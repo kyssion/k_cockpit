@@ -57,9 +57,9 @@ type Security struct {
 
 // 节点 agent 通道的传输方式。
 const (
-	// AgentTransportMock 开发期使用：接口直接返回假数据，不连接真实节点。
+	// AgentTransportMock 开发期使用：接口直接返回假数据，不与节点通信。
 	AgentTransportMock = "mock"
-	// AgentTransportGRPC 真实实现（gRPC 双向流），尚未开发。
+	// AgentTransportGRPC 走 gRPC 双向流，尚未开发。
 	AgentTransportGRPC = "grpc"
 )
 

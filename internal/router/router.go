@@ -56,7 +56,7 @@ type Deps struct {
 
 	SecureCookie bool
 	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
-	// 仅在 AGENT_TRANSPORT=mock 时开启；接入真实 agent 后应关闭。
+	// 仅在 AGENT_TRANSPORT=mock 时开启；该开关为 mock 专用。
 	SimulateAgent bool
 }
 
@@ -188,7 +188,7 @@ func Register(h *server.Hertz, deps Deps) {
 		// **本面板不接收真实文件内容**：受理时只提交文件名、大小与格式
 		// （都是浏览器能直接读到的元数据）。整条链路——受理、状态流转、
 		// 转换后建模板、配额记账——都能被验证，唯独「字节怎么从浏览器到
-		// 宿主机」这一段留空。那一段必须真实实现，且它是最难的部分之一。
+		// 宿主机」这一段留空。那一段属于 mock 未覆盖的范围，是最难的部分之一。
 		v1.GET("/imports/format", requireAuth, importerHandler.GuessFormat)
 		v1.POST("/imports/parse", requireAuth, importerHandler.Parse)
 		v1.GET("/imports", requireAuth, importerHandler.List)
@@ -294,8 +294,8 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/tasks/:id/cancel", requireAuth, taskHandler.Cancel)
 
 		if deps.SimulateAgent {
-			// 开发期专用：调用它与真实 agent 走**同一段注册逻辑**（ADR-0007）。
-			// 它不需要认证——真实 agent 注册也不凭用户身份，而凭注册令牌。
+			// 开发期专用：调用它与节点走**同一段注册逻辑**（ADR-0007）。
+			// 它不需要认证——节点注册也不凭用户身份，而凭注册令牌。
 			v1.POST("/dev/agent-register", nodeHandler.SimulateRegister)
 		}
 	}
