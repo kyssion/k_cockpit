@@ -24,6 +24,7 @@ import {
   type EditGroupInfo,
 } from '@/api/edit'
 import { nodeApi } from '@/api/node'
+import { templateApi } from '@/api/template'
 import {
   SNAPSHOT_KIND_LABEL,
   SNAPSHOT_STATUS_LABEL,
@@ -101,6 +102,7 @@ export function VmDetailPage() {
   const [lockOpen, setLockOpen] = useState(false)
   const [lockReason, setLockReason] = useState('')
   const [rescueOpen, setRescueOpen] = useState(false)
+  const [reinstallOpen, setReinstallOpen] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
@@ -183,6 +185,31 @@ export function VmDetailPage() {
       setRescueOpen(false)
       setError(describe(err))
     },
+  })
+
+  // 重装与清理备份。重装会触发二次验证，弹框由请求层唤起。
+  const reinstall = useMutation({
+    mutationFn: (templateID: number) => vmApi.reinstall(vmID, templateID),
+    onSuccess: (result) => {
+      setReinstallOpen(false)
+      setError('')
+      setNotice(`已提交重装，任务 #${result.task_id} 正在执行`)
+      refresh()
+    },
+    onError: (err) => {
+      setReinstallOpen(false)
+      setError(describe(err))
+    },
+  })
+
+  const purgeBackup = useMutation({
+    mutationFn: () => vmApi.purgeReinstallBackup(vmID),
+    onSuccess: (result) => {
+      setError('')
+      setNotice(`已提交清理备份，任务 #${result.task_id} 正在执行`)
+      refresh()
+    },
+    onError: (err) => setError(describe(err)),
   })
 
   if (detail.isPending) return <PageLoading />
@@ -268,6 +295,25 @@ export function VmDetailPage() {
                 锁定
               </Button>
             )}
+            {/* 重装系统。高风险（整块系统盘被替换），因此走二次验证——
+                但验证弹框由请求层自动唤起，这里只是一次普通调用。
+                未清理的备份会挡着它，因此有备份时禁用并说明。 */}
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={vm.status !== 'stopped' || vm.has_reinstall_backup}
+              title={
+                vm.has_reinstall_backup
+                  ? '存在未清理的系统盘备份，请先清理——否则会覆盖你回到原系统的唯一退路'
+                  : vm.status !== 'stopped'
+                    ? '重装需要先关机'
+                    : ''
+              }
+              onClick={() => setReinstallOpen(true)}
+            >
+              重装系统
+            </Button>
+
             {/* 救援入口只在关机时可用：它改动的是引导顺序与盘型，热改会让
                 控制面记录的配置与虚拟化层实际分叉。禁用 + 说明原因，而不是
                 点下去才被后端拒绝。 */}
@@ -341,6 +387,33 @@ export function VmDetailPage() {
               <span className="text-ink-3"> · 自 {formatDateTime(vm.rescue_since)}</span>
             )}
           </p>
+        </div>
+      )}
+
+      {/* 备份提示。它是用户「回到原来的系统」的唯一退路，因此既要让他知道
+          它存在，也要让他知道它挡着下一次重装。 */}
+      {vm.has_reinstall_backup && (
+        <div className="flex items-start justify-between gap-4 rounded-card border border-line bg-raised px-4 py-3">
+          <p className="text-base text-ink-2">
+            重装系统时留下的原系统盘备份仍在占用存储空间。
+            <span className="text-ink-3">
+              它是回到原系统的唯一退路；确认不再需要后可以清理，
+              清理后即可再次重装。
+            </span>
+            {vm.reinstall_at && (
+              <span className="text-ink-3"> · 重装于 {formatDateTime(vm.reinstall_at)}</span>
+            )}
+          </p>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={vm.status !== 'stopped'}
+            loading={purgeBackup.isPending}
+            title={vm.status !== 'stopped' ? '清理备份需要先关机' : ''}
+            onClick={() => purgeBackup.mutate()}
+          >
+            清理备份
+          </Button>
         </div>
       )}
 
@@ -433,6 +506,15 @@ export function VmDetailPage() {
         }}
       />
 
+      <ReinstallModal
+        open={reinstallOpen}
+        nodeID={vm.node_id}
+        vmName={vm.name}
+        pending={reinstall.isPending}
+        onClose={() => setReinstallOpen(false)}
+        onConfirm={(templateID) => reinstall.mutate(templateID)}
+      />
+
       <Modal
         open={rescueOpen}
         title={`让「${vm.name}」进入救援模式`}
@@ -499,6 +581,108 @@ export function VmDetailPage() {
         />
       </Modal>
     </div>
+  )
+}
+
+/**
+ * ReinstallModal 选择模板并确认重装（F-2-11）。
+ *
+ * 确认框里把「会丢什么、会留什么」写清楚：整块系统盘被替换，而硬件配置、
+ * 数据盘与主网口绑定都保留。用户点下这个按钮之前必须知道边界在哪——
+ * 「重装会不会把我挂的数据盘也格了」是最先要回答的问题。
+ */
+function ReinstallModal({
+  open,
+  nodeID,
+  vmName,
+  pending,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean
+  nodeID: number
+  vmName: string
+  pending: boolean
+  onClose: () => void
+  onConfirm: (templateID: number) => void
+}) {
+  const [templateID, setTemplateID] = useState(0)
+
+  // 只列**同一节点**上可用的模板：模板盘就在它所属节点的存储池里，
+  // 跨节点使用需要先导出再导入。列出来再被拒绝只会让人以为是自己操作错了。
+  const templates = useQuery({
+    queryKey: ['templates', { node_id: nodeID, only_ready: true }],
+    queryFn: () => templateApi.list({ node_id: nodeID, only_ready: true }),
+    enabled: open && nodeID > 0,
+  })
+
+  const candidates = templates.data ?? []
+
+  return (
+    <Modal
+      open={open}
+      title={`重装「${vmName}」的系统`}
+      description="用选定的模板重建系统盘。原系统盘会先被备份保留，确认不再需要后可在详情页清理。"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            取消
+          </Button>
+          <Button
+            variant="danger"
+            size="sm"
+            disabled={templateID === 0}
+            loading={pending}
+            onClick={() => onConfirm(templateID)}
+          >
+            确认重装
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3.5">
+        <div className="rounded-control border border-danger/30 bg-danger/10 px-3 py-2.5">
+          <p className="text-base font-medium text-danger">
+            整块系统盘会被替换
+          </p>
+          <p className="mt-1 text-base text-ink-2">
+            原系统上的软件、配置与没放在数据盘上的数据都会消失。
+            这一步会要求二次验证。
+          </p>
+        </div>
+
+        <div className="rounded-control border border-line px-3 py-2.5">
+          <p className="text-base text-ink">保留的内容</p>
+          <ul className="mt-1 flex flex-col gap-0.5 text-sm text-ink-3">
+            <li>硬件配置（CPU、内存、机型、固件）</li>
+            <li>数据盘及其上的数据</li>
+            <li>主网口的绑定关系</li>
+          </ul>
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-sm text-ink-2">用于重建的模板</label>
+          <select
+            value={templateID}
+            onChange={(e) => setTemplateID(Number(e.target.value))}
+            className="h-8 rounded-control border border-line-strong bg-sunken px-2 text-base text-ink focus:outline-none focus-visible:border-brand"
+          >
+            <option value={0}>请选择…</option>
+            {candidates.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name} · {t.default_cpu} 核 {t.default_memory_mb} MB
+              </option>
+            ))}
+          </select>
+          {candidates.length === 0 && !templates.isPending && (
+            <p className="text-xs text-ink-3">
+              该节点上没有可用于重装的模板。请先从一个已关机的虚拟机创建模板。
+            </p>
+          )}
+        </div>
+      </div>
+    </Modal>
   )
 }
 

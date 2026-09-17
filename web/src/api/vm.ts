@@ -78,6 +78,15 @@ export interface VmView {
    * 「删掉一个模板」会让自己的机器出事。
    */
   clone_mode?: 'full' | 'linked'
+
+  /**
+   * 重装留下了一份原系统盘备份，可以清理。
+   *
+   * **只有有无，没有路径**：路径是宿主机上的内部细节。界面需要知道的只是
+   * 「有一份备份、可以清理」，以及「它挡着下一次重装」。
+   */
+  has_reinstall_backup: boolean
+  reinstall_at?: string
 }
 
 export interface VmListParams {
@@ -214,6 +223,24 @@ export const vmApi = {
 
   /** 退出救援并按快照还原配置。同样需要先关机。 */
   exitRescue: (id: number) => del<TaskRef>(`/api/v1/vms/${id}/rescue`),
+
+  /**
+   * 重装系统（F-2-11）。用模板重建系统盘，**保留硬件配置、数据盘与主网口
+   * 绑定**，只替换系统盘。
+   *
+   * 高风险，需要二次验证——但这一点对调用方**透明**：请求层收到 428 时会
+   * 自动唤起验证弹框并重放。整块系统盘会被替换，原系统上的软件与配置全部
+   * 消失（数据盘保留）。
+   *
+   * 前置条件：已关机、无在途任务、**没有未清理的备份**（第二次重装会覆盖
+   * 上一次的备份，而那是用户唯一的退路）。
+   */
+  reinstall: (id: number, templateID: number) =>
+    post<TaskRef>(`/api/v1/vms/${id}/reinstall`, { template_id: templateID }),
+
+  /** 清理重装留下的备份盘。需要先关机，但**不需要**二次验证。 */
+  purgeReinstallBackup: (id: number) =>
+    del<TaskRef>(`/api/v1/vms/${id}/reinstall/backup`),
 
   /** 实时运行指标（Hero 资源卡）。只读探测，不入队。 */
   stats: (id: number) => get<VmStats>(`/api/v1/vms/${id}/stats`),

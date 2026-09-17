@@ -65,6 +65,10 @@ export const TASK_TYPE_LABEL: Record<string, string> = {
   'storage.pool.create': '创建存储池',
   'storage.pool.delete': '删除存储池',
   'vpc.switch.change': '交换机变更',
+  'template.prepare': '制备模板',
+  'template.delete': '删除模板',
+  'vm.reinstall': '重装系统',
+  'vm.reinstall.purge': '清理重装备份',
 }
 
 /** 电源动作的中文名（与后端 vm.PowerAction 的取值对应）。 */
