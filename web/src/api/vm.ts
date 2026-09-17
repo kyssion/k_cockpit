@@ -295,6 +295,26 @@ export const vmApi = {
     input: { action: GuestAction; username?: string; password?: string; disk_id?: string; disk_gb?: number },
   ) => post<TaskRef>(`/api/v1/vms/${id}/guest-actions`, input),
 
+  /**
+   * 受理一次跨节点迁移（F-2-09）。
+   *
+   * **要求关机**：运行中迁移会让磁盘在被写入的同时被复制，两侧都不可用。
+   * 受理时会同步检查目标节点是否维护中、静态地址与端口转发是否冲突——
+   * 有冲突直接拒绝并列出是哪一项，而不是迁过去之后再出问题。
+   *
+   * 不需要二次验证：失败时源侧数据保留，虚拟机在原处仍然可用。
+   */
+  migrate: (id: number, toNodeID: number) =>
+    post<TaskRef>(`/api/v1/vms/${id}/migrate`, { to_node_id: toNodeID }),
+
+  /**
+   * 迁移记录。
+   *
+   * 用来回答「这台机器原来在哪台宿主机上」——那是排查存储、网络、性能问题
+   * 时第一条要看的东西，而 `node_id` 只记录了「现在在哪」。
+   */
+  migrations: (id: number) => get<{ items: MigrationView[] }>(`/api/v1/vms/${id}/migrations`),
+
   /** 实时运行指标（Hero 资源卡）。只读探测，不入队。 */
   stats: (id: number) => get<VmStats>(`/api/v1/vms/${id}/stats`),
 
@@ -357,6 +377,21 @@ export const GUEST_ACTION_HINT: Record<GuestAction, { label: string; detail: str
       '先加长虚拟磁盘，再进来宾扩展文件系统。部分文件系统不支持在线扩容，那时需要重启后再做一次。需要关机。',
     requiresRunning: false,
   },
+}
+
+/** 一次跨节点迁移的记录。 */
+export interface MigrationView {
+  id: number
+  vm_id: number
+  vm_name: string
+  from_node_id: number
+  to_node_id: number
+  status: 'pending' | 'running' | 'success' | 'failed'
+  /** 说明跟着搬了些什么（网卡、静态地址、端口转发的数量）。 */
+  result?: string
+  error?: string
+  created_at: string
+  finished_at?: string
 }
 
 /** 导出格式。 */

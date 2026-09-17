@@ -183,6 +183,12 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.PATCH("/templates/:id", requireAuth, templateHandler.Update)
 		v1.DELETE("/templates/:id", requireAuth, templateHandler.Delete)
 
+		// 跨节点迁移（F-2-09）。前置条件在受理时同步判定——每一个条件
+		// 漏掉的代价都不是「操作失败」，而是两台宿主机上各留下一份不完整
+		// 的东西。
+		v1.POST("/vms/:id/migrate", requireAuth, vmHandler.Migrate)
+		v1.GET("/vms/:id/migrations", requireAuth, vmHandler.Migrations)
+
 		// 镜像导入（F-2-13）。
 		//
 		// **本面板不接收真实文件内容**：受理时只提交文件名、大小与格式

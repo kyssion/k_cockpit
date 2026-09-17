@@ -26,6 +26,7 @@ import {
 import { nodeApi } from '@/api/node'
 import { ExportTab } from '@/views/vm/ExportTab'
 import { GuestActionsSection } from '@/views/vm/GuestActionsSection'
+import { MigrateSection } from '@/views/vm/MigrateSection'
 import { templateApi } from '@/api/template'
 import {
   SNAPSHOT_KIND_LABEL,
@@ -469,6 +470,9 @@ export function VmDetailPage() {
               它是对这台机器的运维动作，与「这台机器是什么样」属于同一处
               上下文，而页签已经七个了。 */}
           <GuestActionsSection vm={vm} />
+          {/* 迁移挂在「系统信息」下：它改变的是这台机器**在哪**，
+              与「这台机器是什么样」属于同一处上下文。 */}
+          <MigrateSection vm={vm} />
         </div>
       )}
       {tab === 'network' && <NetworkTab vmID={vm.id} />}

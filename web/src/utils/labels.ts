@@ -73,6 +73,7 @@ export const TASK_TYPE_LABEL: Record<string, string> = {
   'vm.export.delete': '删除导出产物',
   'vm.guest': '来宾自动化',
   'image.import': '导入镜像',
+  'vm.migrate': '迁移虚拟机',
 }
 
 /** 电源动作的中文名（与后端 vm.PowerAction 的取值对应）。 */

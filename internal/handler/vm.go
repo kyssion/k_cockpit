@@ -1054,6 +1054,59 @@ func (h *VM) GuestAction(ctx context.Context, c *app.RequestContext) {
 	})
 }
 
+type migrateRequest struct {
+	ToNodeID int64 `json:"to_node_id"`
+}
+
+// Migrate 受理一次跨节点迁移（API-098 / F-2-09）。
+//
+// **不需要二次验证**：迁移的可逆性在于源侧数据在目标侧确认之前不删——
+// 失败时源侧保留完整的数据，虚拟机在那里仍然可用。它不是不可逆操作，
+// 而给可逆操作加验证只会稀释验证本身的分量。
+func (h *VM) Migrate(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	var req migrateRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.Migrate(ctx, id, vm.MigrateRequest{ToNodeID: req.ToNodeID},
+		authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
+// Migrations 返回虚拟机的迁移记录（API-099）。
+//
+// 界面据此回答「这台机器原来在哪台宿主机上」——那是排查存储、网络、性能
+// 问题时第一条要看的东西，而 vm.node_id 只记录了「现在在哪」。
+func (h *VM) Migrations(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	items, err := h.svc.ListMigrations(ctx, id, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"items": items})
+}
+
 // Stats 返回虚拟机的实时运行指标（Hero 的资源卡）。
 //
 // 响应里带 `at`（采集时刻）：指标是瞬时值，轮询失败时界面会继续显示上一组

@@ -176,6 +176,17 @@ func stagePlan(kind OpKind) [][2]string {
 		return [][2]string{
 			{"export_remove", "删除导出文件"},
 		}
+	case OpVMMigrate:
+		// 两侧用不同前缀分开：迁移有两个独立的失败面，排障时先要分清是
+		// 源侧读不出来还是目标侧写不下——混在一条线里会让人从两台机器里猜。
+		return [][2]string{
+			{"source.stop", "确认源侧已停止"},
+			{"source.read", "读取磁盘"},
+			{"transfer", "传输数据"},
+			{"target.write", "写入目标存储"},
+			{"target.define", "在目标节点定义"},
+			{"source.cleanup", "清理源侧"},
+		}
 	case OpImageImport:
 		return [][2]string{
 			{"source_verify", "校验源文件"},
@@ -266,6 +277,14 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 
 	case OpVMExportDelete:
 		// 没有返回值：删除的结果只由 Success 表达。
+
+	case OpVMMigrate:
+		data[MigrateResultKey] = MigrateResult{
+			// 说明跟着搬了些什么：只给一个「成功」会让用户不确定
+			// 「我原来接的网络、配的转发还在不在」。
+			Moved:           []string{"系统盘与数据盘", "全部网卡", "静态地址与端口转发"},
+			DurationSeconds: 47,
+		}
 
 	case OpImageParse:
 		// 模拟从 OVA 内的 OVF 描述解析出的配置。

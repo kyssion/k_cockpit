@@ -105,6 +105,9 @@ const (
 
 	// 镜像导入（f-2-13）。格式转换可能要处理几十 GB 的文件，因此走队列。
 	TaskImageImport = "image.import"
+
+	// 跨节点迁移（f-2-09）。要搬运整块磁盘，是最耗时的操作之一。
+	TaskVMMigrate = "vm.migrate"
 )
 
 // 阶段的执行状态。取值与 task.status 保持同一套词汇，避免界面上出现

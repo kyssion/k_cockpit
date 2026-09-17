@@ -135,6 +135,8 @@ func main() {
 	queue.Register(vm.NewGuestExecutor(db, mockAgent))
 	// 镜像导入要转换格式，可能处理几十 GB 的文件。
 	queue.Register(importer.NewImportExecutor(db, mockAgent))
+	// 迁移要搬运整块磁盘，是最耗时的操作之一。
+	queue.Register(vm.NewMigrateExecutor(db, mockAgent))
 	// 网络变更（F-2-03）：三种资源各一个执行器，共用 vm:<id> 资源锁。
 	queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
 	queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))
