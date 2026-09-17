@@ -28,6 +28,12 @@ type Service struct {
 	db    *gorm.DB
 	queue *task.Queue
 	audit *audit.Recorder
+	// quota 校验存储配额（f-9-02）。允许为 nil（未启用配额的部署）。
+	//
+	// 复用 vm.QuotaChecker 而不是在本包再声明一个同形状的接口：两个接口
+	// 长得一样却不共享，只会让人以为它们可以分别演化。本包本来就依赖 vm
+	// 包（取状态文案），复用没有引入新的耦合。
+	quota vm.QuotaChecker
 	// agent 用于**实时探测**源虚拟机的运行态。
 	//
 	// 不能用投影判断「是否已关机」（f-2-01 R-002）：投影可能滞后，凭它
@@ -39,8 +45,11 @@ type Service struct {
 // NewService 构造模板服务。
 func NewService(
 	db *gorm.DB, queue *task.Queue, recorder *audit.Recorder, client agent.Client,
+	quotaChecker vm.QuotaChecker,
 ) *Service {
-	return &Service{db: db, queue: queue, audit: recorder, agent: client}
+	return &Service{
+		db: db, queue: queue, audit: recorder, agent: client, quota: quotaChecker,
+	}
 }
 
 // View 是模板的对外视图。
@@ -210,6 +219,15 @@ func (s *Service) CreateFromVM(
 	}
 	if dup > 0 {
 		return nil, api.Conflict("该节点上已有同名模板")
+	}
+
+	// 模板是一份磁盘副本，占用与虚拟机磁盘同级——因此同样计入配额。
+	// 用源虚拟机的磁盘大小作估算：模板大小与它几乎一致。
+	if s.quota != nil {
+		if err := s.quota.Check(ctx, v.UserID, vmRow.NodeID,
+			int64(vmRow.DiskGB)*1024*1024*1024); err != nil {
+			return nil, err
+		}
 	}
 
 	t, err := s.queue.Enqueue(ctx, task.Spec{

@@ -70,7 +70,7 @@ func newTestEnv(t *testing.T, status string) (*template.Service, *gorm.DB) {
 		queue.Stop()
 	})
 
-	return template.NewService(db, queue, recorder, client), db
+	return template.NewService(db, queue, recorder, client, nil), db
 }
 
 func seedVM(t *testing.T, db *gorm.DB, name string, owner int64) *model.VM {

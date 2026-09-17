@@ -84,6 +84,15 @@ func (s *Service) Export(
 		return nil, api.Conflict("该虚拟机有正在执行的任务，请先等待完成或取消")
 	}
 
+	// 配额校验用**弱口径**（只判当前是否已超），因为产物大小在受理时
+	// 根本无法知道——它取决于盘里真正写了多少数据。假装能算准只会给出
+	// 一个看起来精确、实际误导的拒绝理由。
+	if s.quota != nil {
+		if err := s.quota.CheckOverQuota(ctx, ownerOf(target, v), target.NodeID); err != nil {
+			return nil, err
+		}
+	}
+
 	// 同一台虚拟机同时只允许一个导出：多个导出会同时读同一块盘，既拖慢
 	// 彼此，也会让产物的完成时间集中在同一段时间——而它们占用的是同一份
 	// 用户配额。

@@ -21,6 +21,7 @@ import (
 	"k_cockpit/internal/database"
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/node"
+	"k_cockpit/internal/quota"
 	"k_cockpit/internal/risk"
 	"k_cockpit/internal/router"
 	"k_cockpit/internal/schedule"
@@ -142,18 +143,20 @@ func main() {
 	queue.Start(context.Background())
 
 	settingsSvc := settings.NewService(db, recorder)
+	// 存储配额（f-9-02）：按用户按节点。
+	quotaSvc := quota.NewService(db, recorder)
 	networkSvc := network.NewService(db, mockAgent, queue, recorder)
 
 	// vm 与 storage 都要读设置里的陈旧阈值：把 settingsSvc 作为 Provider
 	// 注入，让「面板上改的阈值」真的影响业务行为——否则那两个设置项就是
 	// 摆设，而「改了不生效」正是 f-9-01 R-002 要消灭的现象。
-	vmSvc := vm.NewService(db, queue, recorder, mockAgent, settingsSvc)
+	vmSvc := vm.NewService(db, queue, recorder, mockAgent, settingsSvc, quotaSvc)
 	storageSvc := storage.NewService(db, queue, recorder, mockAgent, settingsSvc)
 
 	// 定时任务（F-7-05）：调度器到点把**已有的任务类型**入队，自己不做任何
 	// 节点操作，因此不需要新的执行器——这也是它能在 mock 之上完整跑通的原因。
 	scheduleSvc := schedule.NewService(db)
-	templateSvc := template.NewService(db, queue, recorder, mockAgent)
+	templateSvc := template.NewService(db, queue, recorder, mockAgent, quotaSvc)
 	scheduler := schedule.New(db, queue, schedule.Options{})
 	scheduler.Start(context.Background())
 
@@ -173,6 +176,7 @@ func main() {
 		Risk:          riskGuard,
 		Schedule:      scheduleSvc,
 		Template:      templateSvc,
+		Quota:         quotaSvc,
 		Storage:       storageSvc,
 		Network:       networkSvc,
 		Settings:      settingsSvc,

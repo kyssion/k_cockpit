@@ -48,6 +48,9 @@ type Service struct {
 	settings settings.Provider
 	// encKey 用于加解密控制台密码等可逆凭据（f-2-08）。
 	encKey []byte
+	// quota 校验存储配额（f-9-02）。**允许为 nil**：未启用配额的部署
+	// 与绝大多数单测都不需要它，此时所有校验直接放行。
+	quota QuotaChecker
 
 	// sessions 是控制台会话注册表。惰性创建：不用控制台的服务实例
 	// 不必为此分配内存。
@@ -63,9 +66,27 @@ func (s *Service) SetEncryptionKey(key []byte) {
 // NewService 构造虚拟机服务。
 func NewService(
 	db *gorm.DB, queue *task.Queue, recorder *audit.Recorder, client agent.Client,
-	provider settings.Provider,
+	provider settings.Provider, quotaChecker QuotaChecker,
 ) *Service {
-	return &Service{db: db, queue: queue, audit: recorder, agent: client, settings: provider}
+	return &Service{
+		db: db, queue: queue, audit: recorder, agent: client,
+		settings: provider, quota: quotaChecker,
+	}
+}
+
+// QuotaChecker 校验存储配额（f-9-02）。
+//
+// 用接口而不是直接依赖 quota 包：配额是**可选能力**（未启用时不该有任何
+// 行为变化），而把它做成必填的构造参数会让所有不关心配额的调用方都被迫
+// 构造一个空实现。接口在这里只声明两个方法，quota.Service 恰好满足它。
+type QuotaChecker interface {
+	// Check 校验是否还有额度再新增 estimatedBytes 大小的资源。
+	Check(ctx context.Context, userID, nodeID int64, estimatedBytes int64) error
+	// CheckOverQuota 只校验「当前是否已经超出」。
+	//
+	// 用于**估算不出大小**的操作（如导出：产物多大取决于盘里真正写了多少
+	// 数据）。这类操作在受理时无法知道结果大小，只能做一次较弱的检查。
+	CheckOverQuota(ctx context.Context, userID, nodeID int64) error
 }
 
 // staleThreshold 返回当前的投影陈旧阈值。
@@ -330,6 +351,15 @@ func (s *Service) Create(
 	}
 	if req.VCPU <= 0 || req.MemoryMB <= 0 || req.DiskGB <= 0 {
 		return nil, api.InvalidParameter("CPU、内存与磁盘必须为正数")
+	}
+
+	// 配额校验放在**入队之前**：入队之后再拒会留下一条注定失败的任务，
+	// 用户还要去任务中心看它为什么失败。
+	if s.quota != nil {
+		if err := s.quota.Check(ctx, owner.UserID, req.NodeID,
+			int64(req.DiskGB)*1024*1024*1024); err != nil {
+			return nil, err
+		}
 	}
 
 	params := createParams{

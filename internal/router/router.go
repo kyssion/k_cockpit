@@ -17,6 +17,7 @@ import (
 	"k_cockpit/internal/handler"
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/node"
+	"k_cockpit/internal/quota"
 	"k_cockpit/internal/risk"
 	"k_cockpit/internal/schedule"
 	"k_cockpit/internal/settings"
@@ -47,6 +48,8 @@ type Deps struct {
 	Schedule *schedule.Service
 	// Template 提供模板管理与模板克隆（F-3-01 / F-3-02）。
 	Template *template.Service
+	// Quota 提供按用户按节点的存储配额（F-9-02）。
+	Quota *quota.Service
 
 	SecureCookie bool
 	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
@@ -74,6 +77,7 @@ func Register(h *server.Hertz, deps Deps) {
 	settingsHandler := handler.NewSettings(deps.Settings)
 	consoleHandler := handler.NewConsole(deps.VM, deps.Risk)
 	templateHandler := handler.NewTemplate(deps.Template)
+	quotaHandler := handler.NewQuota(deps.Quota)
 
 	authMW := auth.NewMiddleware(deps.Auth)
 	// 认证接口都计为真实用户活动：它们由用户显式操作触发，不是后台轮询。
@@ -174,6 +178,14 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/templates", requireAuth, templateHandler.CreateFromVM)
 		v1.PATCH("/templates/:id", requireAuth, templateHandler.Update)
 		v1.DELETE("/templates/:id", requireAuth, templateHandler.Delete)
+
+		// 存储配额（F-9-02）。
+		//
+		// 自己的用量对所有登录用户开放；设置配额与查看全部用户的用量是
+		// admin 专属——用量数字会暴露「谁有多少资源」。
+		v1.GET("/quota", requireAuth, quotaHandler.Mine)
+		v1.GET("/quotas", requireAuth, adminOnly, quotaHandler.List)
+		v1.PUT("/quotas", requireAuth, adminOnly, quotaHandler.Set)
 
 		// 来宾自动化（F-2-10）。四种动作共用一个入口。
 		//
