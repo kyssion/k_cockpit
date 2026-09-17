@@ -191,6 +191,24 @@ func stagePlan(op Operation) [][2]string {
 			{"target.define", "在目标节点定义"},
 			{"source.cleanup", "清理源侧"},
 		}
+	case OpPortMirrorEnable:
+		// **看门狗与镜像在同一次调用里建立**，因此阶段里能看到 watch_arm
+		// 排在 apply 之前——顺序反了就意味着有一个「已生效、没兜底」的窗口。
+		return [][2]string{
+			{"validate_topology", "校验接口与目标"},
+			{"watch_arm", "启动自动撤销看门狗"},
+			{"apply_mirror", "建立镜像"},
+			{"verify_flow", "确认流量已复制"},
+		}
+	case OpPortMirrorConfirm:
+		return [][2]string{
+			{"watch_disarm", "取消自动撤销看门狗"},
+		}
+	case OpPortMirrorDisable:
+		return [][2]string{
+			{"watch_disarm", "取消自动撤销看门狗"},
+			{"remove_mirror", "移除镜像"},
+		}
 	case OpFirewallApply:
 		return [][2]string{
 			{"render_rules", "渲染规则集"},
@@ -332,6 +350,27 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 			// 「我原来接的网络、配的转发还在不在」。
 			Moved:           []string{"系统盘与数据盘", "全部网卡", "静态地址与端口转发"},
 			DurationSeconds: 47,
+		}
+
+	case OpPortMirrorEnable:
+		seconds, _ := op.Params["watchdog_seconds"].(int)
+		data[PortMirrorDataKey] = PortMirrorInfo{
+			WatchdogSeconds: seconds,
+			Applied:         1,
+			Message:         "镜像已建立；看门狗已同时在节点侧启动",
+			Warnings: []string{
+				"来源接口镜像到目标交换机的流量会翻倍占用带宽",
+			},
+		}
+
+	case OpPortMirrorConfirm:
+		data[PortMirrorDataKey] = PortMirrorInfo{
+			Message: "看门狗已取消，镜像将保持生效",
+		}
+
+	case OpPortMirrorDisable:
+		data[PortMirrorDataKey] = PortMirrorInfo{
+			Message: "镜像已撤销",
 		}
 
 	case OpFirewallApply:

@@ -20,6 +20,7 @@ import (
 	"k_cockpit/internal/importer"
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/node"
+	"k_cockpit/internal/portmirror"
 	"k_cockpit/internal/publicip"
 	"k_cockpit/internal/quota"
 	"k_cockpit/internal/risk"
@@ -68,6 +69,8 @@ type Deps struct {
 	Firewall *firewall.Service
 	// APIKey 提供 API 凭证与一次性令牌（F-1-10）。
 	APIKey *apikey.Service
+	// PortMirror 提供端口镜像与自动撤销看门狗（F-4-09）。
+	PortMirror *portmirror.Service
 
 	SecureCookie bool
 	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
@@ -101,6 +104,7 @@ func Register(h *server.Hertz, deps Deps) {
 	userStorageHandler := handler.NewUserStorage(deps.UserStorage)
 	firewallHandler := handler.NewFirewall(deps.Firewall)
 	apiKeyHandler := handler.NewAPIKey(deps.APIKey)
+	mirrorHandler := handler.NewPortMirror(deps.PortMirror)
 	importerHandler := handler.NewImporter(deps.Importer)
 
 	// 挂上 API 凭证认证：客户端可用 `Authorization: Bearer kc_...` 代替会话 Cookie。
@@ -225,6 +229,22 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/imports", requireAuth, importerHandler.Create)
 		v1.GET("/imports/:id", requireAuth, importerHandler.Get)
 		v1.DELETE("/imports/:id", requireAuth, importerHandler.Delete)
+
+		// 端口镜像（F-4-09）。
+		//
+		// **看门狗与镜像在同一次下发里建立**，且由**节点**计时——控制面是
+		// 通过网络下发指令的，而端口镜像配错恰恰会打垮网络，那时控制面自己
+		// 也发不出回滚指令。一个依赖网络的保险，在它最需要起作用的时候
+		// 一定不在。
+		v1.GET("/port-mirrors", requireAuth, adminOnly, mirrorHandler.List)
+		v1.POST("/port-mirrors", requireAuth, adminOnly, mirrorHandler.Create)
+		v1.PATCH("/port-mirrors/:id", requireAuth, adminOnly, mirrorHandler.Update)
+		v1.DELETE("/port-mirrors/:id", requireAuth, adminOnly, mirrorHandler.Delete)
+		v1.GET("/port-mirrors/:id/precheck", requireAuth, adminOnly, mirrorHandler.Precheck)
+		v1.POST("/port-mirrors/:id/enable", requireAuth, adminOnly, mirrorHandler.Enable)
+		v1.POST("/port-mirrors/:id/confirm", requireAuth, adminOnly, mirrorHandler.Confirm)
+		// 关闭不设门槛。见 handler 上的说明。
+		v1.POST("/port-mirrors/:id/disable", requireAuth, adminOnly, mirrorHandler.Disable)
 
 		// API 凭证（F-1-10）与一次性动作令牌。
 		//

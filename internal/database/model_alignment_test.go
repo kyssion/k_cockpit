@@ -45,6 +45,7 @@ func TestModelColumnsExistInMigrations(t *testing.T) {
 		&model.ShareMount{},
 		&model.FirewallPolicy{}, &model.FirewallRule{}, &model.FirewallVMPolicy{},
 		&model.UserAPIKey{}, &model.AuthActionToken{},
+		&model.PortMirror{},
 	}
 
 	var cache sync.Map
