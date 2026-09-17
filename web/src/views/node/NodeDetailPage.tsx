@@ -9,7 +9,7 @@
  * 的状态，页面顶部必须能一眼看到当前处于哪种模式。藏在第二个页签里会让人
  * 在别处操作失败后，回头才发现原来是维护中。
  */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 
@@ -22,6 +22,7 @@ import { Button } from '@/components/common/Button'
 import { EmptyState, PageLoading } from '@/components/common/Feedback'
 import { Input } from '@/components/common/Input'
 import { Modal } from '@/components/common/Modal'
+import { Meter } from '@/components/common/Meter'
 import { StatusBadge } from '@/components/common/StatusBadge'
 import { formatBytes, formatDateTime, relativeTime } from '@/utils/format'
 import { ENROLL_STATE_LABEL, NODE_STATUS_LABEL, NODE_STATUS_TONE } from '@/utils/labels'
@@ -201,8 +202,20 @@ export function NodeDetailPage() {
 }
 
 function OverviewTab({ node }: { node: NodeView }) {
+  // 指标只在**已接入**的节点上取：未接入的节点连 agent 都没有，
+  // 请求它只会得到一个必然失败的往返。
+  const stats = useQuery({
+    queryKey: ['node-stats', node.id],
+    queryFn: () => nodeApi.stats(node.id),
+    enabled: node.enroll_state === 'enrolled' && node.status !== 'offline',
+    refetchInterval: node.status === 'online' ? 5000 : false,
+  })
+
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
+    <div className="flex flex-col gap-4">
+      <NodeMetrics node={node} stats={stats} />
+
+      <div className="grid gap-4 lg:grid-cols-2">
       <section className="rounded-card border border-line bg-surface p-4">
         <h2 className="text-sm text-ink-3">基本信息</h2>
         <dl className="mt-2.5 flex flex-col gap-2">
@@ -251,8 +264,100 @@ function OverviewTab({ node }: { node: NodeView }) {
           </div>
         )}
       </section>
+      </div>
     </div>
   )
+}
+
+/**
+ * NodeMetrics 渲染宿主机指标（F-6-03）。
+ *
+ * 与虚拟机资源卡的处理方式一致：采集失败时显示「采集失败」而不是一排 0——
+ * 0% 的 CPU 看起来是「机器很闲」，而实际是「不知道」，两者对排查的意义
+ * 完全相反。
+ */
+function NodeMetrics({
+  node,
+  stats,
+}: {
+  node: NodeView
+  stats: UseQueryResult<import('@/api/node').NodeStats>
+}) {
+  if (node.enroll_state !== 'enrolled') {
+    return (
+      <section className="rounded-card border border-line bg-surface p-4">
+        <h2 className="text-sm text-ink-3">运行指标</h2>
+        <p className="mt-2.5 text-sm text-ink-3">节点尚未接入，接入后由 agent 上报指标。</p>
+      </section>
+    )
+  }
+
+  const data = stats.data
+  const memPercent = data && data.mem_total_mb > 0 ? (data.mem_used_mb / data.mem_total_mb) * 100 : 0
+  const diskPercent =
+    data && data.disk_total_bytes > 0 ? (data.disk_used_bytes / data.disk_total_bytes) * 100 : 0
+
+  return (
+    <section className="rounded-card border border-line bg-surface p-4">
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 className="text-sm text-ink-3">运行指标</h2>
+        {data && <span className="text-xs text-ink-3">{relativeTime(data.at)}</span>}
+      </div>
+
+      {stats.isPending ? (
+        <p className="mt-2.5 text-sm text-ink-3">读取中…</p>
+      ) : stats.isError ? (
+        <p className="mt-2.5 text-sm text-warning">指标采集失败：{describe(stats.error)}</p>
+      ) : data ? (
+        <div className="mt-2.5 grid gap-4 lg:grid-cols-2">
+          <div className="flex flex-col gap-3">
+            <Meter
+              label="CPU"
+              detail={`${data.cpu_cores} 核 · 负载 ${data.load_avg_1.toFixed(2)}`}
+              percent={data.cpu_percent}
+            />
+            <Meter
+              label="内存"
+              detail={`${formatBytes(data.mem_used_mb * 1024 * 1024)} / ${formatBytes(
+                data.mem_total_mb * 1024 * 1024,
+              )}`}
+              percent={memPercent}
+            />
+            <Meter
+              label="存储"
+              detail={`${formatBytes(data.disk_used_bytes)} / ${formatBytes(data.disk_total_bytes)}`}
+              percent={diskPercent}
+            />
+          </div>
+
+          <dl className="flex flex-col gap-2">
+            {/* 负载与占用率**分开列**：两者不同步时才有信息量——一台占用率
+                不高但负载持续超过核数的机器，说明有大量进程在等 IO。 */}
+            <Row label="平均负载">
+              {data.load_avg_1.toFixed(2)} / {data.load_avg_5.toFixed(2)} /{' '}
+              {data.load_avg_15.toFixed(2)}
+            </Row>
+            <Row label="虚拟机">
+              {data.vm_count} 台<span className="text-ink-3"> · {data.vm_running} 台运行中</span>
+            </Row>
+            <Row label="宿主机运行">{formatUptime(data.uptime_seconds)}</Row>
+            <Row label="Agent 启动">{formatDateTime(data.agent_started_at)}</Row>
+          </dl>
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+/** formatUptime 把秒换算成「3 天 4 小时」。 */
+function formatUptime(seconds: number): string {
+  if (seconds <= 0) return '—'
+  const days = Math.floor(seconds / 86400)
+  const hours = Math.floor((seconds % 86400) / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  if (days > 0) return `${days} 天 ${hours} 小时`
+  if (hours > 0) return `${hours} 小时 ${minutes} 分`
+  return `${minutes} 分`
 }
 
 function StorageTab({ nodeID }: { nodeID: number }) {

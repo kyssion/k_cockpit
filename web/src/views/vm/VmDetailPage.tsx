@@ -63,6 +63,7 @@ import {
   type VmView,
 } from '@/api/vm'
 import { Button } from '@/components/common/Button'
+import { Meter } from '@/components/common/Meter'
 import { EmptyState, PageLoading } from '@/components/common/Feedback'
 import { Input } from '@/components/common/Input'
 import { Modal } from '@/components/common/Modal'
@@ -867,37 +868,6 @@ function HeroRow({ label, children }: { label: string; children: React.ReactNode
     <div className="flex items-baseline justify-between gap-3 text-base">
       <dt className="shrink-0 text-ink-3">{label}</dt>
       <dd className="truncate text-right text-ink">{children}</dd>
-    </div>
-  )
-}
-
-/** Meter 是一条带数值的计量条。 */
-function Meter({
-  label,
-  detail,
-  percent,
-}: {
-  label: string
-  detail: string
-  percent: number
-}) {
-  const clamped = Math.max(0, Math.min(100, percent))
-  // 高占用标红：这是计量条存在的意义——一眼看出哪一项吃紧。
-  // 阈值取 85% 而不是 90%：留给用户反应的时间比「精确」更重要。
-  const tone = clamped >= 85 ? 'bg-danger' : clamped >= 60 ? 'bg-warning' : 'bg-brand'
-
-  return (
-    <div>
-      <div className="flex items-baseline justify-between gap-2 text-base">
-        <span className="text-ink-3">{label}</span>
-        <span className="kc-nums text-ink">
-          <span className="font-medium">{clamped.toFixed(0)}%</span>
-          <span className="ml-1.5 text-xs text-ink-3">{detail}</span>
-        </span>
-      </div>
-      <div className="mt-1 h-1.5 overflow-hidden rounded-pill bg-line">
-        <div className={`h-full rounded-pill ${tone}`} style={{ width: `${clamped}%` }} />
-      </div>
     </div>
   )
 }

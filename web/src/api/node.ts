@@ -67,5 +67,38 @@ export const nodeApi = {
   setMaintenance: (id: number, enabled: boolean, reason?: string) =>
     patch<NodeView>(`/api/v1/nodes/${id}/maintenance`, { enabled, reason }),
 
+  /**
+   * 宿主机实时指标（F-6-03）。只读探测，不入队。
+   *
+   * 响应含 `at`（采集时刻）：指标是瞬时值，轮询失败时界面会继续显示上一组
+   * 数字，没有采集时刻就分不清「当前」与「几分钟前」。
+   */
+  stats: (id: number) => get<NodeStats>(`/api/v1/nodes/${id}/stats`),
+
   remove: (id: number) => del<void>(`/api/v1/nodes/${id}`),
+}
+
+/** 宿主机的实时指标。 */
+export interface NodeStats {
+  cpu_percent: number
+  cpu_cores: number
+  /** 一分/五分/十五分钟平均负载。与 CPU 占用率**一起看**才有意义： */
+  load_avg_1: number
+  load_avg_5: number
+  load_avg_15: number
+
+  mem_total_mb: number
+  mem_used_mb: number
+
+  disk_total_bytes: number
+  disk_used_bytes: number
+
+  /** 该节点上的虚拟机数量——由**控制面统计**，与列表页数字一致。 */
+  vm_count: number
+  vm_running: number
+
+  uptime_seconds: number
+  /** 与 uptime 分开：agent 重启过往往是排查一连串异常的第一条线索。 */
+  agent_started_at: string
+  at: string
 }
