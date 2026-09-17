@@ -40,6 +40,7 @@ import (
 	"k_cockpit/internal/useradmin"
 	"k_cockpit/internal/userstorage"
 	"k_cockpit/internal/vm"
+	"k_cockpit/internal/vmtag"
 )
 
 func main() {
@@ -175,6 +176,7 @@ func main() {
 	netSvc := networkbridge.NewService(db, mockAgent, recorder)
 	auditLogSvc := auditlog.NewService(db)
 	userAdminSvc := useradmin.NewService(db, recorder, quotaAdapter{svc: quotaSvc})
+	tagSvc := vmtag.NewService(db, recorder)
 	networkSvc := network.NewService(db, mockAgent, queue, recorder)
 
 	// vm 与 storage 都要读设置里的陈旧阈值：把 settingsSvc 作为 Provider
@@ -217,6 +219,7 @@ func main() {
 		NetworkBridge: netSvc,
 		AuditLog:      auditLogSvc,
 		UserAdmin:     userAdminSvc,
+		VMTag:         tagSvc,
 		Storage:       storageSvc,
 		Network:       networkSvc,
 		Settings:      settingsSvc,

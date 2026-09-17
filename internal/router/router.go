@@ -35,6 +35,7 @@ import (
 	"k_cockpit/internal/useradmin"
 	"k_cockpit/internal/userstorage"
 	"k_cockpit/internal/vm"
+	"k_cockpit/internal/vmtag"
 )
 
 // Deps 是路由注册所需的外部依赖。
@@ -80,6 +81,8 @@ type Deps struct {
 	AuditLog *auditlog.Service
 	// UserAdmin 提供用户管理（F-1-07）。
 	UserAdmin *useradmin.Service
+	// VMTag 提供虚拟机标签（F-2-16）。
+	VMTag *vmtag.Service
 
 	SecureCookie bool
 	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
@@ -117,6 +120,7 @@ func Register(h *server.Hertz, deps Deps) {
 	netHandler := handler.NewNetworkBridge(deps.NetworkBridge)
 	auditHandler := handler.NewAuditLog(deps.AuditLog)
 	userAdminHandler := handler.NewUserAdmin(deps.UserAdmin)
+	tagHandler := handler.NewVMTag(deps.VMTag)
 	importerHandler := handler.NewImporter(deps.Importer)
 
 	// 挂上 API 凭证认证：客户端可用 `Authorization: Bearer kc_...` 代替会话 Cookie。
@@ -241,6 +245,19 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/imports", requireAuth, importerHandler.Create)
 		v1.GET("/imports/:id", requireAuth, importerHandler.Get)
 		v1.DELETE("/imports/:id", requireAuth, importerHandler.Delete)
+
+		// 虚拟机标签（F-2-16）。
+		//
+		// 标签与分组解决的不是同一件事：分组互斥（一台机器只属于一个组），
+		// 标签非互斥（可以有任意多个）。合并会立刻遇到矛盾——一台机器既是
+		// 「生产」又是「数据库」，而分组只能放一个。
+		//
+		// 保存是**整体替换**而不是增量增删：界面上改完直接保存，而 add/remove
+		// 会让「加了又删、删了又加」的中间态被如实写进审计流水。
+		v1.GET("/tags", requireAuth, tagHandler.All)
+		v1.GET("/tags/vms", requireAuth, tagHandler.VMsByTag)
+		v1.GET("/vms/:id/tags", requireAuth, tagHandler.List)
+		v1.PUT("/vms/:id/tags", requireAuth, tagHandler.Set)
 
 		// 用户管理（F-1-07）。整体归管理员。
 		//
