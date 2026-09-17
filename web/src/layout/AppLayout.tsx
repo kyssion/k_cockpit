@@ -25,6 +25,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/', label: '工作台' },
   { to: '/vm', label: '虚拟机' },
   { to: '/task', label: '任务中心' },
+  { to: '/template', label: '模板' },
   { to: '/my-storage', label: '我的存储' },
   { to: '/public-ip', label: '公网 IP' },
   { to: '/node', label: '节点管理', roles: ['admin'] },

@@ -67,6 +67,17 @@ export interface VmView {
   rescue_active: boolean
   /** 进入救援的时刻。 */
   rescue_since?: string
+
+  /** 来源模板（F-3-02）；为空表示从零安装或来源已删。 */
+  template_id?: number
+  /**
+   * 克隆方式。
+   *
+   * `linked` 表示磁盘只是模板之上的一层覆盖——**模板被删后数据就不可用了**，
+   * 而且不会立刻报错。界面必须把这条依赖显示出来，否则用户无法理解为什么
+   * 「删掉一个模板」会让自己的机器出事。
+   */
+  clone_mode?: 'full' | 'linked'
 }
 
 export interface VmListParams {
@@ -86,6 +97,21 @@ export interface CreateVmInput {
   disk_gb: number
   remark?: string
   group_name?: string
+
+  /**
+   * 从模板克隆（F-3-02）；留空表示从零安装。
+   *
+   * 两者在控制面是同一个入口、同一个任务类型——对用户来说「从模板建一台
+   * 机器」与「新建一台机器」是同一件事，只在最后下发时分开。
+   */
+  template_id?: number
+  /**
+   * 克隆方式，`template_id` 存在时生效，留空按 `full` 处理。
+   *
+   * **链式克隆必须是显式选择**：它引入了「父盘没了数据就没了」这个依赖，
+   * 不该是默认行为。
+   */
+  clone_mode?: 'full' | 'linked'
 }
 
 /** 创建/电源/删除的结果：都是任务标识，操作本身异步执行。 */

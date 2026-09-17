@@ -4,6 +4,7 @@ import { Link } from 'react-router'
 
 import { ApiError, NetworkError } from '@/api/client'
 import { nodeApi } from '@/api/node'
+import { CLONE_MODE_HINT, templateApi, type CloneMode } from '@/api/template'
 import {
   vmApi,
   type BatchResult,
@@ -534,8 +535,19 @@ function CreateVmModal({ open, onClose }: { open: boolean; onClose: () => void }
   const [diskGB, setDiskGB] = useState(20)
   const [error, setError] = useState('')
   const [taskID, setTaskID] = useState<number | null>(null)
+  const [templateID, setTemplateID] = useState(0)
+  const [cloneMode, setCloneMode] = useState<CloneMode>('full')
 
   const nodes = useQuery({ queryKey: ['nodes'], queryFn: nodeApi.list })
+
+  // 只列出**目标节点上**可用的模板：模板盘就在它所属节点的存储池里，
+  // 跨节点使用需要先导出再导入。把别的节点的模板列出来、选下去再被拒绝，
+  // 只会让人以为是自己操作错了。
+  const templates = useQuery({
+    queryKey: ['templates', { node_id: nodeID, only_ready: true }],
+    queryFn: () => templateApi.list({ node_id: nodeID, only_ready: true }),
+    enabled: open && nodeID > 0,
+  })
 
   const create = useMutation({
     mutationFn: () =>
@@ -545,6 +557,8 @@ function CreateVmModal({ open, onClose }: { open: boolean; onClose: () => void }
         vcpu,
         memory_mb: memoryMB,
         disk_gb: diskGB,
+        template_id: templateID > 0 ? templateID : undefined,
+        clone_mode: templateID > 0 ? cloneMode : undefined,
       }),
     onSuccess: (result) => {
       setTaskID(result.task_id)
@@ -559,9 +573,22 @@ function CreateVmModal({ open, onClose }: { open: boolean; onClose: () => void }
   function handleClose() {
     setName('')
     setNodeID(0)
+    setTemplateID(0)
+    setCloneMode('full')
     setError('')
     setTaskID(null)
     onClose()
+  }
+
+  // 选中模板后把默认规格填进来：那些值取自制备模板时的源虚拟机，是最合理
+  // 的起点。**不是**强制——用户可以改，改了就以他填的为准（磁盘另有下限）。
+  function pickTemplate(id: number) {
+    setTemplateID(id)
+    const tpl = (templates.data ?? []).find((t) => t.id === id)
+    if (!tpl) return
+    if (tpl.default_cpu > 0) setVcpu(tpl.default_cpu)
+    if (tpl.default_memory_mb > 0) setMemoryMB(tpl.default_memory_mb)
+    if (tpl.min_disk_gb > 0) setDiskGB(tpl.min_disk_gb)
   }
 
   function handleSubmit(event: FormEvent) {
@@ -632,6 +659,55 @@ function CreateVmModal({ open, onClose }: { open: boolean; onClose: () => void }
               </p>
             )}
           </div>
+
+          {/* 模板选择。留空 = 从零安装（走安装介质），选模板 = 克隆一份
+              现成的系统盘。两条路都在这里，不另开一个「从模板创建」入口——
+              对用户来说它们是同一件事：「建一台机器，给我一个系统」。 */}
+          {nodeID > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="vm-template" className="text-sm font-medium text-ink-2">
+                模板（可选）
+              </label>
+              <select
+                id="vm-template"
+                value={templateID}
+                onChange={(e) => pickTemplate(Number(e.target.value))}
+                disabled={create.isPending}
+                className="h-9 rounded-control border border-line-strong bg-sunken px-3 text-base text-ink focus:outline-none focus-visible:border-brand"
+              >
+                <option value={0}>不使用模板（从零安装）</option>
+                {(templates.data ?? []).map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name} · {t.default_cpu} 核 {t.default_memory_mb} MB
+                  </option>
+                ))}
+              </select>
+
+              {templateID > 0 && (
+                <div className="mt-1 flex flex-col gap-1.5 rounded-control border border-line px-3 py-2.5">
+                  {(['full', 'linked'] as const).map((mode) => (
+                    <label key={mode} className="flex cursor-pointer items-start gap-2.5">
+                      <input
+                        type="radio"
+                        className="mt-1"
+                        name="clone-mode"
+                        checked={cloneMode === mode}
+                        onChange={() => setCloneMode(mode)}
+                      />
+                      <span>
+                        <span className="block text-base text-ink">
+                          {CLONE_MODE_HINT[mode].label}
+                        </span>
+                        <span className="block text-sm text-ink-3">
+                          {CLONE_MODE_HINT[mode].detail}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="grid grid-cols-3 gap-3">
             <Input

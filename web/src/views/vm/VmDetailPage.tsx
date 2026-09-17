@@ -310,6 +310,23 @@ export function VmDetailPage() {
 
       <VmHero vm={vm} />
 
+      {/* 链式克隆的依赖必须显示出来：磁盘只是模板之上的一层覆盖，模板被删后
+          数据就不可用了，而且不会立刻报错。用户看不到这条关系，就无法理解
+          为什么「删掉一个模板」会让自己的机器出事。 */}
+      {vm.clone_mode === 'linked' && (
+        <div className="rounded-card border border-line bg-raised px-4 py-3">
+          <p className="text-base text-ink-2">
+            此虚拟机是模板
+            <span className="text-ink"> #{vm.template_id}</span> 的链式克隆，
+            磁盘以该模板为底层。
+            <span className="font-medium text-ink">
+              模板被删除后，这台机器的数据将不可用
+            </span>
+            ——且不会立刻报错，要等到下次开机或读到未缓存的数据块时才暴露。
+          </p>
+        </div>
+      )}
+
       {/* 救援提示放在锁定提示之前：救援改变的是「你现在看到的是什么系统」，
           比「能不能删」更根本。救援模式下盘型、网卡、引导顺序都被改过，
           把它当成日常状态会让人做出错误判断。 */}
