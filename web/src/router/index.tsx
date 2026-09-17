@@ -71,6 +71,7 @@ export const router = createBrowserRouter([
           { path: 'import', element: <ImportPage /> },
           { path: 'public-ip', element: <PublicIPPage /> },
           { path: 'security-group', element: <SecurityGroupPage /> },
+          { path: 'my-storage', element: <MyStoragePage /> },
           { path: 'public-ip', element: pending('公网 IP', '资源池与绑定') },
           { path: 'template', element: <TemplatePage /> },
           { path: 'node', element: <NodeListPage /> },
