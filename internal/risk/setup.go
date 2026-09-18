@@ -154,3 +154,38 @@ func SetupState(user *model.User, devBypass bool) SetupInfo {
 func NormalizeCode(code string) string {
 	return strings.TrimSpace(code)
 }
+
+// RevokeUserGrants 丢弃该用户全部未消费的一次性许可，返回丢弃数量。
+func (g *Guard) RevokeUserGrants(userID int64) int {
+	return g.grants.RevokeUser(userID)
+}
+
+// RegenerateRecoveryCodes 生成一批新的恢复码并**作废旧的全部**（F-10-01）。
+//
+// 与 ConfirmTOTPSetup 里那一段是同一个动作（生成 + 写回 + 作废旧许可），
+// 区别只在于不重新生成 TOTP 密钥——用户是在已有的验证器上补充恢复码。
+//
+// **旧码必须一起作废**：发一批新的"万能钥匙"而旧的还能用，等于把可用的
+// 入口翻了一倍，而用户以为只换了新的那一张纸——抽屉里那张旧的依然能进来。
+func (g *Guard) RegenerateRecoveryCodes(ctx context.Context, user *model.User) ([]string, error) {
+	codes, hashes, err := GenerateRecoveryCodes()
+	if err != nil {
+		log.Printf("[risk] 生成恢复码失败: %v", err)
+		return nil, api.Internal()
+	}
+
+	now := time.Now()
+	if err := g.db.WithContext(ctx).Model(&model.User{}).
+		Where("id = ?", user.ID).
+		Updates(map[string]any{
+			"recovery_codes_hash": hashes,
+			"security_updated_at": now,
+		}).Error; err != nil {
+		log.Printf("[risk] 更新恢复码失败: %v", err)
+		return nil, api.Internal()
+	}
+
+	// 此前签发的一次性许可作废：它们是在旧凭据下换来的。
+	g.grants.RevokeUser(user.ID)
+	return codes, nil
+}

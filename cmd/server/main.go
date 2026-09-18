@@ -269,6 +269,7 @@ func main() {
 		PortMirror:    mirrorSvc,
 		NetworkBridge: netSvc,
 		AuditLog:      auditLogSvc,
+		AuditRecorder: recorder,
 		UserAdmin:     userAdminSvc,
 		VMTag:         tagSvc,
 		Monitor:       monitorSvc,

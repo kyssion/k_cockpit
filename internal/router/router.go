@@ -13,6 +13,7 @@ import (
 
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/apikey"
+	"k_cockpit/internal/audit"
 	"k_cockpit/internal/auditlog"
 	"k_cockpit/internal/auth"
 	"k_cockpit/internal/authz"
@@ -92,6 +93,12 @@ type Deps struct {
 	NetworkBridge *networkbridge.Service
 	// AuditLog 提供审计流水查询（F-1-12）。
 	AuditLog *auditlog.Service
+	// AuditRecorder 供**跨服务**的写操作记审计用。
+	//
+	// 多数 handler 不需要它：那个包的 service 自己持有记录器。但账号自管理
+	// 横跨 auth（改凭据）与 risk（一次性许可）两个服务，而"改密码"这件事
+	// 本身不属于它们中任何一个——记在调用方最直接。
+	AuditRecorder *audit.Recorder
 	// UserAdmin 提供用户管理（F-1-07）。
 	UserAdmin *useradmin.Service
 	// VMTag 提供虚拟机标签（F-2-16）。
@@ -119,6 +126,7 @@ func Register(h *server.Hertz, deps Deps) {
 	vmHandler := handler.NewVM(deps.VM, deps.Risk)
 	taskHandler := handler.NewTask(deps.Task)
 	securityHandler := handler.NewSecurity(deps.Risk, deps.Auth)
+	accountHandler := handler.NewAccount(deps.Auth, deps.Risk, deps.AuditRecorder)
 	scheduleHandler := handler.NewSchedule(deps.Schedule, deps.Risk)
 	storageHandler := handler.NewStorage(deps.Storage, deps.Risk)
 	networkHandler := handler.NewNetwork(deps.Network)
@@ -173,6 +181,19 @@ func Register(h *server.Hertz, deps Deps) {
 		// 清单是**唯一事实来源**，前端不得硬编码第二份（R-002）。
 		v1.GET("/security/high-risk-policy", requireAuth, securityHandler.Policy)
 		v1.POST("/auth/risk-verification", requireAuth, securityHandler.Verify)
+
+		// 账号自管理（F-1-03 / F-10-01）。
+		//
+		// 三件事都要提供**当前密码**。这不是形式主义：拿到一个未锁屏的浏览器
+		// 或偷到一个会话令牌就能改掉密码并把主人锁在外面，而那时主人连
+		// "怎么进不去了"都查不出来——会话是合法的，日志里看不出异常。
+		//
+		// **刻意不要求二次验证**：用户重新生成恢复码的常见原因恰恰是"手机
+		// 丢了、恢复码快用完了"，那时他刚用掉一个恢复码登进来。要求 TOTP
+		// 就是要求他拿出已经丢了的东西，那条路会彻底走不通。
+		v1.PUT("/auth/password", requireAuth, accountHandler.ChangePassword)
+		v1.PUT("/auth/username", requireAuth, accountHandler.ChangeUsername)
+		v1.POST("/auth/recovery-codes", requireAuth, accountHandler.RegenerateRecoveryCodes)
 
 		// 二次验证方式的绑定：没有绑定渠道，428 将永远无法通过。
 		v1.GET("/auth/security-setup", requireAuth, securityHandler.SetupStatus)

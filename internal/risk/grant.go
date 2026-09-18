@@ -122,6 +122,25 @@ func (s *Store) RevokeSession(sessionID int64) int {
 	return removed
 }
 
+// RevokeUser 丢弃某用户名下的全部未消费许可，返回丢弃数量。
+//
+// 用于**改密码**：那些许可是在旧密码下签发的，而改密码的动机通常正是
+// "我怀疑账号被盗"——把许可留着，等于让攻击者在有效期内继续用他换来的
+// 那张通行证，而用户以为已经把人踢出去了。
+func (s *Store) RevokeUser(userID int64) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	removed := 0
+	for token, g := range s.grants {
+		if g.UserID == userID {
+			delete(s.grants, token)
+			removed++
+		}
+	}
+	return removed
+}
+
 // cleanupLocked 清理已过期的许可。调用方须持有锁。
 //
 // 惰性清理而非后台定时任务：许可数量天然很少（每人每次操作至多一个），

@@ -290,6 +290,26 @@ func (s *Service) Sessions(ctx context.Context, userID int64) ([]model.Session, 
 	return sessions, nil
 }
 
+// RevokeOtherSessions 撤销该用户除指定会话之外的全部会话，返回撤销条数。
+//
+// 它服务于「改密码」：改密码最常见的动机就是"我怀疑账号被盗"，而如果旧会话
+// 还活着，这个动作就失去了全部意义——攻击者的会话继续有效，用户却以为已经
+// 把对方踢出去了。
+//
+// 用一个 UPDATE 而不是先查再逐条撤销：逐条需要 N 次往返，而中途失败会留下
+// 「一部分撤销了、一部分没有」的中间状态——那种状态下用户无法判断自己是否
+// 安全，而重试的结果也不确定。
+func (s *Service) RevokeOtherSessions(ctx context.Context, userID, keepRowID int64) (int64, error) {
+	res := s.db.WithContext(ctx).Model(&model.Session{}).
+		Where("user_id = ? AND id <> ? AND revoked_at IS NULL", userID, keepRowID).
+		Update("revoked_at", time.Now())
+	if res.Error != nil {
+		log.Printf("[auth] 撤销其它会话失败: %v", res.Error)
+		return 0, api.Internal()
+	}
+	return res.RowsAffected, nil
+}
+
 // RevokeSession 撤销指定会话，只能撤销自己名下的（他人会话返回 404）。
 func (s *Service) RevokeSession(ctx context.Context, userID, sessionRowID int64, ci ClientInfo) error {
 	res := s.db.WithContext(ctx).Model(&model.Session{}).
