@@ -31,6 +31,9 @@ export function ConsolePage() {
   const [password, setPassword] = useState('')
   const [passwordAsked, setPasswordAsked] = useState(false)
   const [configOpen, setConfigOpen] = useState(false)
+  // 要配置哪一种控制台。两种协议**共用同一套守卫**（二次验证、监听地址切换），
+  // 因此这里只是一个"改哪几个字段"的选择，不是两条独立的路。
+  const [protocol, setProtocol] = useState('vnc')
 
   const containerRef = useRef<HTMLDivElement>(null)
   const rfbRef = useRef<RFB | null>(null)
@@ -42,8 +45,8 @@ export function ConsolePage() {
   })
 
   const config = useQuery({
-    queryKey: ['console', vmID],
-    queryFn: () => consoleApi.get(vmID),
+    queryKey: ['console', vmID, protocol],
+    queryFn: () => consoleApi.get(vmID, protocol),
     enabled: Number.isFinite(vmID),
   })
 
@@ -213,6 +216,8 @@ export function ConsolePage() {
         open={configOpen}
         vmID={vmID}
         config={cfg}
+        protocol={protocol}
+        onProtocolChange={setProtocol}
         onClose={() => setConfigOpen(false)}
       />
     </div>
@@ -308,11 +313,15 @@ function ConsoleSettingsModal({
   open,
   vmID,
   config,
+  protocol,
+  onProtocolChange,
   onClose,
 }: {
   open: boolean
   vmID: number
   config: ConsoleConfig
+  protocol: string
+  onProtocolChange: (p: string) => void
   onClose: () => void
 }) {
   const queryClient = useQueryClient()
@@ -321,7 +330,11 @@ function ConsoleSettingsModal({
   const [notice, setNotice] = useState('')
 
   const update = useMutation({
-    mutationFn: (input: Parameters<typeof consoleApi.update>[1]) => consoleApi.update(vmID, input),
+    // **协议在这里统一注入**，而不是让每个调用点各自带上。
+    // 逐个去改是漏改的来源，而漏改的表现是"我切到 SPICE 上点了开关，
+    // 结果改的还是 VNC"——那不会报错，只会让人以为开关坏了。
+    mutationFn: (input: Parameters<typeof consoleApi.update>[1]) =>
+      consoleApi.update(vmID, { ...input, protocol }),
     onSuccess: (_cfg, input) => {
       setError('')
       setPassword('')
@@ -344,6 +357,38 @@ function ConsoleSettingsModal({
   return (
     <Modal open={open} title="控制台设置" onClose={handleClose}>
       <div className="flex flex-col gap-4">
+        {/* 协议选择：两种协议**共用同一套守卫**，因此这里只是选"改哪几个
+            字段"，不是两条独立的路。只列出**可用**的协议——SPICE 是 libvirt
+            编译期可选项，列出一个点了打不开的选项会让用户去反复检查
+            "是不是我哪里配错了"。 */}
+        {(config.protocols?.length ?? 0) > 1 && (
+          <div className="flex flex-col gap-1.5">
+            <span className="text-base text-ink">协议</span>
+            <div className="flex gap-2">
+              {(config.protocols ?? []).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => onProtocolChange(p)}
+                  className={`rounded-control px-3 py-1 text-sm ${
+                    protocol === p
+                      ? 'bg-primary/10 text-primary'
+                      : 'text-ink-3 hover:bg-sunken hover:text-ink-2'
+                  }`}
+                >
+                  {p.toUpperCase()}
+                </button>
+              ))}
+            </div>
+            {protocol === 'spice' && (
+              <p className="rounded-control border border-line bg-sunken px-3 py-2 text-xs text-ink-3">
+                SPICE 的价值在于外部客户端（声音、USB 重定向、多显示器）——
+                这里的配置是给 virt-viewer 这类客户端用的。面板内置的查看器是
+                VNC 的，SPICE 的画面请用外部客户端连接上面的地址与端口。
+              </p>
+            )}
+          </div>
+        )}
+
         <div className="flex items-center justify-between gap-4 rounded-control border border-line px-3 py-2.5">
           <div className="flex flex-col">
             <span className="text-base text-ink">开启控制台</span>
@@ -369,7 +414,9 @@ function ConsoleSettingsModal({
             {config.has_password && <span className="ml-2 text-xs text-success">已设置</span>}
           </span>
           <span className="text-sm text-ink-3">
-            密码最长 8 位（VNC 协议限制）。设置后无法查看，只能重新设置。
+            {protocol === 'vnc'
+              ? '密码最长 8 位（VNC 协议限制）。设置后无法查看，只能重新设置。'
+              : '设置后无法查看，只能重新设置。'}
           </span>
           <div className="flex gap-2">
             <input

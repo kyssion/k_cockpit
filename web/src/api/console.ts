@@ -15,6 +15,11 @@ export interface ConsoleConfig {
   available: boolean
   unavailable_reason?: string
 
+  /** **可用**的控制台协议（SPICE 是 libvirt 编译期可选项，要探测；VNC 恒可用）。 */
+  protocols: string[]
+  /** 当前所选协议。 */
+  protocol: string
+
   enabled: boolean
   port?: number
   /** 监听地址。对外暴露时为 0.0.0.0，否则为 127.0.0.1。 */
@@ -31,15 +36,20 @@ export interface ConsoleConfig {
 }
 
 export interface ConsoleUpdateInput {
+  /** 要配置哪一种控制台（vnc / spice），留空按 VNC。 */
+  protocol?: string
   enabled?: boolean
-  /** 只写不读。VNC 协议限制，最长 8 位。 */
+  /** 只写不读。VNC 协议限制最长 8 位；SPICE 无此限制。 */
   password?: string
   /** 高危：仅变更此项时服务端会要求二次验证。 */
   exposed?: boolean
 }
 
 export const consoleApi = {
-  get: (vmID: number) => get<ConsoleConfig>(`/api/v1/vms/${vmID}/console`),
+  get: (vmID: number, protocol?: string) =>
+    get<ConsoleConfig>(
+      `/api/v1/vms/${vmID}/console${protocol ? `?protocol=${protocol}` : ''}`,
+    ),
   update: (vmID: number, input: ConsoleUpdateInput) =>
     patch<ConsoleConfig>(`/api/v1/vms/${vmID}/console`, input),
 }
