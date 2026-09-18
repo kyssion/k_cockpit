@@ -16,6 +16,7 @@ import { PublicIPPage } from '@/views/network/PublicIPPage'
 import { FirewallPage } from '@/views/network/FirewallPage'
 import { PortMirrorPage } from '@/views/network/PortMirrorPage'
 import { SecurityGroupPage } from '@/views/network/SecurityGroupPage'
+import { PortSecurityPage } from '@/views/network/PortSecurityPage'
 import { ImportPage } from '@/views/storage/ImportPage'
 import { MyStoragePage } from '@/views/storage/MyStoragePage'
 import { StorageVolumePage } from '@/views/storage/StorageVolumePage'
@@ -76,6 +77,7 @@ export const router = createBrowserRouter([
           { path: 'import', element: <ImportPage /> },
           { path: 'public-ip', element: <PublicIPPage /> },
           { path: 'security-group', element: <SecurityGroupPage /> },
+          { path: 'port-security', element: <PortSecurityPage /> },
           { path: 'firewall', element: <FirewallPage /> },
           { path: 'port-mirror', element: <PortMirrorPage /> },
           { path: 'api-keys', element: <APIKeyPage /> },
