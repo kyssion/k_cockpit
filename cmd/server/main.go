@@ -29,6 +29,7 @@ import (
 	"k_cockpit/internal/networkbridge"
 	"k_cockpit/internal/node"
 	"k_cockpit/internal/portmirror"
+	"k_cockpit/internal/portsecurity"
 	"k_cockpit/internal/publicip"
 	"k_cockpit/internal/quota"
 	"k_cockpit/internal/risk"
@@ -158,6 +159,8 @@ func main() {
 	queue.Register(storage.NewShareExecutor(db, mockAgent))
 	// 存储卷要跑 pvcreate/vgcreate/lvcreate，删卷还要逆序释放设备。
 	queue.Register(storage.NewVolumeExecutor(db, mockAgent))
+	// 端口安全要往节点流表里写规则。
+	queue.Register(portsecurity.NewExecutor(db, mockAgent))
 	// 网络变更（F-2-03）：三种资源各一个执行器，共用 vm:<id> 资源锁。
 	queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
 	queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))
@@ -207,6 +210,7 @@ func main() {
 
 	monitorSvc := monitor.NewService(db)
 	schedulerSvc := sched.NewService(db, schedRegistry)
+	portSecuritySvc := portsecurity.NewService(db, mockAgent, recorder, queue)
 	networkSvc := network.NewService(db, mockAgent, queue, recorder)
 
 	// vm 与 storage 都要读设置里的陈旧阈值：把 settingsSvc 作为 Provider
@@ -246,6 +250,7 @@ func main() {
 		SecurityGroup: sgSvc,
 		UserStorage:   userStorageSvc,
 		Scheduler:     schedulerSvc,
+		PortSecurity:  portSecuritySvc,
 		Firewall:      firewallSvc,
 		APIKey:        apiKeySvc,
 		PortMirror:    mirrorSvc,

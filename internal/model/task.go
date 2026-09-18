@@ -124,6 +124,9 @@ const (
 	// 目录共享的挂载与卸载（f-5-06）。
 	TaskShareMount = "share.mount"
 
+	// 端口安全策略下发（f-4-08）。下发的是**期望状态**而不是增量指令。
+	TaskPortSecurityApply = "port_security.apply"
+
 	// 安全组规则应用（f-4-04）。下发的是**汇总去重后**的生效规则。
 	TaskSecurityGroupApply = "security_group.apply"
 

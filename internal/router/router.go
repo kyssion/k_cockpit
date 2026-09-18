@@ -24,6 +24,7 @@ import (
 	"k_cockpit/internal/networkbridge"
 	"k_cockpit/internal/node"
 	"k_cockpit/internal/portmirror"
+	"k_cockpit/internal/portsecurity"
 	"k_cockpit/internal/publicip"
 	"k_cockpit/internal/quota"
 	"k_cockpit/internal/risk"
@@ -73,6 +74,8 @@ type Deps struct {
 	UserStorage *userstorage.Service
 	// Scheduler 提供周期性调度器与调度事件查询（F-7-04）。
 	Scheduler *scheduler.Service
+	// PortSecurity 提供端口安全（F-4-08）。
+	PortSecurity *portsecurity.Service
 	// Firewall 提供双层防火墙策略（F-4-11）。
 	Firewall *firewall.Service
 	// APIKey 提供 API 凭证与一次性令牌（F-1-10）。
@@ -122,6 +125,7 @@ func Register(h *server.Hertz, deps Deps) {
 	userStorageHandler := handler.NewUserStorage(deps.UserStorage)
 	volumeHandler := handler.NewStorageVolume(deps.Storage)
 	schedulerHandler := handler.NewScheduler(deps.Scheduler)
+	portSecurityHandler := handler.NewPortSecurity(deps.PortSecurity)
 	firewallHandler := handler.NewFirewall(deps.Firewall)
 	apiKeyHandler := handler.NewAPIKey(deps.APIKey)
 	mirrorHandler := handler.NewPortMirror(deps.PortMirror)
@@ -368,6 +372,19 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.GetVMPolicy)
 		v1.PUT("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.SetVMPolicy)
 		v1.DELETE("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.ClearVMPolicy)
+
+		// 端口安全（F-4-08）。
+		//
+		// 归管理员：它会改虚拟机所在**二层网段**的连通性——一个租户给自己
+		// 开端口隔离，影响的是同网段所有机器（包括别人的），而"同网段"
+		// 这件事在界面上看不出来，租户无法判断自己会波及谁。
+		//
+		// 启用走**预检 → 确认**：同网段失联是不可从界面直接看出来的后果，
+		// 而能力是否具备更不能等到点下"启用"才告诉用户。
+		v1.GET("/port-security", requireAuth, adminOnly, portSecurityHandler.List)
+		v1.POST("/port-security/preview", requireAuth, adminOnly, portSecurityHandler.Preview)
+		v1.POST("/port-security", requireAuth, adminOnly, portSecurityHandler.Apply)
+		v1.DELETE("/port-security/:id", requireAuth, adminOnly, portSecurityHandler.Disable)
 
 		// 调度器框架（F-7-04）。
 		//

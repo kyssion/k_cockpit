@@ -53,6 +53,13 @@ func (m *MockClient) WithStageDelay(d time.Duration) *MockClient {
 // 控制面不该替它猜。
 func stagePlan(op Operation) [][2]string {
 	switch op.Kind {
+	case OpPortSecurityApply:
+		// 三项保护各对应一组流表：期望状态下发之后，节点上就是这些规则。
+		return [][2]string{
+			{"render_rules", "渲染流表"},
+			{"apply_flows", "写入 OpenFlow 流表"},
+			{"verify_flows", "校验流表状态"},
+		}
 	case OpVMCreate:
 		return [][2]string{
 			{"resource_check", "校验宿主机资源"},
@@ -677,6 +684,65 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 			Missing: map[string]string{
 				CapabilityOVS: "未检测到 Open vSwitch",
 			},
+		}
+
+	case OpPortSecurityPrecheck:
+		// **这里报告 OVS 可用，而 OpNetworkProbe / OpNodeNetwork 报告它缺失。**
+		//
+		// 这个矛盾是刻意留下的，选的是两边各要什么：
+		//
+		//   - 网络页面需要演示**降级**：能力缺失时该显示什么、给出哪个安装
+		//     命令。那条分支只能靠"缺"来走到。
+		//   - 端口安全与端口镜像**以 OVS 为前提**。若这里一并报缺失，这两
+		//     块功能在演示环境里就完全不可用——用户看不到它们长什么样、会
+		//     下发什么规则，而"根本没法配"与"配了不生效"是两种不同的坏，
+		//     后者更危险，但前者让整块功能在界面上不存在。
+		//
+		// 真实节点上两者必然一致（都来自同一次探测）。要消掉这个矛盾，
+		// 应当给 mock 引入**多节点场景**（一台装了 OVS、一台没装），而不是
+		// 让某一处继续将就。这一条记在这里，免得后来的人以为是笔误。
+		spoof, _ := op.Params["spoofing_guard"].(bool)
+		iso, _ := op.Params["isolation"].(bool)
+		pps, _ := op.Params["pps_limit"].(int)
+
+		rules := []string{"# 端口 " + op.Target + " 的端口安全规则"}
+		if spoof {
+			rules = append(rules,
+				"priority=200,ip,dl_src=<guest-mac>,nw_src=<guest-ip> actions=normal",
+				"priority=100,ip actions=drop   # 源地址不属于本网口")
+		}
+		if iso {
+			rules = append(rules,
+				"priority=150,ip,nw_src=<guest-ip> actions=drop   # 端口隔离")
+		}
+		if pps > 0 {
+			rules = append(rules,
+				"meter=<m0> pktps="+strconv.Itoa(pps)+",burst   # 包速率限制")
+		}
+		data[PortSecurityPrecheckKey] = PortSecurityPrecheck{
+			Capabilities: []PortSecurityCapability{
+				{Key: "network.ovs", Label: "Open vSwitch", Required: true},
+				{Key: "network.ovs.openflow13", Label: "OpenFlow 1.3", Required: true},
+				{
+					Key: "network.ovs.meter", Label: "OVS 包速率 meter",
+					// **非必需**：缺它只失去限速能力，防伪造与隔离照常工作。
+					// 标成必需会让一个没装 meter 的节点连防伪造都用不了。
+					Required: pps > 0,
+					Missing:  pps > 0,
+					Reason:   "未检测到 OVS meter",
+					Fix:      "apt install openvswitch-common   # 需要支持 meter 的版本",
+				},
+			},
+			Rules: rules,
+			Warnings: []string{
+				"该网口上已有 2 条手工添加的流表，应用后将以控制面的规则为准",
+			},
+		}
+
+	case OpPortSecurityApply:
+		data[PortSecurityDataKey] = PortSecurityInfo{
+			Applied: true,
+			Message: "端口安全规则已写入节点流表",
 		}
 
 	case OpStoragePoolScan:
