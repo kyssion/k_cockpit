@@ -25,6 +25,7 @@ import { SchedulerPage } from '@/views/system/SchedulerPage'
 import { DiagnosticsPage } from '@/views/system/DiagnosticsPage'
 import { VersionPage } from '@/views/system/VersionPage'
 import { LogPage } from '@/views/system/LogPage'
+import { ResourceQuotaPage } from '@/views/settings/ResourceQuotaPage'
 import { TemplatePage } from '@/views/template/TemplatePage'
 import { APIKeyPage } from '@/views/security/APIKeyPage'
 import { SecurityPage } from '@/views/security/SecurityPage'
@@ -95,6 +96,7 @@ export const router = createBrowserRouter([
           { path: 'diagnostics', element: <DiagnosticsPage /> },
           { path: 'version', element: <VersionPage /> },
           { path: 'logs', element: <LogPage /> },
+          { path: 'resource-quota', element: <ResourceQuotaPage /> },
           { path: 'network', element: <NetworkPage /> },
           { path: 'network/base', element: <NetworkPage2 /> },
           // 用户管理（F-1-07）仍是占位。

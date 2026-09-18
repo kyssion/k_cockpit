@@ -42,6 +42,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/diagnostics', label: '诊断导出', roles: ['admin'] },
   { to: '/version', label: '版本与关于' },
   { to: '/logs', label: '日志', roles: ['admin'] },
+  { to: '/resource-quota', label: '资源配额', roles: ['admin'] },
   { to: '/network', label: '网络中心', roles: ['admin'] },
   { to: '/network/base', label: '网络底座', roles: ['admin'] },
   { to: '/firewall', label: '防火墙', roles: ['admin'] },
