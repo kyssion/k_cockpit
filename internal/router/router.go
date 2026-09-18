@@ -28,6 +28,7 @@ import (
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/networkbridge"
 	"k_cockpit/internal/node"
+	"k_cockpit/internal/passthrough"
 	"k_cockpit/internal/portmirror"
 	"k_cockpit/internal/portsecurity"
 	"k_cockpit/internal/publicip"
@@ -102,6 +103,8 @@ type Deps struct {
 	QuotaEnforce *quotaenforce.Service
 	// HostFirewall 提供宿主机防火墙（F-4-11 第一层）。
 	HostFirewall *hostfirewall.Service
+	// Passthrough 提供 PCIe 直通。
+	Passthrough *passthrough.Service
 	// AuditRecorder 供**跨服务**的写操作记审计用。
 	//
 	// 多数 handler 不需要它：那个包的 service 自己持有记录器。但账号自管理
@@ -155,6 +158,7 @@ func Register(h *server.Hertz, deps Deps) {
 	loggingHandler := handler.NewLogging(deps.Logging, deps.AuditRecorder)
 	quotaEnforceHandler := handler.NewQuotaEnforce(deps.QuotaEnforce)
 	hostFirewallHandler := handler.NewHostFirewall(deps.HostFirewall)
+	passthroughHandler := handler.NewPassthrough(deps.Passthrough)
 	firewallHandler := handler.NewFirewall(deps.Firewall)
 	apiKeyHandler := handler.NewAPIKey(deps.APIKey)
 	mirrorHandler := handler.NewPortMirror(deps.PortMirror)
@@ -414,6 +418,21 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.GetVMPolicy)
 		v1.PUT("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.SetVMPolicy)
 		v1.DELETE("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.ClearVMPolicy)
+
+		// PCIe 直通（GPU 等）。
+		//
+		// 归管理员：绑定设备会**改变宿主机上设备的归属**——把一块卡从宿主
+		// 驱动抢过来，宿主就看不到它了。若那块卡正被宿主使用（例如唯一的
+		// 网卡），绑定会让宿主机**当场失去网络**，而面板正是通过网络管理的。
+		//
+		// 挂载到虚拟机**要求关机**：直通设备不支持热插拔，而失败方式是
+		// 一台机器卡在半启动状态。
+		v1.GET("/host/passthrough", requireAuth, adminOnly, passthroughHandler.Overview)
+		v1.POST("/host/passthrough/bind", requireAuth, adminOnly, passthroughHandler.Bind)
+		v1.POST("/host/passthrough/unbind", requireAuth, adminOnly, passthroughHandler.Unbind)
+		v1.GET("/vms/:id/passthrough", requireAuth, adminOnly, passthroughHandler.ListVM)
+		v1.POST("/vms/:id/passthrough", requireAuth, adminOnly, passthroughHandler.Attach)
+		v1.DELETE("/vms/:id/passthrough", requireAuth, adminOnly, passthroughHandler.Detach)
 
 		// 宿主机防火墙（F-4-11 第一层）。
 		//

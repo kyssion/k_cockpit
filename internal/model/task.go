@@ -124,6 +124,9 @@ const (
 	// 目录共享的挂载与卸载（f-5-06）。
 	TaskShareMount = "share.mount"
 
+	// 虚拟机直通设备的挂载与卸载。
+	TaskPassthroughChange = "vm.passthrough.change"
+
 	// 宿主机防火墙的下发与回滚（f-4-11 第一层）。
 	//
 	// 应用与回滚共用一个类型：两者下发的都是"期望状态"，只在 enabled 上

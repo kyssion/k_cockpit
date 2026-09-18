@@ -32,6 +32,7 @@ import (
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/networkbridge"
 	"k_cockpit/internal/node"
+	"k_cockpit/internal/passthrough"
 	"k_cockpit/internal/portmirror"
 	"k_cockpit/internal/portsecurity"
 	"k_cockpit/internal/publicip"
@@ -192,6 +193,8 @@ func main() {
 	queue.Register(quotaenforce.NewExecutor(db, mockAgent))
 	// 宿主机防火墙：应用与紧急回滚。
 	queue.Register(hostfirewall.NewExecutor(db, mockAgent))
+	// PCIe 直通设备的挂载与卸载。
+	queue.Register(passthrough.NewExecutor(db, mockAgent))
 	// 网络变更（F-2-03）：三种资源各一个执行器，共用 vm:<id> 资源锁。
 	queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
 	queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))
@@ -301,6 +304,7 @@ func main() {
 		Capture:       captureSvc,
 		QuotaEnforce:  quotaEnforceSvc,
 		HostFirewall:  hostFirewallSvc,
+		Passthrough:   passthrough.NewService(db, queue, mockAgent, recorder),
 		Diagnostics:   diagnosticsSvc,
 		Firewall:      firewallSvc,
 		APIKey:        apiKeySvc,

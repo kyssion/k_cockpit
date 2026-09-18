@@ -53,6 +53,16 @@ func (m *MockClient) WithStageDelay(d time.Duration) *MockClient {
 // 控制面不该替它猜。
 func stagePlan(op Operation) [][2]string {
 	switch op.Kind {
+	case OpHostPCIDevices:
+		return [][2]string{
+			{"scan_pci", "扫描 PCI 设备"},
+			{"read_iommu_groups", "读取 IOMMU 分组"},
+		}
+	case OpHostPCIBind:
+		return [][2]string{
+			{"check_in_use", "确认设备未被占用"},
+			{"rebind_driver", "切换驱动绑定"},
+		}
 	case OpHostFirewallApply:
 		if act, _ := op.Params["action"].(string); act == "rollback" {
 			return [][2]string{
@@ -741,6 +751,36 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 
 	case OpNetworkCaptureDelete:
 		data[CaptureDataKey] = CaptureInfo{Message: "抓包文件已删除"}
+
+	case OpHostPCIDevices:
+		// 三块设备，含**一个两块卡同组**的分组：只给"每块卡各自一组"的假
+		// 数据会让「同组只能给一台机器」这条分支永远不可达——而它恰恰是
+		// 用户最先撞上的那堵墙。
+		data[PCIDevicesKey] = []PCIDevice{
+			{Address: "0000:01:00.0", VendorDevice: "10de:1eb8", Class: "VGA",
+				Description: "NVIDIA Corporation GP104 [GeForce GTX 1080]",
+				IOMUGroup:   1, CanPassthrough: true},
+			{Address: "0000:01:00.1", VendorDevice: "10de:10f0", Class: "Audio",
+				Description: "NVIDIA Corporation GP104 High Definition Audio",
+				IOMUGroup:   1, CanPassthrough: true},
+			{Address: "0000:00:1f.6", VendorDevice: "8086:15b8", Class: "Network",
+				Description: "Intel Corporation Ethernet Connection (2) I219-V",
+				Driver:      "e1000e", IOMUGroup: 2,
+				Reason: "该设备与宿主机管理网络共用，直通会让面板失去连接"},
+			{Address: "0000:03:00.0", VendorDevice: "144d:a808", Class: "Storage",
+				Description: "Samsung NVMe SSD", Driver: "nvme", IOMUGroup: 3,
+				CanPassthrough: true},
+		}
+
+	case OpHostIOMMU:
+		data[IOMMUStatusKey] = IOMMUStatus{Enabled: true, VFIOAvailable: true}
+
+	case OpHostPCIBind:
+		if attach, _ := op.Params["attach"].(bool); attach {
+			data[HostFirewallDataKey] = PCIBindInfo{Message: "设备已挂载到虚拟机"}
+		} else {
+			data[HostFirewallDataKey] = PCIBindInfo{Message: "设备已从虚拟机卸载"}
+		}
 
 	case OpHostFirewallApply:
 		act, _ := op.Params["action"].(string)
