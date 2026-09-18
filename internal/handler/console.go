@@ -58,7 +58,7 @@ func (h *Console) GetConfig(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	cfg, err := h.svc.Console(ctx, id, authz.ViewerOf(c))
+	cfg, err := h.svc.Console(ctx, id, c.Query("protocol"), authz.ViewerOf(c))
 	if err != nil {
 		api.Fail(c, err)
 		return
@@ -67,6 +67,8 @@ func (h *Console) GetConfig(ctx context.Context, c *app.RequestContext) {
 }
 
 type updateConsoleRequest struct {
+	// Protocol 选择要配置哪一种控制台（vnc / spice），留空按 VNC。
+	Protocol string  `json:"protocol"`
 	Enabled  *bool   `json:"enabled"`
 	Password *string `json:"password"`
 	Exposed  *bool   `json:"exposed"`
@@ -104,6 +106,10 @@ func (h *Console) Update(ctx context.Context, c *app.RequestContext) {
 	info := auth.ClientInfoOf(c)
 
 	cfg, err := h.svc.UpdateConsole(ctx, id, vm.ConsoleUpdate{
+		// 协议只决定落库的字段名。**二次验证在下面那一段里对两种协议是
+		// 同一处代码**（risk.ActionConsoleExpose）——分成两个接口的话，
+		// 某天给 VNC 加了更严的限制，而 SPICE 那条还开着。
+		Protocol: req.Protocol,
 		Enabled:  req.Enabled,
 		Password: req.Password,
 		Exposed:  req.Exposed,

@@ -42,7 +42,7 @@ func consoleFixture(t *testing.T, display string, enabled bool) (*vm.Service, *g
 func TestConsoleUnavailableWithoutDisplayDevice(t *testing.T) {
 	svc, _, row := consoleFixture(t, model.DisplayNone, false)
 
-	cfg, err := svc.Console(context.Background(), row.ID, authz.Viewer{UserID: 7})
+	cfg, err := svc.Console(context.Background(), row.ID, "", authz.Viewer{UserID: 7})
 	if err != nil {
 		t.Fatalf("查询失败: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestOpenConsoleReportsUnsupportedTransport(t *testing.T) {
 func TestConsoleConfigCarriesSessionLimit(t *testing.T) {
 	svc, _, row := consoleFixture(t, model.DisplayVNC, true)
 
-	cfg, err := svc.Console(context.Background(), row.ID, authz.Viewer{UserID: 7})
+	cfg, err := svc.Console(context.Background(), row.ID, "", authz.Viewer{UserID: 7})
 	if err != nil {
 		t.Fatalf("查询失败: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestConsoleRejectsOthersVM(t *testing.T) {
 
 	// 越权一律 404（与详情页一致）：403 会告诉对方「这台虚拟机确实存在」，
 	// 从而可以被用来枚举他人资源。
-	_, err := svc.Console(ctx, row.ID, authz.Viewer{UserID: 10})
+	_, err := svc.Console(ctx, row.ID, "", authz.Viewer{UserID: 10})
 	assertAPIError(t, err, 404)
 
 	_, _, err = svc.OpenConsole(ctx, row.ID, 10, authz.Viewer{UserID: 10})
@@ -261,7 +261,7 @@ func TestFailedConnectionReleasesSessionSlot(t *testing.T) {
 		assertAPIError(t, err, 503)
 	}
 
-	cfg, err := svc.Console(ctx, row.ID, authz.Viewer{UserID: 7})
+	cfg, err := svc.Console(ctx, row.ID, "", authz.Viewer{UserID: 7})
 	if err != nil {
 		t.Fatalf("查询失败: %v", err)
 	}

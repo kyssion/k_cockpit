@@ -104,6 +104,23 @@ type VM struct {
 	// （R-011）。界面据此隐藏入口，而不是给用户一个点了打不开的按钮。
 	DisplayDevice string `gorm:"size:16;not null;default:vnc"`
 
+	// --- SPICE 控制台（F-2-09）---
+	//
+	// 与 VNC **平行而不是合并**：同一台机器可以两种控制台都开，而它们的
+	// 对外暴露是两件独立的事（关掉 SPICE 的暴露不该影响 VNC 的监听地址）。
+	//
+	// 但**暴露的判定与文案是共用的**（见 vm.console）：另写一套的话，
+	// 某天有人给 VNC 那条加了更严的限制，而 SPICE 那条还开着——那种分叉
+	// 不会以任何形式报错。
+	// SPICESupported 由**节点探测**填入：SPICE 是 libvirt 编译期的可选项，
+	// 而 VNC 几乎总是可用。不探测的话，界面上会出现一个点了打不开的
+	// SPICE 选项——用户会去反复检查"是不是我哪里配错了"。
+	SPICESupported bool   `gorm:"column:spice_supported;not null;default:false"`
+	SPICEEnabled   bool   `gorm:"column:spice_enabled;not null;default:false"`
+	SPICEPort      *int   `gorm:"column:spice_port"`
+	SPICEBind      string `gorm:"column:spice_bind;size:64;not null;default:127.0.0.1"`
+	SPICEExposed   bool   `gorm:"column:spice_exposed;not null;default:false"`
+
 	// --- 启动与安全（f-2-05「启动与安全」子选项卡）---
 	//
 	// 下面这批字段的 column 全部**显式声明**：GORM 的命名策略按大写字母

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,8 +33,25 @@ const ConsoleSessionLimit = 3
 // 多开几个页面就会变成对节点的持续轮询。
 const screenshotTTL = 5 * time.Second
 
-// DefaultVNCPort 是控制台的默认端口。
+// DefaultVNCPort 是 VNC 的默认端口。
 const DefaultVNCPort = 5900
+
+// DefaultSPICEPort 是 SPICE 的默认端口。
+//
+// 与 VNC 分开取段（5900 / 5901 起）是 libvirt 的惯例，也是**让两者能同时
+// 开**的前提——同一个端口上只能有一个监听者。
+const DefaultSPICEPort = 5901
+
+// 控制台协议。
+//
+// 做成一个维度而不是两套接口：SPICE 的「对外暴露」与 VNC 是**同一类风险**
+// ——都是暴露一个远程控制入口。另起一套意味着把二次验证、监听地址切换、
+// 警告文案再写一遍，而那两份迟早会分叉：某天有人给 VNC 那条加了更严的
+// 限制，而 SPICE 那条还开着，且不会有任何地方报错。
+const (
+	ConsoleProtocolVNC   = "vnc"
+	ConsoleProtocolSPICE = "spice"
+)
 
 // ConsoleConfig 是控制台的对外视图。
 //
@@ -49,6 +67,18 @@ type ConsoleConfig struct {
 	// 而不是让界面展示一个点了打不开的按钮。
 	Available         bool   `json:"available"`
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
+
+	// Protocols 是这台虚拟机**可用的**控制台协议。
+	//
+	// 由节点上报：SPICE 需要 libvirt 编译时带 SPICE 支持，而 VNC 几乎总是
+	// 可用。不给这个列表的话，界面会显示一个点了打不开的 SPICE 选项。
+	Protocols []string `json:"protocols"`
+
+	// 下面是**当前所选协议**的状态。
+	//
+	// 不把两种协议各返回一份，是因为界面上同一时刻只在配一种——返回两份
+	// 会让「我改的是哪个」变成需要从数据里推断的事。
+	Protocol string `json:"protocol"`
 
 	Enabled       bool   `json:"enabled"`
 	Port          int    `json:"port,omitempty"`
@@ -70,6 +100,11 @@ type ConsoleConfig struct {
 
 // ConsoleUpdate 是控制台配置的变更请求。
 type ConsoleUpdate struct {
+	// Protocol 选择要配置哪一种（vnc / spice），留空按 VNC。
+	//
+	// 两种协议共用**同一段**更新逻辑与全部守卫（二次验证、监听地址切换、
+	// 关闭时释放会话）——只有落库的字段名不同。见 UpdateConsole 里的前缀。
+	Protocol string
 	// Enabled 开启或关闭控制台。
 	Enabled *bool
 	// Password 设置新的控制台密码。**只写不读**（R-005）。
@@ -150,20 +185,34 @@ func (r *sessionRegistry) count(vmID int64) int {
 }
 
 // Console 返回控制台配置与状态（API-030）。
-func (s *Service) Console(ctx context.Context, id int64, v authz.Viewer) (*ConsoleConfig, error) {
+//
+// protocol 为空时按 VNC——那是绝大多数情况，也是历史行为。
+func (s *Service) Console(
+	ctx context.Context, id int64, protocol string, v authz.Viewer,
+) (*ConsoleConfig, error) {
 	vm, err := s.load(ctx, id, v)
 	if err != nil {
 		return nil, err
 	}
-	return s.consoleConfig(ctx, vm)
+	return s.consoleConfig(ctx, vm, protocol)
 }
 
-func (s *Service) consoleConfig(ctx context.Context, vm *model.VM) (*ConsoleConfig, error) {
+func (s *Service) consoleConfig(
+	ctx context.Context, vm *model.VM, protocol string,
+) (*ConsoleConfig, error) {
+	// **协议只决定取哪几个字段，不决定走哪段逻辑。**
+	protocol = normalizeProtocol(protocol)
+
 	cfg := &ConsoleConfig{
-		VMID:            vm.ID,
-		Enabled:         vm.VNCEnabled,
-		Bind:            vm.VNCBind,
-		Exposed:         vm.VNCExposed,
+		VMID: vm.ID,
+		// Protocols 是**可用**的协议列表（由能力探测给），不是当前选的。
+		// SPICE 需要 libvirt 编译时带支持，而 VNC 几乎总是可用——不给
+		// 这个列表的话，界面会显示一个点了打不开的 SPICE 选项。
+		Protocols:       availableProtocols(vm),
+		Protocol:        protocol,
+		Enabled:         enabledOf(vm, protocol),
+		Bind:            bindOf(vm, protocol),
+		Exposed:         exposedOf(vm, protocol),
 		DisplayDevice:   vm.DisplayDevice,
 		SessionLimit:    ConsoleSessionLimit,
 		ActiveSessions:  s.consoleSessions().count(vm.ID),
@@ -210,16 +259,39 @@ func (s *Service) UpdateConsole(
 		return nil, api.ValidationFailed("该虚拟机没有图形显示设备，无法开启控制台")
 	}
 
+	// **协议只决定落库的字段名，不决定走哪段逻辑。**
+	//
+	// 这是本函数里最要紧的一处设计：二次验证、监听地址切换、关闭时释放
+	// 会话——这三件事对两种控制台完全一样，因此它们只有一份实现，只是
+	// 写入的前缀不同。分成两个函数的话，某天给 VNC 那条加了更严的限制，
+	// 而 SPICE 那条还开着，且不会有任何地方报错。
+	protocol := req.Protocol
+	if protocol != ConsoleProtocolSPICE {
+		protocol = ConsoleProtocolVNC
+	}
+	isSPICE := protocol == ConsoleProtocolSPICE
+	prefix := protocol + "_"
+	defaultPort := DefaultVNCPort
+	if isSPICE {
+		defaultPort = DefaultSPICEPort
+	}
+
 	updates := map[string]any{}
 	action := "vm.console.update"
-	after := map[string]any{}
+	after := map[string]any{"protocol": protocol}
 
 	if req.Enabled != nil {
-		if *req.Enabled && vm.VNCPort == nil {
-			port := DefaultVNCPort
-			updates["vnc_port"] = port
+		// 首次开启时分配端口。已在用的端口不重新分配——那会让正在连着的
+		// 客户端断掉，而用户只是又点了一次"开启"。
+		port := vm.VNCPort
+		if isSPICE {
+			port = vm.SPICEPort
 		}
-		updates["vnc_enabled"] = *req.Enabled
+		if *req.Enabled && port == nil {
+			p := defaultPort
+			updates[prefix+"port"] = p
+		}
+		updates[prefix+"enabled"] = *req.Enabled
 		after["enabled"] = *req.Enabled
 		if *req.Enabled {
 			action = "vm.console.enable"
@@ -232,15 +304,17 @@ func (s *Service) UpdateConsole(
 		// 高危：受理前**必须**已完成二次验证（R-004）。检查放在服务层
 		// 而不是只在 handler：服务可能被其他入口调用，把安全判定放在
 		// 一个入口上，等于给另一个入口留了缺口。
+		//
+		// **这一处对两种协议是同一段代码**——见上面的说明。
 		if err := s.ensureExposureVerified(ctx); err != nil {
 			return nil, err
 		}
-		updates["vnc_exposed"] = *req.Exposed
+		updates[prefix+"exposed"] = *req.Exposed
 		// 暴露时改为监听所有地址；关闭时收回 127.0.0.1。
 		if *req.Exposed {
-			updates["vnc_bind"] = "0.0.0.0"
+			updates[prefix+"bind"] = "0.0.0.0"
 		} else {
-			updates["vnc_bind"] = "127.0.0.1"
+			updates[prefix+"bind"] = "127.0.0.1"
 		}
 		after["exposed"] = *req.Exposed
 		action = "vm.console.exposure"
@@ -285,7 +359,7 @@ func (s *Service) UpdateConsole(
 	if err != nil {
 		return nil, err
 	}
-	return s.consoleConfig(ctx, reloaded)
+	return s.consoleConfig(ctx, reloaded, req.Protocol)
 }
 
 // OpenConsole 建立一次控制台会话并返回字节流。
@@ -448,4 +522,47 @@ func (s *Service) consoleSessions() *sessionRegistry {
 		s.sessions = newSessionRegistry()
 	})
 	return s.sessions
+}
+
+// normalizeProtocol 把协议名归一化。未知值一律按 VNC——
+// 那是最保守的选择（VNC 几乎总是可用）。
+func normalizeProtocol(p string) string {
+	if strings.EqualFold(strings.TrimSpace(p), ConsoleProtocolSPICE) {
+		return ConsoleProtocolSPICE
+	}
+	return ConsoleProtocolVNC
+}
+
+// availableProtocols 返回该虚拟机可用的控制台协议。
+//
+// **VNC 恒定可用**：libvirt 无论怎么编译都带它。SPICE 则是编译期可选的，
+// 因此它以节点的上报为准（这里用 DisplayDevice 之外的一个保守判断：
+// 只有节点确认过才列出来，见 ConsoleConfig.Protocols 的说明）。
+func availableProtocols(vm *model.VM) []string {
+	out := []string{ConsoleProtocolVNC}
+	if vm.SPICESupported {
+		out = append(out, ConsoleProtocolSPICE)
+	}
+	return out
+}
+
+func enabledOf(vm *model.VM, protocol string) bool {
+	if protocol == ConsoleProtocolSPICE {
+		return vm.SPICEEnabled
+	}
+	return vm.VNCEnabled
+}
+
+func bindOf(vm *model.VM, protocol string) string {
+	if protocol == ConsoleProtocolSPICE {
+		return vm.SPICEBind
+	}
+	return vm.VNCBind
+}
+
+func exposedOf(vm *model.VM, protocol string) bool {
+	if protocol == ConsoleProtocolSPICE {
+		return vm.SPICEExposed
+	}
+	return vm.VNCExposed
 }

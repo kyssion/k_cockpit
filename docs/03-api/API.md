@@ -366,6 +366,8 @@
 | API-028 | POST | `/api/v1/vms/batch-actions` | 批量操作：电源（`start` / `shutdown` / `poweroff` / `reset`）与删除（`delete` + 必填 `disk_action`）。**逐台独立受理、可部分成功**，因此始终返回 200，逐台结果在 `items` 里；失败项带具体原因（含被锁定项）。同一 ID 会被去重，单次上限 50 台。删除动作走**一次**二次验证（不是每台一次） | 是（删除需验证） | 已实现 | F-2-01 |
 | API-029 | DELETE | `/api/v1/vms/:id` | 删除虚拟机（`disk_action` 必填：`delete` / `keep`，服务端不设默认值；走 query 或 body 均可）；**高风险操作，需二次验证** | 是 | 已实现 | F-2-04 |
 | API-030 | GET | `/api/v1/vms/:id/console` | 控制台配置与状态（开启、端口、**监听地址**、暴露状态、显示设备、会话数与上限、流支持）；**不含密码** | 是 | 已实现 | F-2-08 |
+| API-030b | PATCH | `/api/v1/vms/:id/console` | 更新控制台配置（增 `protocol` 字段选 vnc/spice）。**做成协议维度而不是另起一套接口**，因为 SPICE 的「对外暴露」与 VNC 是**同一类风险**：另起一套意味着二次验证、监听地址切换、关闭时释放会话都要再写一遍，而那两份迟早分叉——某天有人给 VNC 那条加了更严的限制，而 SPICE 那条还开着，且不会有任何地方报错。实现上两种协议共用同一段逻辑（`risk.ActionConsoleExpose` 是同一个动作），只有落库字段名不同 | 是 | 已实现 | F-2-09 |
+| API-030c | GET | `/api/v1/vms/:id/console?protocol=spice` | 控制台配置的**协议选择**（F-2-09）。返回的 `protocols` 是**可用**列表（SPICE 是 libvirt 编译期可选项，要探测；VNC 恒可用）——不给它的话界面会显示一个点了打不开的选项，而用户会去反复检查「是不是我哪里配错了」 | 是 | 已实现 | F-2-09 |
 | API-031 | PATCH | `/api/v1/vms/:id/console` | 开启/关闭、设置密码、切换对外暴露；**仅在变更暴露状态时**要求二次验证；密码最长 8 位且只写不读 | 是 | 已实现 | F-2-08 |
 | API-032 | GET | `/api/v1/vms/:id/console/screenshot` | 控制台截帧预览；**当前返回 503**——截帧需 agent 侧图形导出能力，该契约尚未定义 | 是 | 已实现（能力待 agent） | F-2-08 |
 | API-033 | GET | `/api/v1/vms/:id/console/ws` | **WebSocket**：VNC 流量代理（经 agent 通道转发，不直连宿主机）；**升级前**完成鉴权与授权，会话数上限 3 | 是 | 已实现 | F-2-08 |
