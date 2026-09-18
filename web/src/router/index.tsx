@@ -18,6 +18,7 @@ import { PortMirrorPage } from '@/views/network/PortMirrorPage'
 import { SecurityGroupPage } from '@/views/network/SecurityGroupPage'
 import { ImportPage } from '@/views/storage/ImportPage'
 import { MyStoragePage } from '@/views/storage/MyStoragePage'
+import { StorageVolumePage } from '@/views/storage/StorageVolumePage'
 import { TemplatePage } from '@/views/template/TemplatePage'
 import { APIKeyPage } from '@/views/security/APIKeyPage'
 import { SecurityPage } from '@/views/security/SecurityPage'
@@ -81,6 +82,7 @@ export const router = createBrowserRouter([
           { path: 'node', element: <NodeListPage /> },
           { path: 'node/:id', element: <NodeDetailPage /> },
           { path: 'storage-pool', element: <StoragePoolPage /> },
+          { path: 'storage-volume', element: <StorageVolumePage /> },
           { path: 'network', element: <NetworkPage /> },
           { path: 'network/base', element: <NetworkPage2 /> },
           // 用户管理（F-1-07）仍是占位。
