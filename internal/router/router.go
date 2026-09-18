@@ -16,6 +16,7 @@ import (
 	"k_cockpit/internal/auditlog"
 	"k_cockpit/internal/auth"
 	"k_cockpit/internal/authz"
+	"k_cockpit/internal/capture"
 	"k_cockpit/internal/firewall"
 	"k_cockpit/internal/handler"
 	"k_cockpit/internal/importer"
@@ -76,6 +77,8 @@ type Deps struct {
 	Scheduler *scheduler.Service
 	// PortSecurity 提供端口安全（F-4-08）。
 	PortSecurity *portsecurity.Service
+	// Capture 提供抓包与网络诊断（F-4-12）。
+	Capture *capture.Service
 	// Firewall 提供双层防火墙策略（F-4-11）。
 	Firewall *firewall.Service
 	// APIKey 提供 API 凭证与一次性令牌（F-1-10）。
@@ -126,6 +129,7 @@ func Register(h *server.Hertz, deps Deps) {
 	volumeHandler := handler.NewStorageVolume(deps.Storage)
 	schedulerHandler := handler.NewScheduler(deps.Scheduler)
 	portSecurityHandler := handler.NewPortSecurity(deps.PortSecurity)
+	captureHandler := handler.NewCapture(deps.Capture)
 	firewallHandler := handler.NewFirewall(deps.Firewall)
 	apiKeyHandler := handler.NewAPIKey(deps.APIKey)
 	mirrorHandler := handler.NewPortMirror(deps.PortMirror)
@@ -372,6 +376,15 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.GetVMPolicy)
 		v1.PUT("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.SetVMPolicy)
 		v1.DELETE("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.ClearVMPolicy)
+
+		// 抓包与网络诊断（F-4-12）。
+		//
+		// 抓包会读到一个网口上的**全部流量**（包括明文密码与会话令牌），
+		// 因此：租户只能看与删自己发起的（列表在服务层按 created_by 过滤），
+		// 而每一次抓包都进审计。
+		v1.GET("/captures", requireAuth, captureHandler.List)
+		v1.POST("/captures", requireAuth, captureHandler.Start)
+		v1.DELETE("/captures/:id", requireAuth, captureHandler.Delete)
 
 		// 端口安全（F-4-08）。
 		//

@@ -124,6 +124,13 @@ const (
 	// 目录共享的挂载与卸载（f-5-06）。
 	TaskShareMount = "share.mount"
 
+	// 抓包与删除抓包文件（f-4-12）。
+	//
+	// 两者分开：抓包是**长时间运行**的（要等 duration 秒），而删除是秒级
+	// 的。混在一个类型里会让任务列表上看不出哪个慢在哪。
+	TaskNetworkCapture       = "network.capture"
+	TaskNetworkCaptureDelete = "network.capture.delete"
+
 	// 端口安全策略下发（f-4-08）。下发的是**期望状态**而不是增量指令。
 	TaskPortSecurityApply = "port_security.apply"
 

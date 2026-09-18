@@ -44,6 +44,7 @@ func TestModelColumnsExistInMigrations(t *testing.T) {
 		&model.SecurityGroup{}, &model.SecurityGroupRule{}, &model.InterfaceSecurityGroup{},
 		&model.ShareMount{}, &model.StorageVolume{},
 		&model.SchedulerEvent{}, &model.PortSecurityPolicy{},
+		&model.NetworkCapture{},
 		&model.FirewallPolicy{}, &model.FirewallRule{}, &model.FirewallVMPolicy{},
 		&model.UserAPIKey{}, &model.AuthActionToken{},
 		&model.PortMirror{}, &model.NetworkBridge{},

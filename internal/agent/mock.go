@@ -53,6 +53,12 @@ func (m *MockClient) WithStageDelay(d time.Duration) *MockClient {
 // 控制面不该替它猜。
 func stagePlan(op Operation) [][2]string {
 	switch op.Kind {
+	case OpNetworkCapture:
+		return [][2]string{
+			{"start_tcpdump", "启动抓包"},
+			{"wait_duration", "等待抓包时长"},
+			{"flush_file", "落盘并返回文件"},
+		}
 	case OpPortSecurityApply:
 		// 三项保护各对应一组流表：期望状态下发之后，节点上就是这些规则。
 		return [][2]string{
@@ -685,6 +691,30 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 				CapabilityOVS: "未检测到 Open vSwitch",
 			},
 		}
+
+	case OpNetworkCapture:
+		iface, _ := op.Params["interface"].(string)
+		filter, _ := op.Params["filter"].(string)
+		dur, _ := op.Params["duration_sec"].(int)
+		info := CaptureInfo{
+			FilePath: "/var/lib/k_cockpit/captures/" + iface + ".pcap",
+			// 大小与时长成正比，让界面上的格式化与"文件多大"有真实感。
+			SizeBytes: int64(dur) * 1024 * 12,
+			Message:   "抓包完成",
+		}
+		if filter != "" && !strings.Contains(filter, "port") {
+			// 一个**抓不到东西**的结果：过滤器没匹配到流量。
+			//
+			// 刻意让这条分支可达：空文件是一个看不出原因的结果，而用户会
+			// 先去怀疑抓包功能坏了。界面必须把"过滤器可能有问题"说出来。
+			info.SizeBytes = 0
+			info.Message = "抓包完成，但没有匹配到任何流量"
+			info.Warnings = []string{"过滤器可能过于严格，可以先用空过滤器确认该网口上有没有流量"}
+		}
+		data[CaptureDataKey] = info
+
+	case OpNetworkCaptureDelete:
+		data[CaptureDataKey] = CaptureInfo{Message: "抓包文件已删除"}
 
 	case OpPortSecurityPrecheck:
 		// **这里报告 OVS 可用，而 OpNetworkProbe / OpNodeNetwork 报告它缺失。**

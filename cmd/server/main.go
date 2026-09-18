@@ -19,6 +19,7 @@ import (
 	"k_cockpit/internal/audit"
 	"k_cockpit/internal/auditlog"
 	"k_cockpit/internal/auth"
+	"k_cockpit/internal/capture"
 	"k_cockpit/internal/config"
 	"k_cockpit/internal/cryptoutil"
 	"k_cockpit/internal/database"
@@ -161,6 +162,9 @@ func main() {
 	queue.Register(storage.NewVolumeExecutor(db, mockAgent))
 	// 端口安全要往节点流表里写规则。
 	queue.Register(portsecurity.NewExecutor(db, mockAgent))
+	// 抓包：一次限时的抓包，以及删除节点上的抓包文件。
+	queue.Register(capture.NewExecutor(db, mockAgent))
+	queue.Register(capture.NewDeleteExecutor(db, mockAgent))
 	// 网络变更（F-2-03）：三种资源各一个执行器，共用 vm:<id> 资源锁。
 	queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
 	queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))
@@ -211,6 +215,7 @@ func main() {
 	monitorSvc := monitor.NewService(db)
 	schedulerSvc := sched.NewService(db, schedRegistry)
 	portSecuritySvc := portsecurity.NewService(db, mockAgent, recorder, queue)
+	captureSvc := capture.NewService(db, mockAgent, recorder, queue)
 	networkSvc := network.NewService(db, mockAgent, queue, recorder)
 
 	// vm 与 storage 都要读设置里的陈旧阈值：把 settingsSvc 作为 Provider
@@ -251,6 +256,7 @@ func main() {
 		UserStorage:   userStorageSvc,
 		Scheduler:     schedulerSvc,
 		PortSecurity:  portSecuritySvc,
+		Capture:       captureSvc,
 		Firewall:      firewallSvc,
 		APIKey:        apiKeySvc,
 		PortMirror:    mirrorSvc,
