@@ -1,0 +1,357 @@
+# 能力补齐清单（对标 QVMConsole）
+
+> 状态：生效
+> 最后更新：2026-09-18
+> 关联：[`PRD.md`](PRD.md)（功能需求与优先级）· [`ROADMAP.md`](ROADMAP.md)（阶段与里程碑）· [`../08-reference/qvmconsole/`](../08-reference/qvmconsole/)（参考项目的能力面与实现结论）
+
+本文记录**我们相对 QVMConsole 还缺什么**，以及补齐的顺序与进度。
+
+**与其它文档的分工**：
+
+| 文档 | 回答 |
+|---|---|
+| `PRD.md` | 我们要做什么（逐条需求与优先级） |
+| `../08-reference/qvmconsole/` | 对方有什么、怎么做的 |
+| **本文** | **我们缺什么、先补哪个、补到哪一步了** |
+
+---
+
+## 1. 对比方法与口径
+
+对方的站点是 SPA，页面内容由构建产物渲染。因此对比不是靠逐页截图，而是**分析其前端构建产物**——这比逐页点击更彻底：
+
+| 来源 | 得到什么 |
+|---|---|
+| `__vite__mapDeps` 清单 | 55 个业务分块 → 页面与功能模块全集 |
+| `api-docs` 分块（132KB） | **342 条接口定义**，含方法、路径、摘要、参数、说明 |
+| 配额字段定义 | 其配额模型的实际维度 |
+
+> 值得注意的是：对方的**内置 API 文档本身就是一个功能**（F-9-04），它由接口定义生成，因此带有完整的参数与说明。这一份材料同时也说明了该功能的形态。
+
+**规模对比**：
+
+| | 对方 | 我们 |
+|---|---|---|
+| 接口 | 342 | 187 |
+| 页面 | 55 个业务分块 | 37 个页面 |
+
+数量差距不等于价值差距——口径不同（对方把很多细粒度操作拆成独立端点）。但**下面列出的整块缺失是真实的**。
+
+---
+
+## 2. 完全缺失的整块能力
+
+### G-01 硬件直通（GPU / PCIe Passthrough）
+
+> 状态：未开始 · 优先级：高 · 依赖：宿主硬件探测
+
+对方 9 个端点，我们**一个都没有**：
+
+```
+GET  /host/cpu/hardware                       CPU 硬件详情（含虚拟化标志）
+POST /host/hardware-passthrough/enable-iommu  开启 IOMMU
+POST /host/hardware-passthrough/load-vfio     加载 VFIO 模块
+GET  /host/hardware-passthrough/status        直通能力状态
+GET  /host/passthrough                        全部 PCIe 设备**与 IOMMU 分组**
+POST /host/passthrough/bind                   绑定设备到 vfio-pci
+POST /host/passthrough/unbind                 解绑
+GET  /vm/:name/pcie-info                      虚拟机可见的 PCIe 拓扑
+POST/DELETE /vm/:name/passthrough             挂载 / 卸载直通设备
+```
+
+**难点不在接口，在于 IOMMU 分组是一组一组的**——同组设备只能一起直通或一起不直通，而分组关系只有节点能探测。因此界面上必须把"分组"作为第一等公民呈现：用户选了 GPU 之后，同组里那块网卡也会被一起拿走，这件事必须在点确认之前看到。
+
+配套：`/host/memory/modules`（内存条）、`/host/cpus`（CPU 拓扑与 NUMA）。
+
+**要做的设计**：
+
+- 设备清单来自节点探测，含 IOMMU 分组号、当前驱动、是否可安全直通
+- 绑定/解绑会**改变宿主机上设备的归属**，属于高风险操作（需二次验证）
+- 解绑前必须确认没有虚拟机正在使用它——否则会拔掉一台运行中虚拟机的"显卡"
+
+---
+
+### G-02 宿主机性能调优
+
+> 状态：未开始 · 优先级：中
+
+```
+GET/PUT /host/ksm                            内核同页合并
+GET/PUT /host/zram                           ZRAM 压缩内存
+GET/PUT /host/kvm-intel-unrestricted-guest   KVM 嵌套虚拟化
+GET/PUT /settings/cpu-affinity-presets       CPU 亲和性预设
+```
+
+我们完全没有。**KSM 与 ZRAM 在内存吃紧时是能救命的开关**，而它们的代价不同（KSM 持续吃 CPU 换取去重，ZRAM 吃 CPU 换取压缩内存），因此界面必须把代价写出来，而不是给一个「开/关」。
+
+**要做的设计**：
+
+- 每项显示**当前值、可选值、代价说明**
+- KSM 需要展示去重效果（合并了多少页、省了多少内存），否则用户无法判断该不该开
+- CPU 亲和性预设要能预览"这台机器会被绑到哪几个核上"
+
+---
+
+### G-03 宿主机防火墙（与 KVM 网络防火墙是两套）
+
+> 状态：未开始 · 优先级：高 · 依赖：无
+
+我们只有 8 条 KVM 防火墙接口。对方有 **21 条**，其中一整层是**宿主机防火墙**：
+
+```
+GET/POST/PUT/DELETE /firewall/host/rules    宿主机规则
+POST /firewall/host/enable|disable          启用 / 停用
+POST /firewall/host/enable/preview          启用**前**预览
+POST /firewall/host/rules/vnc-default       一键放行 VNC
+GET  /firewall/host/status
+GET  /firewall/host/connections/preview     当前连接
+POST /firewall/host/connections/close       关闭连接
+POST /firewall/geoip/import|update          GeoIP 库导入与更新
+```
+
+**两套防火墙必须区分开**：宿主机防火墙保护的是**面板自身与宿主机服务**，KVM 防火墙管的是虚拟机的进出。混在一起看会导致用户以为改了 KVM 规则就关掉了面板的暴露面。
+
+**连接管理（列举 + 关闭）我们完全没有**——这是排查「谁在占着我的端口」时唯一的办法。关闭连接属于高风险操作（会切断正在进行的会话）。
+
+**GeoIP**：按国家/地区放行或拒绝。注：`internal/firewall/service.go` 里有相关字样但未暴露接口。
+
+---
+
+### G-04 SPICE 控制台
+
+> 状态：未开始 · 优先级：低
+
+```
+POST /vm/:name/spice/enable|disable
+POST /vm/:name/spice/expose      对外暴露
+POST /vm/:name/spice/passwd      设置密码
+GET  /vm/:name/spice/status|info|vv
+```
+
+我们只有 VNC。SPICE 的独有能力是**声音、USB 重定向、多显示器**。
+
+**要做的判断**：`/spice/expose`（对外暴露）与 VNC 的对外暴露是同一类风险——暴露一个未加密的远程控制入口。必须与 VNC 用同一套访问控制与警告文案，不能各写一套。
+
+---
+
+### G-05 libvirt XML 直编
+
+> 状态：未开始 · 优先级：低（但价值特殊）
+
+```
+GET/PUT /vm/:name/xml
+```
+
+这是**兜底出口**：面板没做的配置项可以直接改 XML。
+
+**它的价值与风险是一体两面**：
+
+- 价值：面板永远覆盖不了全部 libvirt 能力，没有这个出口，用户只能去宿主机上手工 `virsh edit`
+- 风险：它**绕过所有校验**，包括我们辛苦建立的那些（同节点、配额、地址唯一性）
+
+因此若要实现，必须：**改前展示 diff、改后校验虚拟机能否启动、并且记审计**。不能做成一个"随便编辑"的文本框。
+
+---
+
+### G-06 日志管理（F-9-02）
+
+> 状态：未开始 · 优先级：高 · 对应 PRD：F-9-02
+
+```
+GET  /settings/log/status     级别与状态
+GET  /settings/log/read       在线查看
+POST /settings/log/export     导出
+POST /settings/log/delete     清理
+```
+
+我们只有审计日志（`audit_log`）。**出问题时用户看得到「谁做了什么」，看不到「系统报了什么错」**——而后者才是排查的一半。
+
+**要做的设计**：
+
+- **敏感字段脱敏**（规格 F-9-02 明确要求）：日志里会带请求体，而请求体里有密码与令牌
+- 级别调整要说明代价：DEBUG 会显著增加日志量与磁盘占用
+- 与 F-9-03 诊断导出打通：诊断包里的日志分类应当来自同一处
+
+---
+
+### G-07 带宽与流量配额（F-4-10）
+
+> 状态：未开始 · 优先级：高 · 对应 PRD：F-4-10
+
+对方的配额维度（从其前端字段可直接读出）：
+
+```
+bandwidth_down_mbps / bandwidth_up_mbps   按端口限速
+traffic_down_gb / traffic_up_gb           月度流量配额
+max_runtime_hours                          运行时长配额
+max_snapshots / max_port_forwards          数量配额
+```
+
+**我们的现状是「采了但不用」**：`vm_runtime_daily` 与 `traffic_stat_daily` 两张表已经在按天累计，但没有超限判定与处置。
+
+这是最可惜的一处——数据就在库里，缺的只是"拿它做判断"。
+
+**要做的设计**：
+
+- 超限处置分两档：**限速**（还能用但变慢）与**断网**（停掉），必须由用户选
+- 月度流量按 **UTC** 分桶（与运行时长一致），否则跨时区结算会对不上
+- 预警与超限要分开：预警是"快到了"，超限是"已经处置了"——后者需要一个明确的通知，否则用户会以为网络坏了
+
+---
+
+### G-08 平台自检与修复
+
+> 状态：未开始 · 优先级：中
+
+```
+POST /ovs/check      自检
+POST /ovs/repair     修复
+GET  /ovs/status     状态
+GET  /ovs/ports      端口列表
+GET  /ovs/leases     DHCP 租约
+GET  /network/client-ip   客户端 IP 探测
+```
+
+我们有网络能力探测（`network.ovs` 等）与降级说明，但**没有"修复"这个动作**。
+
+**要做的设计**：`repair` 是一个会改宿主机网络的写操作，属于高风险——必须有预检、必须说明会做什么、必须可回滚（或至少说明不可回滚）。这与 F-10-07（危险网络变更的可回滚）是同一条要求。
+
+---
+
+### G-09 公网访问开关（F-10-06）
+
+> 状态：未开始 · 优先级：中 · 对应 PRD：F-10-06
+
+```
+PUT /settings/public-access
+```
+
+控制面板是否允许从公网访问（以及是否处于开发模式）。
+
+**要做的设计**：这是一个**安全边界开关**，不是普通设置项。关掉它可能立刻切断当前会话（如果用户正是从公网访问的），因此需要：
+
+- 改之前告知"这会立即断开你当前的连接"（若适用）
+- 环境变量优先（F-9-01 的优先级规则）
+- 变更进审计
+
+---
+
+### G-10 虚拟机密码重置（走 Guest Agent）
+
+> 状态：未开始 · 优先级：中 · 依赖：F-2-10 来宾自动化
+
+```
+POST /vm/:name/password/reset
+```
+
+我们有 `guest-actions`（F-2-10），但没有"重置来宾账号密码"这个具体动作。
+
+**要做的设计**：它需要来宾内部已装 Guest Agent 且账号存在。失败原因要能区分三种：**没装 Agent** / **Agent 未响应** / **账号不存在**——这三种在用户看来都是"点了没反应"，而处理方式完全不同。
+
+---
+
+### G-11 账号恢复流程（本文档外的一项，但优先级最高）
+
+> 状态：未开始 · 优先级：**最高**
+
+对方有而我们完全没有：
+
+```
+POST /auth/2fa/setup|enable|disable|recovery/regen    TOTP 与**恢复码**
+POST /auth/email/bind, /auth/email/code/send           邮箱绑定
+POST /auth/login/email/send|verify                     邮箱验证码登录
+POST /auth/password/forgot|select-account|send-code|verify-code   忘记密码（4 步）
+POST /auth/password/reset
+GET  /auth/invite, POST /auth/invite/complete          邀请注册
+PUT  /auth/username, /auth/password                    改用户名 / 改密码
+POST /auth/check-password                              密码强度检查
+POST /security/password-breach/scan|status             密码泄露检测
+```
+
+我们有二次验证（TOTP），但**没有恢复码**——用户丢了手机就**永久进不去**。忘记密码同理：管理员忘了密码只能去数据库改。
+
+**这是唯一一个"出问题时会让人彻底用不了系统"的缺口**，因此排在所有功能之前。
+
+---
+
+## 3. 我们有但粒度不够的
+
+| 编号 | 领域 | 对方有 | 我们的现状 |
+|---|---|---|---|
+| G-20 | **磁盘** | resize / IOPS 限速 / bus 切换 / guest-grow / guest-mount / guest-status / disk-migrate / disk-migration-options | 只有创建时定大小 |
+| G-21 | **光盘** | cdrom 挂载 / 弹出 / 换 bus | 有 ISO 挂载，无弹出与换 bus |
+| G-22 | **克隆** | `make-independent`（解除依赖）/ `linked-clone`（链接克隆）/ `batch-clone` | 有克隆，无这三种变体 |
+| G-23 | **迁移** | `migration/preview`（迁移前预览） | 有迁移，无预览 |
+| G-24 | **存储池** | 分区管理 / format-mount / pv-targets / vm-targets / all-isos | 有池与卷，无分区级操作 |
+| G-25 | **模板** | publish / import-preview / delete-preview / prepare-linux + check | 有模板页，无发布与导入预览 |
+| G-26 | **端口转发 / 公网 IP** | batch-delete / batch bind / batch unbind / ip-mapping | 逐条操作 |
+| G-27 | **任务** | `DELETE /task/clear`（清理已完成） | 无批量清理 |
+| G-28 | **实时通道** | SSE（`/vm/sse`、`/host/stats/sse`、`/task/sse`、`/scheduler/events/sse`） | WebSocket |
+
+> **G-20 与 G-21 的优先级要单独说**：磁盘扩容是**最常见的运维需求之一**（装完系统发现盘不够），而且它的失败模式很讨厌——用户在面板上找不到入口，就会去宿主机上手工 `qemu-img resize`，然后虚拟机的分区表对不上，最后变成一个"盘大了但用不了"的机器。
+
+---
+
+## 4. 我们比对方强的地方
+
+补齐缺口时不该把已有的优势丢掉：
+
+| 能力 | 我们 | 对方 |
+|---|---|---|
+| **安全组** | 多组叠加生效 + **版本绑定**（防止"批准的是 A、落下去的是 B"） | `vpc/acl` 只有 apply / preview |
+| **调度器框架** | 注册表 + "只记实际动作"的记录语义 | 只有 list / events |
+| **二次验证** | 按**风险分级**的挑战流程 | 单一 `/auth/high-risk/verify` |
+| **计划任务** | F-7-05 完整（一次性/每天/每周） | 只有 VM 级 `schedules` |
+| **存储卷** | 条带 × 镜像的容量与冗余换算层 | 有 create-volume 但无换算 |
+| **目录共享** | 只收相对路径的安全模型 | `mount/:vmName/:tag`，看不出这层约束 |
+
+---
+
+## 5. 实施顺序
+
+排序依据是**「不做会不会让人用不了系统」>「不做会不会让人白买硬件」>「不做会不会让排查没有依据」**：
+
+| 顺序 | 编号 | 内容 | 理由 |
+|---|---|---|---|
+| 1 | G-11 | 账号恢复流程 | **唯一一个会让人彻底进不去系统的缺口** |
+| 2 | G-06 | 日志管理 | 出问题时现在只有审计日志，看不到系统报了什么错 |
+| 3 | G-07 | 带宽与流量配额 | 两张统计表已在采数据，采了不用等于白采 |
+| 4 | G-20 | 磁盘 resize 与 IOPS | 最常见的运维需求之一 |
+| 5 | G-03 | 宿主机防火墙 + 连接管理 | 安全层级，且连接管理是排查端口占用的唯一手段 |
+| 6 | G-01 | 硬件直通 | 用户买了 GPU 却挂不进去时它是唯一出路 |
+| 7 | G-02 | 宿主机性能调优 | 内存吃紧时的救命开关 |
+| 8 | G-08 | 平台自检与修复 | 依赖前几项建立的能力清单 |
+| 9 | G-09 | 公网访问开关 | 安全边界 |
+| 10 | G-10 | 虚拟机密码重置 | 依赖来宾自动化，价值明确但面小 |
+| 11 | G-04 / G-05 | SPICE / XML 直编 | 兜底出口，可以做但要谨慎 |
+| 12 | G-21 ~ G-28 | 粒度补齐 | 按实际使用频率逐项推进 |
+
+---
+
+## 6. 进度
+
+| 编号 | 内容 | 状态 | 提交 |
+|---|---|---|---|
+| G-11 | 账号恢复流程 | 未开始 | — |
+| G-06 | 日志管理 | 未开始 | — |
+| G-07 | 带宽与流量配额 | 未开始 | — |
+| G-20 | 磁盘 resize 与 IOPS | 未开始 | — |
+| G-03 | 宿主机防火墙 | 未开始 | — |
+| G-01 | 硬件直通 | 未开始 | — |
+| G-02 | 宿主机性能调优 | 未开始 | — |
+| G-08 | 平台自检与修复 | 未开始 | — |
+| G-09 | 公网访问开关 | 未开始 | — |
+| G-10 | 虚拟机密码重置 | 未开始 | — |
+| G-04 | SPICE 控制台 | 未开始 | — |
+| G-05 | XML 直编 | 未开始 | — |
+| G-21 ~ G-28 | 粒度补齐 | 未开始 | — |
+
+> 每完成一项，更新本表并在此处记一行简短结论（做了什么取舍、测试抓到了什么）。
+
+---
+
+## 7. 变更记录
+
+| 日期 | 变更 |
+|---|---|
+| 2026-09-18 | 初版：基于 QVMConsole 构建产物分析（342 条接口 / 55 个分块）整理 |
