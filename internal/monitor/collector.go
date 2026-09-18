@@ -15,6 +15,7 @@ package monitor
 import (
 	"context"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/scheduler"
 )
 
 // Options 是采集器的参数。
@@ -63,6 +65,11 @@ type Collector struct {
 	done  chan struct{}
 	once  sync.Once
 	now   func() time.Time
+
+	// obs 是调度事件的记录器；为 nil 时不做任何记录。
+	//
+	// 做成可选而不是构造参数：观测是**附加**能力，没接上时采集器照常工作。
+	obs *scheduler.Recorder
 }
 
 // NewCollector 构造采集器。
@@ -76,6 +83,12 @@ func NewCollector(db *gorm.DB, client agent.Client, opts Options) *Collector {
 		now: time.Now,
 	}
 }
+
+// Observe 接入调度事件记录。为 nil 时不做任何记录。
+//
+// 做成可选（而不是构造参数）：观测是**附加**能力，没接上时采集器照常工作。
+// 把可选的观测塞进构造签名，会让每个测试都不得不传一个 nil 进去。
+func (c *Collector) Observe(rec *scheduler.Recorder) { c.obs = rec }
 
 // Start 启动采集循环（非阻塞）。
 func (c *Collector) Start(ctx context.Context) {
@@ -130,13 +143,38 @@ func (c *Collector) tick(ctx context.Context) {
 		log.Printf("[monitor] 查询节点失败: %v", err)
 		return
 	}
+	var hostCount, vmCount int
 	for i := range nodes {
-		c.collectNode(ctx, &nodes[i])
+		hostOK, vms := c.collectNode(ctx, &nodes[i])
+		if hostOK {
+			hostCount++
+		}
+		vmCount += vms
+	}
+
+	// **一轮一条**，而不是一台机器一条。
+	//
+	// 记录的是「这一轮实际采到了东西」这件事本身——没有采到任何数据时不写，
+	// 因为那正是"无事发生"，而这张表只该留下实际发生的动作。
+	if hostCount > 0 {
+		c.obs.Record(ctx, scheduler.Event{
+			Key: scheduler.KeyMetricsHost, Status: model.SchedulerDone,
+			Scope:   strconv.Itoa(hostCount) + " 个节点",
+			Message: "采集宿主机的 CPU / 内存 / 网络 / 磁盘指标",
+		})
+	}
+	if vmCount > 0 {
+		c.obs.Record(ctx, scheduler.Event{
+			Key: scheduler.KeyMetricsGuest, Status: model.SchedulerDone,
+			Scope:   strconv.Itoa(vmCount) + " 台虚拟机",
+			Message: "采集运行中虚拟机的指标，并累计运行时长与流量",
+		})
 	}
 }
 
-// collectNode 采集一台宿主机及其上的虚拟机。
-func (c *Collector) collectNode(ctx context.Context, node *model.Node) {
+// collectNode 采集一台宿主机及其上的虚拟机，返回宿主机是否采到、
+// 以及采到了几台虚拟机的指标。
+func (c *Collector) collectNode(ctx context.Context, node *model.Node) (bool, int) {
 	at := c.now().UTC()
 
 	// 1) 宿主机指标。
@@ -149,14 +187,14 @@ func (c *Collector) collectNode(ctx context.Context, node *model.Node) {
 	})
 	if err != nil {
 		log.Printf("[monitor] 采集宿主机指标失败 node=%d: %v", node.ID, err)
-		return
+		return false, 0
 	}
 	if !result.Success {
-		return
+		return false, 0
 	}
 	host, ok := result.Data[agent.HostStatsDataKey].(agent.HostStats)
 	if !ok {
-		return
+		return false, 0
 	}
 
 	rec := model.HostStatsRecord{
@@ -172,26 +210,29 @@ func (c *Collector) collectNode(ctx context.Context, node *model.Node) {
 	if host.Devices != "" {
 		rec.DeviceStats = &host.Devices
 	}
+	hostOK := true
 	if err := c.db.WithContext(ctx).Create(&rec).Error; err != nil {
 		log.Printf("[monitor] 写入宿主机指标失败 node=%d: %v", node.ID, err)
+		hostOK = false
 	}
 
 	// 2) 该节点上运行中的虚拟机。
-	c.collectNodeVMs(ctx, node, at)
+	return hostOK, c.collectNodeVMs(ctx, node, at)
 }
 
 // collectNodeVMs 采集节点上运行中的虚拟机。
 //
 // 只采**运行中**的：停机机器没有指标可读，而给它们写记录会让图表上出现
 // 一条贴着 0 的线——那看起来像"这台机器很闲"，而不是"它没在跑"。
-func (c *Collector) collectNodeVMs(ctx context.Context, node *model.Node, at time.Time) {
+func (c *Collector) collectNodeVMs(ctx context.Context, node *model.Node, at time.Time) int {
+	written := 0
 	var vms []model.VM
 	if err := c.db.WithContext(ctx).
 		Where("node_id = ? AND status = ? AND present = ?",
 			node.ID, model.VMStatusRunning, true).
 		Find(&vms).Error; err != nil {
 		log.Printf("[monitor] 查询运行中虚拟机失败 node=%d: %v", node.ID, err)
-		return
+		return 0
 	}
 
 	interval := int64(c.opts.Interval.Seconds())
@@ -231,6 +272,8 @@ func (c *Collector) collectNodeVMs(ctx context.Context, node *model.Node, at tim
 		}
 		if err := c.db.WithContext(ctx).Create(&rec).Error; err != nil {
 			log.Printf("[monitor] 写入虚拟机指标失败 vm=%d: %v", vm.ID, err)
+		} else {
+			written++
 		}
 
 		// 3) 累计运行时长与流量。
@@ -239,6 +282,7 @@ func (c *Collector) collectNodeVMs(ctx context.Context, node *model.Node, at tim
 		// 长度就是采样间隔。放进别的流程里会让增量与实际经过的时间对不上。
 		c.accumulate(ctx, vm.ID, vm.NodeID, vm.OwnerID, date, interval, &s)
 	}
+	return written
 }
 
 // accumulate 把本轮的运行时长与流量增量累加到当天。
@@ -302,6 +346,7 @@ func (c *Collector) accumulate(
 // 运行时长要能回溯），而明细只在排查最近几天时有用。
 func (c *Collector) cleanup(ctx context.Context) {
 	cutoff := c.now().UTC().Add(-c.opts.DetailRetention)
+	deleted := int64(0)
 
 	res := c.db.WithContext(ctx).
 		Where("at < ?", cutoff).Delete(&model.HostStatsRecord{})
@@ -309,6 +354,7 @@ func (c *Collector) cleanup(ctx context.Context) {
 		log.Printf("[monitor] 清理宿主机指标失败: %v", res.Error)
 	} else if res.RowsAffected > 0 {
 		log.Printf("[monitor] 清理了 %d 条过期宿主机指标", res.RowsAffected)
+		deleted += res.RowsAffected
 	}
 
 	res = c.db.WithContext(ctx).
@@ -317,6 +363,18 @@ func (c *Collector) cleanup(ctx context.Context) {
 		log.Printf("[monitor] 清理虚拟机指标失败: %v", res.Error)
 	} else if res.RowsAffected > 0 {
 		log.Printf("[monitor] 清理了 %d 条过期虚拟机指标", res.RowsAffected)
+		deleted += res.RowsAffected
+	}
+
+	// **删了才记。** 清理器每天都在跑，而绝大多数时候它一条都删不掉——
+	// 那些轮次不该留下任何东西，否则"清理"这件事会在事件列表里天天出现，
+	// 而用户真正需要看到的是"某天它删掉了 50 万条"。
+	if deleted > 0 {
+		c.obs.Record(ctx, scheduler.Event{
+			Key: scheduler.KeyMetricsDaily, Status: model.SchedulerDone,
+			Scope:   strconv.FormatInt(deleted, 10) + " 条明细",
+			Message: "清理超过保留期的指标明细（按天聚合的数据保留）",
+		})
 	}
 }
 

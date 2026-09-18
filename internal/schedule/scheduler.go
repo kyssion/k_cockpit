@@ -8,11 +8,13 @@ package schedule
 import (
 	"context"
 	"log"
+	"strconv"
 	"time"
 
 	"gorm.io/gorm"
 
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/scheduler"
 	"k_cockpit/internal/task"
 )
 
@@ -47,6 +49,9 @@ type Scheduler struct {
 
 	stop chan struct{}
 	done chan struct{}
+
+	// obs 是调度事件的记录器；为 nil 时不做任何记录。
+	obs *scheduler.Recorder
 }
 
 // New 构造调度器。
@@ -69,6 +74,9 @@ func New(db *gorm.DB, queue *task.Queue, opts Options) *Scheduler {
 		done:  make(chan struct{}),
 	}
 }
+
+// Observe 接入调度事件记录。为 nil 时不做任何记录。
+func (s *Scheduler) Observe(rec *scheduler.Recorder) { s.obs = rec }
 
 // Start 启动后台扫描。立即扫一次，之后按 Interval 周期执行。
 func (s *Scheduler) Start(ctx context.Context) {
@@ -146,6 +154,10 @@ func (s *Scheduler) fire(ctx context.Context, sch model.VMSchedule) {
 		return
 	}
 
+	// 从这里往下都是**我们这一轮真的要做的事**，因此取一次名字。
+	// 放在占位成功之后：被抢走的那一轮不该产生任何查询。
+	name := s.vmNameOf(ctx, sch.VMID)
+
 	// 落后太多说明服务停过机。**刻意不补执行**：
 	//
 	// 补执行意味着恢复后连着做几次本该分散在不同时间的操作。对「每天 3 点
@@ -157,6 +169,17 @@ func (s *Scheduler) fire(ctx context.Context, sch model.VMSchedule) {
 		s.mark(ctx, sch.ID, "skipped", nil)
 		log.Printf("[schedule] 跳过错过的执行 id=%d vm=%d 计划=%s 落后=%s",
 			sch.ID, sch.VMID, firedFor.Format(time.RFC3339), now.Sub(firedFor).Round(time.Minute))
+		// **跳过也要记。** 用户设了「每天 3 点关机」而某天没关，他唯一能
+		// 查到的解释就在这条上——「服务停过机，那次被跳过了」。不记的话，
+		// 事件列表里什么都没有，而这与「定时任务根本没配置成功」在界面上
+		// 长得一模一样。
+		s.obs.Record(ctx, scheduler.Event{
+			Key: scheduler.KeyScheduleScan, Status: model.SchedulerDone,
+			Scope: name,
+			Message: "跳过一次错过的执行：服务停机期间已过点，刻意不补执行（计划 " +
+				firedFor.Format("2006-01-02 15:04") + "，落后 " +
+				now.Sub(firedFor).Round(time.Minute).String() + "）",
+		})
 		return
 	}
 
@@ -164,12 +187,39 @@ func (s *Scheduler) fire(ctx context.Context, sch model.VMSchedule) {
 	if err != nil {
 		s.mark(ctx, sch.ID, "failed", nil)
 		log.Printf("[schedule] 入队失败 id=%d action=%s: %v", sch.ID, sch.Action, err)
+		s.obs.Record(ctx, scheduler.Event{
+			Key: scheduler.KeyScheduleScan, Status: model.SchedulerFailed,
+			Scope:   name,
+			Message: "触发定时任务失败：" + actionLabel(sch.Action) + "（" + err.Error() + "）",
+		})
 		return
 	}
 	s.mark(ctx, sch.ID, "success", &t.ID)
 
 	log.Printf("[schedule] 已执行 id=%d vm=%d action=%s task=%d",
 		sch.ID, sch.VMID, sch.Action, t.ID)
+	s.obs.Record(ctx, scheduler.Event{
+		Key: scheduler.KeyScheduleScan, Status: model.SchedulerDone,
+		Scope:   name,
+		Message: "触发定时任务：" + actionLabel(sch.Action) + "，任务 #" + strconv.FormatInt(t.ID, 10),
+	})
+}
+
+// actionLabel 把动作翻译成人话。
+//
+// 事件消息是给用户看的，而存进库的是 `poweron` 这样的标识符——直接把标识符
+// 拼进消息里，用户会看到「触发定时任务：poweron」，然后不确定自己是不是
+// 设错了什么。
+func actionLabel(action string) string {
+	switch action {
+	case model.ScheduleActionStart:
+		return "开机"
+	case model.ScheduleActionShutdown:
+		return "关机"
+	case model.ScheduleActionDelete:
+		return "删除虚拟机"
+	}
+	return action
 }
 
 // enqueue 按动作入队一个任务。
@@ -230,6 +280,17 @@ func (s *Scheduler) enqueue(ctx context.Context, sch model.VMSchedule) (*model.T
 	}
 
 	return s.queue.Enqueue(ctx, spec)
+}
+
+// vmNameOf 取虚拟机名，取不到时回落到 ID。
+//
+// 事件里的 scope 是给人看的，用名字才能直接对上是哪台机器——一个「虚拟机
+// #17」的消息，用户还得再去查一次列表。
+func (s *Scheduler) vmNameOf(ctx context.Context, vmID int64) string {
+	if vm, err := s.vmOf(ctx, vmID); err == nil && vm.Name != "" {
+		return vm.Name
+	}
+	return "虚拟机 #" + strconv.FormatInt(vmID, 10)
 }
 
 // vmOf 取虚拟机记录。

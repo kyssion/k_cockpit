@@ -34,6 +34,7 @@ import (
 	"k_cockpit/internal/risk"
 	"k_cockpit/internal/router"
 	"k_cockpit/internal/schedule"
+	sched "k_cockpit/internal/scheduler"
 	"k_cockpit/internal/securitygroup"
 	"k_cockpit/internal/settings"
 	"k_cockpit/internal/storage"
@@ -187,7 +188,25 @@ func main() {
 	auditLogSvc := auditlog.NewService(db)
 	userAdminSvc := useradmin.NewService(db, recorder, quotaAdapter{svc: quotaSvc})
 	tagSvc := vmtag.NewService(db, recorder)
+	// 调度器注册表（F-7-04）：先登记身份与说明，再把记录器交给各组件。
+	//
+	// **登记发生在启动之前**：界面上的「有哪些调度器在跑」来自这张表，
+	// 而不是来自事件表。只靠事件的话，一个正常但最近无事可做的调度器
+	// 会从列表里消失——而那与「它坏了」是两回事。
+	schedRegistry := sched.NewRegistry()
+	sched.RegisterBuiltins(schedRegistry, sched.BuiltinOptions{
+		MetricsInterval:        monitor.DefaultOptions().Interval,
+		MetricsCleanupInterval: monitor.DefaultOptions().CleanupInterval,
+		ScheduleInterval:       schedule.DefaultOptions().Interval,
+		QueuePollInterval:      task.DefaultOptions().PollInterval,
+	})
+	// 记录器在这里声明（在**所有**周期组件之前）：定时任务扫描器在构造之后
+	// 马上就要接上它，而采集器要到下面才构造。声明点取两者的最早者，省得
+	// 为了一个变量把装配顺序倒过来。
+	schedRecorder := sched.NewRecorder(db, schedRegistry)
+
 	monitorSvc := monitor.NewService(db)
+	schedulerSvc := sched.NewService(db, schedRegistry)
 	networkSvc := network.NewService(db, mockAgent, queue, recorder)
 
 	// vm 与 storage 都要读设置里的陈旧阈值：把 settingsSvc 作为 Provider
@@ -201,6 +220,8 @@ func main() {
 	scheduleSvc := schedule.NewService(db)
 	templateSvc := template.NewService(db, queue, recorder, mockAgent, quotaSvc)
 	scheduler := schedule.New(db, queue, schedule.Options{})
+	// 观测要在启动之前接上，否则启动后到接上之间那一轮的动作不会被记录。
+	scheduler.Observe(schedRecorder)
 	scheduler.Start(context.Background())
 
 	// 控制台密码需要可逆加密（f-2-08 R-005）：它要交给 agent 参与 VNC 认证，
@@ -224,6 +245,7 @@ func main() {
 		PublicIP:      publicIPSvc,
 		SecurityGroup: sgSvc,
 		UserStorage:   userStorageSvc,
+		Scheduler:     schedulerSvc,
 		Firewall:      firewallSvc,
 		APIKey:        apiKeySvc,
 		PortMirror:    mirrorSvc,
@@ -247,6 +269,8 @@ func main() {
 	//
 	// 采集有它自己的节奏，与谁在看无关。
 	collector := monitor.NewCollector(db, mockAgent, monitor.DefaultOptions())
+	collector.Observe(schedRecorder)
+
 	collector.Start(context.Background())
 	defer collector.Stop()
 

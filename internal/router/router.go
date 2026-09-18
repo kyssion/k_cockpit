@@ -28,6 +28,7 @@ import (
 	"k_cockpit/internal/quota"
 	"k_cockpit/internal/risk"
 	"k_cockpit/internal/schedule"
+	"k_cockpit/internal/scheduler"
 	"k_cockpit/internal/securitygroup"
 	"k_cockpit/internal/settings"
 	"k_cockpit/internal/storage"
@@ -70,6 +71,8 @@ type Deps struct {
 	SecurityGroup *securitygroup.Service
 	// UserStorage 提供用户存储空间与分片上传（F-5-03/04/05）。
 	UserStorage *userstorage.Service
+	// Scheduler 提供周期性调度器与调度事件查询（F-7-04）。
+	Scheduler *scheduler.Service
 	// Firewall 提供双层防火墙策略（F-4-11）。
 	Firewall *firewall.Service
 	// APIKey 提供 API 凭证与一次性令牌（F-1-10）。
@@ -118,6 +121,7 @@ func Register(h *server.Hertz, deps Deps) {
 	sgHandler := handler.NewSecurityGroup(deps.SecurityGroup)
 	userStorageHandler := handler.NewUserStorage(deps.UserStorage)
 	volumeHandler := handler.NewStorageVolume(deps.Storage)
+	schedulerHandler := handler.NewScheduler(deps.Scheduler)
 	firewallHandler := handler.NewFirewall(deps.Firewall)
 	apiKeyHandler := handler.NewAPIKey(deps.APIKey)
 	mirrorHandler := handler.NewPortMirror(deps.PortMirror)
@@ -364,6 +368,17 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.GetVMPolicy)
 		v1.PUT("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.SetVMPolicy)
 		v1.DELETE("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.ClearVMPolicy)
+
+		// 调度器框架（F-7-04）。
+		//
+		// 归管理员：这里暴露的是**系统内部的运行细节**（有哪些周期任务、
+		// 最近做了什么、哪些失败了）。它对运维排查有用，对租户没有意义。
+		//
+		// 两个接口都只读——调度器是代码里注册的，不能从界面上开关。
+		// 一个能被随手关掉的指标采集器，会让「指标为什么断了」变成一个
+		// 需要翻操作日志才能回答的问题。
+		v1.GET("/schedulers", requireAuth, adminOnly, schedulerHandler.Overview)
+		v1.GET("/scheduler-events", requireAuth, adminOnly, schedulerHandler.Events)
 
 		// 存储卷（F-5-02，LVM 多盘聚合）。
 		//
