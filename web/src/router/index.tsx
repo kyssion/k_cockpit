@@ -18,6 +18,7 @@ import { PortMirrorPage } from '@/views/network/PortMirrorPage'
 import { SecurityGroupPage } from '@/views/network/SecurityGroupPage'
 import { PortSecurityPage } from '@/views/network/PortSecurityPage'
 import { HostFirewallPage } from '@/views/network/HostFirewallPage'
+import { PassthroughPage } from '@/views/network/PassthroughPage'
 import { CapturePage } from '@/views/network/CapturePage'
 import { ImportPage } from '@/views/storage/ImportPage'
 import { MyStoragePage } from '@/views/storage/MyStoragePage'
@@ -85,6 +86,7 @@ export const router = createBrowserRouter([
           { path: 'security-group', element: <SecurityGroupPage /> },
           { path: 'port-security', element: <PortSecurityPage /> },
           { path: 'host-firewall', element: <HostFirewallPage /> },
+          { path: 'passthrough', element: <PassthroughPage /> },
           { path: 'capture', element: <CapturePage /> },
           { path: 'firewall', element: <FirewallPage /> },
           { path: 'port-mirror', element: <PortMirrorPage /> },

@@ -31,6 +31,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/security-group', label: '安全组' },
   { to: '/port-security', label: '端口安全', roles: ['admin'] },
   { to: '/host-firewall', label: '宿主机防火墙', roles: ['admin'] },
+  { to: '/passthrough', label: '硬件直通', roles: ['admin'] },
   { to: '/capture', label: '抓包诊断' },
   // 防火墙不在这里列：它是管理员专属的（见下面 admin 分组）。
   // 无角色限制地列出来，普通租户会看到一个点进去 403 的菜单。
