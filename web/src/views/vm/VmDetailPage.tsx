@@ -19,6 +19,7 @@ import { Link, useNavigate, useParams } from 'react-router'
 import { TagEditor } from './TagEditor'
 
 import { ShareTab } from './ShareTab'
+import { VMMetricsPanel } from '@/views/monitor/MetricsPanel'
 
 import { ApiError, NetworkError } from '@/api/client'
 import {
@@ -91,6 +92,7 @@ type TabKey =
   | 'system'
   | 'snapshot'
   | 'network'
+  | 'monitor'
   | 'share'
   | 'schedule'
   | 'export'
@@ -101,6 +103,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'system', label: '系统信息' },
   { key: 'snapshot', label: '快照管理' },
   { key: 'network', label: '网络管理' },
+  { key: 'monitor', label: '监控' },
   { key: 'share', label: '目录共享' },
   { key: 'schedule', label: '定时任务' },
   { key: 'export', label: '导出' },
@@ -500,6 +503,14 @@ export function VmDetailPage() {
       {tab === 'console' && <ConsoleTab vmID={vm.id} />}
 
       {tab === 'snapshot' && <SnapshotTab vmID={vm.id} />}
+      {/* 监控画的是**这台机器实际发生了什么**，与「系统信息」里的配置
+          是两回事——配置说它应该有多少内存，监控说它实际用了多少。 */}
+      {tab === 'monitor' && (
+        <VMMetricsPanel
+          vmID={vm.id}
+          description="指标由采样器按固定间隔采集。图上断开的地方表示那段时间没采到数据，而不是指标为 0。"
+        />
+      )}
       {tab === 'share' && <ShareTab vmID={vm.id} />}
       {tab === 'schedule' && <ScheduleTab vmID={vm.id} />}
       {tab === 'export' && <ExportTab vm={vm} />}

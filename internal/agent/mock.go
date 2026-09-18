@@ -8,6 +8,7 @@ import (
 	"hash/fnv"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -677,6 +678,23 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 				CapabilityOVS: "未检测到 Open vSwitch",
 			},
 		}
+
+	case OpStoragePoolScan:
+		// 池内是否存在磁盘——这是**删除路径上唯一的保护**（R-008）。
+		//
+		// 一律返回空会让这条检查永远不被走到；而一律返回非空更糟：那样
+		// 任何池都删不掉，连正常流程都走不通。按设备路径区分，两条分支
+		// 才都真实可达。
+		//
+		// 判据与 OpNodeDisks 的假数据对齐：sdc 就是那块标了「已含数据」
+		// 的盘，因此在它上面建的池里确实有东西。演示时会看到：建在 sdb
+		// （空闲盘）上的池能删掉，建在 sdc 上的会被拦下并列出占用者——
+		// 那正是这条检查存在的意义。
+		volumes := []string{}
+		if strings.Contains(op.Target, "sdc") {
+			volumes = []string{"vm-101-disk0", "vm-102-disk0"}
+		}
+		data[VolumeListKey] = volumes
 
 	case OpStoragePoolCreate:
 		data["mount_path"] = "/var/lib/k_cockpit/pools/" + op.Target

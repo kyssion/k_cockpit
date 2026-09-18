@@ -391,7 +391,6 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.DELETE("/my-storage/files/:id", requireAuth, userStorageHandler.DeleteFile)
 		v1.POST("/my-storage/uploads", requireAuth, userStorageHandler.CreateUpload)
 		v1.GET("/my-storage/uploads/:uploadID", requireAuth, userStorageHandler.GetUpload)
-		v1.PUT("/my-storage/uploads/:uploadID/chunks", requireAuth, userStorageHandler.UploadChunk)
 		v1.POST("/my-storage/uploads/:uploadID/complete", requireAuth, userStorageHandler.CompleteUpload)
 		// 分片**字节**：请求体是裸二进制，不走 JSON。
 		v1.PUT("/my-storage/uploads/:uploadID/chunks/:index", requireAuth, userStorageHandler.PutChunkData)

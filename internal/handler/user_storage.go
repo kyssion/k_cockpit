@@ -140,31 +140,9 @@ func (h *UserStorage) GetUpload(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, view)
 }
 
-type uploadChunkRequest struct {
-	// Index 是分片序号，从 0 开始。
-	Index int `json:"index"`
-	// SHA256 是该分片的摘要，供节点侧校验。留空表示不校验。
-	SHA256 string `json:"sha256"`
-}
-
-// UploadChunk 登记一个分片已收到（API-146）。
-//
-// 重复登记同一分片**不算错误**：网络重试是常态。
-func (h *UserStorage) UploadChunk(ctx context.Context, c *app.RequestContext) {
-	var req uploadChunkRequest
-	if err := c.Bind(&req); err != nil {
-		api.Fail(c, api.InvalidParameter("请求参数不合法"))
-		return
-	}
-	user := auth.CurrentUser(c)
-
-	view, err := h.svc.UploadChunk(ctx, user.ID, c.Param("uploadID"), req.Index, req.SHA256)
-	if err != nil {
-		api.Fail(c, err)
-		return
-	}
-	api.OK(c, view)
-}
+// **这里没有「只登记分片」的接口。** 登记只发生在 PutChunkData 内——
+// 见 userstorage.Service 里同一处的说明：允许「只登记字节」等于允许调用方
+// 声称某几片已收到而磁盘上什么都没有，而那个缺口要到拼接时才暴露。
 
 // PutChunkData 接收一个分片的**字节**（API-148）。
 //

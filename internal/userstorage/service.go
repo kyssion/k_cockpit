@@ -477,10 +477,14 @@ func (s *Service) UploadChunkData(
 	}, nil
 }
 
-// UploadChunk 登记一个分片已收到（F-5-04：缺失分片补传）。
+// **这里没有「只登记分片」的接口。**
 //
-// 重复登记同一分片**不算错误**：网络重试是常态，把它当成错误会让客户端在
-// 一次正常的重试上收到失败，然后放弃整个上传。
+// 曾经有过：它接收序号与摘要，把 bitmap 标上，而字节从来没到过任何地方。
+// 换成接收字节的那一层之后它就是多余的，而且**留着有害**——一个调用方可以
+// 声称某几片已经收到，而磁盘上什么都没有；完成拼接时才会暴露，那时用户已经
+// 以为传完了，而失败信息指向的是「分片缺失」，与他实际做过的事对不上。
+//
+// 登记现在只发生在 UploadChunkData 内（先落盘、再登记）。
 func (s *Service) UploadChunk(
 	ctx context.Context, userID int64, uploadID string, index int, chunkSHA256 string,
 ) (*UploadView, error) {

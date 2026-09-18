@@ -10,6 +10,7 @@
  * 在别处操作失败后，回头才发现原来是维护中。
  */
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
+import { HostMetricsPanel } from '@/views/monitor/MetricsPanel'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 
@@ -27,13 +28,14 @@ import { StatusBadge } from '@/components/common/StatusBadge'
 import { formatBytes, formatDateTime, relativeTime } from '@/utils/format'
 import { ENROLL_STATE_LABEL, NODE_STATUS_LABEL, NODE_STATUS_TONE } from '@/utils/labels'
 
-type TabKey = 'overview' | 'storage' | 'network' | 'vms'
+type TabKey = 'overview' | 'storage' | 'network' | 'vms' | 'monitor'
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'overview', label: '概览' },
   { key: 'storage', label: '存储' },
   { key: 'network', label: '网络' },
   { key: 'vms', label: '虚拟机' },
+  { key: 'monitor', label: '监控' },
 ]
 
 export function NodeDetailPage() {
@@ -171,6 +173,12 @@ export function NodeDetailPage() {
       {tab === 'storage' && <StorageTab nodeID={node.id} />}
       {tab === 'network' && <NetworkTab nodeID={node.id} />}
       {tab === 'vms' && <VmsTab nodeID={node.id} />}
+      {tab === 'monitor' && (
+        <HostMetricsPanel
+          nodeID={node.id}
+          description="宿主机的整体负载。它是这台机器上所有虚拟机的合计——单个虚拟机占用偏高时，这里能看出还有多少余量。"
+        />
+      )}
 
       <Modal
         open={maintenanceOpen}
