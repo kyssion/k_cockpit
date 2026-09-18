@@ -361,6 +361,8 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/my-storage/uploads/:uploadID", requireAuth, userStorageHandler.GetUpload)
 		v1.PUT("/my-storage/uploads/:uploadID/chunks", requireAuth, userStorageHandler.UploadChunk)
 		v1.POST("/my-storage/uploads/:uploadID/complete", requireAuth, userStorageHandler.CompleteUpload)
+		// 分片**字节**：请求体是裸二进制，不走 JSON。
+		v1.PUT("/my-storage/uploads/:uploadID/chunks/:index", requireAuth, userStorageHandler.PutChunkData)
 
 		// 目录共享到虚拟机（F-5-06，9p VirtFS）。
 		//

@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"log"
+	"path/filepath"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app/server"
@@ -169,7 +170,13 @@ func main() {
 	importerSvc := importer.NewService(db, queue, mockAgent, recorder, quotaSvc)
 	publicIPSvc := publicip.NewService(db, queue, mockAgent, recorder)
 	sgSvc := securitygroup.NewService(db, queue, mockAgent, recorder)
-	userStorageSvc := userstorage.NewService(db, recorder, quotaSvc)
+	// 分片暂存区放在数据库同级的 data 目录下——控制面持久化的东西都在那里。
+	chunkStore, err := userstorage.NewChunkStore(filepath.Join(filepath.Dir(cfg.DB.Path), "uploads"))
+	if err != nil {
+		log.Fatalf("[server] 初始化上传暂存区失败: %v", err)
+	}
+	userStorageSvc := userstorage.NewService(db, recorder, quotaSvc).
+		WithChunks(chunkStore).WithAgent(mockAgent)
 	firewallSvc := firewall.NewService(db, mockAgent, recorder)
 	apiKeySvc := apikey.NewService(db, recorder)
 	mirrorSvc := portmirror.NewService(db, mockAgent, recorder)

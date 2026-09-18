@@ -166,6 +166,36 @@ func (h *UserStorage) UploadChunk(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, view)
 }
 
+// PutChunkData 接收一个分片的**字节**（API-148）。
+//
+// 请求体是**裸字节**而不是 JSON——分片本身就是二进制，把它 base64 包进
+// JSON 会让体积涨 33%，而一次 8MiB 的分片会因此多传 2.7MiB，且服务端还要
+// 再解一次码。两条路径都不产生额外信息。
+//
+// 摘要放在查询参数里而不是请求头：它随内容变化，而请求头的语义是"请求的
+// 元信息"，一个会变的摘要放在那里容易被中间件按不透明的方式处理。
+func (h *UserStorage) PutChunkData(ctx context.Context, c *app.RequestContext) {
+	uploadID := c.Param("uploadID")
+	index, err := namedPathID(c, "index", "分片序号")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	body := c.Request.Body()
+	if len(body) == 0 {
+		api.Fail(c, api.InvalidParameter("分片内容为空"))
+		return
+	}
+	user := auth.CurrentUser(c)
+
+	view, err := h.svc.UploadChunkData(ctx, user.ID, uploadID, int(index), body, c.Query("sha256"))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, view)
+}
+
 // CompleteUpload 收尾上传（API-147）。
 func (h *UserStorage) CompleteUpload(ctx context.Context, c *app.RequestContext) {
 	user := auth.CurrentUser(c)

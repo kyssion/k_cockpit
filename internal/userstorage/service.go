@@ -21,13 +21,16 @@ import (
 	"encoding/hex"
 	"errors"
 	"log"
+	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"gorm.io/gorm"
 
+	"k_cockpit/internal/agent"
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/audit"
 	"k_cockpit/internal/authz"
@@ -40,7 +43,31 @@ type Service struct {
 	audit *audit.Recorder
 	// quota 用于检查配额。为 nil 时不做检查（仅测试环境）。
 	quota quotaChecker
+	// chunks 是分片暂存区；为 nil 时**不接受分片字节**（只跑状态机）。
+	chunks *ChunkStore
+	// agent 用于把拼好的文件交给节点；为 nil 时跳过下发。
+	agent agentClient
 	now   func() time.Time
+}
+
+// agentClient 是本包对 agent 的最小依赖。
+type agentClient interface {
+	Execute(ctx context.Context, op agent.Operation) (*agent.Result, error)
+}
+
+// WithChunks 挂上分片暂存区。
+//
+// 用链式设置而不是塞进构造函数：现有的调用点（尤其是测试）不需要为了一个
+// 可选能力改动签名——而"不挂暂存区"本身是一个有意义的状态（只跑状态机）。
+func (s *Service) WithChunks(c *ChunkStore) *Service {
+	s.chunks = c
+	return s
+}
+
+// WithAgent 挂上节点客户端。
+func (s *Service) WithAgent(a agentClient) *Service {
+	s.agent = a
+	return s
 }
 
 // quotaChecker 是本包对配额服务的**最小依赖**。
@@ -384,6 +411,72 @@ func (s *Service) GetUpload(ctx context.Context, userID int64, uploadID string) 
 	return view, nil
 }
 
+// UploadChunkData 接收一个分片的**字节**并落盘（F-5-04）。
+//
+// 它是真正让上传跑起来的那一步：此前的 UploadChunk 只登记序号，而字节
+// 从来没到过任何地方。
+//
+// 顺序是**先落盘、再登记**。反过来的话，登记成功而落盘失败会留下一个
+// 「bitmap 说收到了、磁盘上却没有」的缺口——而那个缺口在完成拼接时才会
+// 暴露，那时用户已经以为传完了。
+func (s *Service) UploadChunkData(
+	ctx context.Context, userID int64, uploadID string, index int, data []byte, clientSHA string,
+) (*UploadView, error) {
+	if s.chunks == nil {
+		return nil, api.ValidationFailed("服务端未启用分片接收")
+	}
+	session, err := s.loadSession(ctx, uploadID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if session.Status == model.UploadCompleted {
+		return nil, api.ValidationFailed("该上传已完成")
+	}
+	if session.Expired(s.now()) {
+		if err := s.markExpired(ctx, session); err != nil {
+			return nil, err
+		}
+		return nil, api.ValidationFailed("该上传已过期，请重新发起")
+	}
+
+	total := session.TotalChunks()
+	if index < 0 || index >= total {
+		return nil, api.InvalidParameter(
+			"分片序号越界：应在 0 到 " + strconv.Itoa(total-1) + " 之间")
+	}
+
+	digest, err := s.chunks.Put(uploadID, index, data)
+	if err != nil {
+		return nil, err
+	}
+	// 客户端给了摘要就校验：不校验的话，一个传坏的分片会被当成好的收下，
+	// 而最终文件在装系统时才失败——那时已经很难追到是哪个环节坏的。
+	//
+	// 不匹配时**不登记**：让客户端重传这一片。登记了再报错等于把坏数据
+	// 留在了暂存区，而完成时的摘要比对会发现它，但那时用户已经白传了整份。
+	if clientSHA != "" && !strings.EqualFold(clientSHA, digest) {
+		return nil, api.ValidationFailed(
+			"分片 " + strconv.Itoa(index) + " 的摘要不匹配，请重传该分片")
+	}
+
+	session.MarkReceived(index)
+	updates := map[string]any{
+		"received_bitmap": session.ReceivedBitmap,
+		"expires_at":      s.now().Add(sessionTTL),
+	}
+	if err := s.db.WithContext(ctx).Model(&model.UploadSession{}).
+		Where("upload_id = ?", session.UploadID).
+		Updates(updates).Error; err != nil {
+		log.Printf("[userstorage] 登记分片失败 %s: %v", uploadID, err)
+		return nil, api.Internal()
+	}
+
+	return &UploadView{
+		UploadID: session.UploadID, Status: session.Status,
+		TotalChunks: total, MissingChunks: session.MissingChunks(),
+	}, nil
+}
+
 // UploadChunk 登记一个分片已收到（F-5-04：缺失分片补传）。
 //
 // 重复登记同一分片**不算错误**：网络重试是常态，把它当成错误会让客户端在
@@ -485,6 +578,59 @@ func (s *Service) CompleteUpload(
 		return nil, api.Internal()
 	}
 
+	// 拼接：把所有分片按序写进一个临时文件，并同时算出整份的摘要。
+	//
+	// **流式拼接**，不把整个文件读进内存——一个 40GB 的镜像不可能放进内存，
+	// 而"读进内存再写出去"的写法在测试里（几 KB）看不出问题。
+	assembledPath, assembledSum, err := s.assembleAndStage(ctx, session, relPath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		// 无论成败都删掉拼接出来的临时文件：它是一份**完整副本**，留着会
+		// 让一次 40GB 的上传在磁盘上占 80GB。分片暂存区则由下面按成败分别处理。
+		if rmErr := os.Remove(assembledPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+			log.Printf("[userstorage] 清理拼接临时文件失败: %v", rmErr)
+		}
+	}()
+
+	// 交给节点落盘。
+	//
+	// 契约要求节点回传的摘要与控制面算出的**必须一致**——不一致说明传输
+	// 过程中出了问题，此时应当把这次上传判为失败并清理，而不是登记一条
+	// 指向损坏内容的记录（用户会在装系统时才发现，而那时已经很难追查）。
+	if s.agent != nil {
+		result, err := s.agent.Execute(ctx, agent.Operation{
+			Kind:   agent.OpStorageFileCommit,
+			NodeID: *session.NodeID,
+			Target: relPath,
+			Params: map[string]any{
+				"rel_path": relPath,
+				"size":     session.TotalSize,
+				"checksum": assembledSum,
+				"staged":   assembledPath,
+			},
+		})
+		if err != nil {
+			return nil, api.Unavailable("节点不可达，文件未落盘（分片已保留，可重试）")
+		}
+		if !result.Success {
+			return nil, api.ValidationFailed(result.Message)
+		}
+		if info, ok := result.Data[agent.StorageFileDataKey].(agent.StorageFileInfo); ok {
+			if info.Checksum != "" && !strings.EqualFold(info.Checksum, assembledSum) {
+				// 清理掉这一份坏内容，并保留分片供重试。
+				if s.chunks != nil {
+					_ = s.chunks.Discard(session.UploadID)
+				}
+				log.Printf("[userstorage] 摘要不一致 upload=%s 本地=%s 节点=%s",
+					session.UploadID, assembledSum, info.Checksum)
+				return nil, api.ValidationFailed(
+					"文件校验失败：节点收到的内容与本地上传的不一致，请重新上传")
+			}
+		}
+	}
+
 	now := s.now()
 	file := model.StorageFile{
 		NodeID: *session.NodeID, UserID: session.OwnerID,
@@ -506,6 +652,15 @@ func (s *Service) CompleteUpload(
 		log.Printf("[userstorage] 更新会话状态失败 %s: %v", session.UploadID, err)
 		// 文件已经登记成功，会话状态没更新只影响后续查询——不因此判为失败，
 		// 那会让用户重试一次完整的上传，而文件其实已经在库里了。
+	}
+
+	// 文件已经登记好了，分片暂存区就没用了。清理失败只记日志——
+	// 它占的是磁盘空间，而"文件已经上传成功"这个事实不该被一次清理失败
+	// 推翻。废弃的分片由过期清理兜底。
+	if s.chunks != nil {
+		if err := s.chunks.Discard(session.UploadID); err != nil {
+			log.Printf("[userstorage] 上传完成后清理分片失败 %s: %v", session.UploadID, err)
+		}
 	}
 
 	s.record(ctx, audit.Entry{
@@ -581,6 +736,40 @@ func (s *Service) instantCopy(
 		return nil, api.Internal()
 	}
 	return &file, nil
+}
+
+// assembleAndStage 把分片拼成一个临时文件，返回它的路径与整份摘要。
+func (s *Service) assembleAndStage(
+	ctx context.Context, session *model.UploadSession, relPath string,
+) (string, string, error) {
+	if s.chunks == nil {
+		return "", "", api.ValidationFailed("服务端未启用分片接收")
+	}
+	tmpDir, err := os.MkdirTemp("", "kc-upload-")
+	if err != nil {
+		log.Printf("[userstorage] 创建临时目录失败: %v", err)
+		return "", "", api.Internal()
+	}
+	dst := filepath.Join(tmpDir, filepath.Base(relPath))
+
+	f, err := os.Create(dst)
+	if err != nil {
+		_ = os.RemoveAll(tmpDir)
+		log.Printf("[userstorage] 创建临时文件失败: %v", err)
+		return "", "", api.Internal()
+	}
+	sum, assembleErr := s.chunks.Assemble(session.UploadID, session.TotalChunks(), f)
+	closeErr := f.Close()
+	if assembleErr != nil || closeErr != nil {
+		_ = os.RemoveAll(tmpDir)
+		if assembleErr != nil {
+			return "", "", assembleErr
+		}
+		log.Printf("[userstorage] 关闭临时文件失败: %v", closeErr)
+		return "", "", api.Internal()
+	}
+	_ = ctx
+	return dst, sum, nil
 }
 
 // --- 内部 ---

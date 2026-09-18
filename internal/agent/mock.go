@@ -192,6 +192,12 @@ func stagePlan(op Operation) [][2]string {
 			{"target.define", "在目标节点定义"},
 			{"source.cleanup", "清理源侧"},
 		}
+	case OpStorageFileCommit:
+		return [][2]string{
+			{"verify_checksum", "校验文件摘要"},
+			{"write_file", "写入用户存储空间"},
+			{"fsync_dir", "落盘并同步目录"},
+		}
 	case OpNetworkProbe:
 		return [][2]string{
 			{"detect_ovs", "检测 Open vSwitch"},
@@ -380,6 +386,17 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 			// 「我原来接的网络、配的转发还在不在」。
 			Moved:           []string{"系统盘与数据盘", "全部网卡", "静态地址与端口转发"},
 			DurationSeconds: 47,
+		}
+
+	case OpStorageFileCommit:
+		// 回显控制面给的摘要与大小：契约要求两者一致，不一致时调用方会把
+		// 这次上传判为失败。mock 里如实回显，让那条分支不被误触发。
+		rel, _ := op.Params["rel_path"].(string)
+		size, _ := op.Params["size"].(int64)
+		sum, _ := op.Params["checksum"].(string)
+		data[StorageFileDataKey] = StorageFileInfo{
+			RelPath: rel, SizeBytes: size, Checksum: sum,
+			Message: "文件已写入用户存储空间",
 		}
 
 	case OpNetworkProbe:

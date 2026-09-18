@@ -57,7 +57,11 @@ func newTestEnv(t *testing.T, q *fakeQuota) (*userstorage.Service, *gorm.DB) {
 	}).Error; err != nil {
 		t.Fatalf("创建节点失败: %v", err)
 	}
-	return userstorage.NewService(db, audit.NewRecorder(db), q), db
+	store, err := userstorage.NewChunkStore(filepath.Join(t.TempDir(), "uploads"))
+	if err != nil {
+		t.Fatalf("创建暂存区失败: %v", err)
+	}
+	return userstorage.NewService(db, audit.NewRecorder(db), q).WithChunks(store), db
 }
 
 const (
@@ -142,7 +146,7 @@ func TestChunkBitmapResume(t *testing.T) {
 	}
 
 	for _, idx := range []int{2, 5, 7} {
-		if _, err := svc.UploadChunk(ctx, userA, view.UploadID, idx, ""); err != nil {
+		if _, err := svc.UploadChunkData(ctx, userA, view.UploadID, idx, []byte("chunk-bytes"), ""); err != nil {
 			t.Fatalf("登记分片 %d 失败: %v", idx, err)
 		}
 	}
@@ -174,7 +178,7 @@ func TestDuplicateChunkIsNotAnError(t *testing.T) {
 	}, owner(userA), "alice", "")
 
 	for i := 0; i < 3; i++ {
-		if _, err := svc.UploadChunk(ctx, userA, view.UploadID, 0, ""); err != nil {
+		if _, err := svc.UploadChunkData(ctx, userA, view.UploadID, 0, []byte("chunk-bytes"), ""); err != nil {
 			t.Fatalf("第 %d 次登记同一分片失败: %v", i+1, err)
 		}
 	}
@@ -188,7 +192,7 @@ func TestCompleteRequiresAllChunks(t *testing.T) {
 		NodeID: 1, Category: model.FileCategoryShare,
 		Filename: "partial.bin", TotalSize: 3 * 1024, ChunkSize: 1024,
 	}, owner(userA), "alice", "")
-	if _, err := svc.UploadChunk(ctx, userA, view.UploadID, 0, ""); err != nil {
+	if _, err := svc.UploadChunkData(ctx, userA, view.UploadID, 0, []byte("chunk-bytes"), ""); err != nil {
 		t.Fatalf("登记失败: %v", err)
 	}
 
@@ -209,7 +213,7 @@ func TestCompleteRegistersReadyFile(t *testing.T) {
 		Filename: "ubuntu.iso", TotalSize: 2 * 1024, ChunkSize: 1024,
 	}, owner(userA), "alice", "")
 	for i := 0; i < 2; i++ {
-		if _, err := svc.UploadChunk(ctx, userA, view.UploadID, i, ""); err != nil {
+		if _, err := svc.UploadChunkData(ctx, userA, view.UploadID, i, []byte("chunk-bytes"), ""); err != nil {
 			t.Fatalf("登记分片失败: %v", err)
 		}
 	}
@@ -284,7 +288,7 @@ func TestQuotaCheckedAtCreateAndComplete(t *testing.T) {
 	}
 
 	for i := 0; i < 2; i++ {
-		if _, err := svc.UploadChunk(ctx, userA, view.UploadID, i, ""); err != nil {
+		if _, err := svc.UploadChunkData(ctx, userA, view.UploadID, i, []byte("chunk-bytes"), ""); err != nil {
 			t.Fatalf("登记分片失败: %v", err)
 		}
 	}
@@ -325,7 +329,7 @@ func TestExpiredSessionIsRejected(t *testing.T) {
 		t.Error("过期会话不应再给分片清单——那是在让客户端对着一个不可能完成的任务重试")
 	}
 
-	_, err = svc.UploadChunk(ctx, userA, view.UploadID, 0, "")
+	_, err = svc.UploadChunkData(ctx, userA, view.UploadID, 0, []byte("chunk-bytes"), "")
 	assertStatus(t, err, 422)
 }
 
@@ -386,7 +390,7 @@ func TestSessionBelongsToOwner(t *testing.T) {
 
 	// UploadID 会被客户端长期持有，不校验归属的话任何登录用户都能凭一个
 	// 猜到的（或从日志里看到的）id 往别人的上传里塞分片。
-	_, err := svc.UploadChunk(ctx, userB, view.UploadID, 0, "")
+	_, err := svc.UploadChunkData(ctx, userB, view.UploadID, 0, []byte("chunk-bytes"), "")
 	assertStatus(t, err, 404)
 
 	_, err = svc.GetUpload(ctx, userB, view.UploadID)
