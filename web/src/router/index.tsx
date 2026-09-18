@@ -24,6 +24,7 @@ import { StorageVolumePage } from '@/views/storage/StorageVolumePage'
 import { SchedulerPage } from '@/views/system/SchedulerPage'
 import { DiagnosticsPage } from '@/views/system/DiagnosticsPage'
 import { VersionPage } from '@/views/system/VersionPage'
+import { LogPage } from '@/views/system/LogPage'
 import { TemplatePage } from '@/views/template/TemplatePage'
 import { APIKeyPage } from '@/views/security/APIKeyPage'
 import { SecurityPage } from '@/views/security/SecurityPage'
@@ -93,6 +94,7 @@ export const router = createBrowserRouter([
           { path: 'scheduler', element: <SchedulerPage /> },
           { path: 'diagnostics', element: <DiagnosticsPage /> },
           { path: 'version', element: <VersionPage /> },
+          { path: 'logs', element: <LogPage /> },
           { path: 'network', element: <NetworkPage /> },
           { path: 'network/base', element: <NetworkPage2 /> },
           // 用户管理（F-1-07）仍是占位。
