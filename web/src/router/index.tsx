@@ -27,6 +27,7 @@ import { SchedulerPage } from '@/views/system/SchedulerPage'
 import { DiagnosticsPage } from '@/views/system/DiagnosticsPage'
 import { VersionPage } from '@/views/system/VersionPage'
 import { LogPage } from '@/views/system/LogPage'
+import { HostTuningPage } from '@/views/system/HostTuningPage'
 import { ResourceQuotaPage } from '@/views/settings/ResourceQuotaPage'
 import { TemplatePage } from '@/views/template/TemplatePage'
 import { APIKeyPage } from '@/views/security/APIKeyPage'
@@ -100,6 +101,7 @@ export const router = createBrowserRouter([
           { path: 'diagnostics', element: <DiagnosticsPage /> },
           { path: 'version', element: <VersionPage /> },
           { path: 'logs', element: <LogPage /> },
+          { path: 'host-tuning', element: <HostTuningPage /> },
           { path: 'resource-quota', element: <ResourceQuotaPage /> },
           { path: 'network', element: <NetworkPage /> },
           { path: 'network/base', element: <NetworkPage2 /> },
