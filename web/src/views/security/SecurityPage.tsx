@@ -6,8 +6,10 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
 
+import { authApi } from '@/api/auth'
 import { ApiError, NetworkError } from '@/api/client'
 import { METHOD_LABEL, riskApi } from '@/api/risk'
+import { AccountSection } from './AccountSection'
 import { Button } from '@/components/common/Button'
 import { PageLoading } from '@/components/common/Feedback'
 import { Input } from '@/components/common/Input'
@@ -15,6 +17,9 @@ import { StatusBadge } from '@/components/common/StatusBadge'
 
 export function SecurityPage() {
   const status = useQuery({ queryKey: ['security-setup'], queryFn: riskApi.setupStatus })
+  // 当前登录名用于「账号」区块的回显。单独查一次而不是从别处传：那一处
+  // 只在它自己的页面里需要，为它加一个全局状态不划算。
+  const session = useQuery({ queryKey: ['auth-session'], queryFn: authApi.current })
 
   const [otpauthURI, setOtpauthURI] = useState('')
   const [code, setCode] = useState('')
@@ -220,6 +225,8 @@ export function SecurityPage() {
           </div>
         </section>
       )}
+
+      <AccountSection username={session.data?.user.username ?? ''} />
     </div>
   )
 }
