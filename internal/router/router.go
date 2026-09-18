@@ -134,6 +134,7 @@ func Register(h *server.Hertz, deps Deps) {
 	portSecurityHandler := handler.NewPortSecurity(deps.PortSecurity)
 	captureHandler := handler.NewCapture(deps.Capture)
 	diagnosticsHandler := handler.NewDiagnostics(deps.Diagnostics)
+	versionHandler := handler.NewVersion()
 	firewallHandler := handler.NewFirewall(deps.Firewall)
 	apiKeyHandler := handler.NewAPIKey(deps.APIKey)
 	mirrorHandler := handler.NewPortMirror(deps.PortMirror)
@@ -380,6 +381,13 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.GetVMPolicy)
 		v1.PUT("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.SetVMPolicy)
 		v1.DELETE("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.ClearVMPolicy)
+
+		// 版本与关于（F-9-05）。
+		//
+		// **不限制角色**：内容是版本号与依赖清单，不含租户数据也不含密钥。
+		// 它最常见的用途是「遇到问题先看一眼自己跑的是哪个版本」，把入口
+		// 藏起来只会让用户去别处猜。
+		v1.GET("/version", requireAuth, versionHandler.Get)
 
 		// 诊断导出（F-9-03）。
 		//

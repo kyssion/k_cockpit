@@ -45,6 +45,7 @@ import (
 	"k_cockpit/internal/template"
 	"k_cockpit/internal/useradmin"
 	"k_cockpit/internal/userstorage"
+	"k_cockpit/internal/version"
 	"k_cockpit/internal/vm"
 	"k_cockpit/internal/vmtag"
 )
@@ -218,6 +219,9 @@ func main() {
 	portSecuritySvc := portsecurity.NewService(db, mockAgent, recorder, queue)
 	captureSvc := capture.NewService(db, mockAgent, recorder, queue)
 	diagnosticsSvc := diagnostics.NewService(db, settingsSvc, schedRegistry, recorder)
+	// 版本摘要进诊断包：排障时第一个要问的就是「跑的是哪个版本」，
+	// 而它应当随包一起走，不必再让人回头去问。
+	diagnosticsSvc.Version = version.Summary()
 	networkSvc := network.NewService(db, mockAgent, queue, recorder)
 
 	// vm 与 storage 都要读设置里的陈旧阈值：把 settingsSvc 作为 Provider

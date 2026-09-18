@@ -191,6 +191,9 @@ func (s *Service) Export(
 		"generated_at": at.Format(time.RFC3339),
 		"categories":   keysOf(wanted),
 		"truncated":    truncated,
+		// 版本放在 MANIFEST 里而不是只在运行时状态里：排障时第一个要问的
+		// 就是「跑的是哪个版本」，而 MANIFEST 是包里最先被打开的那个文件。
+		"version": s.Version,
 		"note": "敏感配置项（密钥、密码、令牌）不会出现在本包中——" +
 			"它们显示为「已设置」而不含明文，因此本包可以直接外发。",
 	}
