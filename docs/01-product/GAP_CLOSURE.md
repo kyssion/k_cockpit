@@ -113,7 +113,10 @@ POST /firewall/geoip/import|update          GeoIP 库导入与更新
 
 **连接管理（列举 + 关闭）我们完全没有**——这是排查「谁在占着我的端口」时唯一的办法。关闭连接属于高风险操作（会切断正在进行的会话）。
 
-**GeoIP**：按国家/地区放行或拒绝。注：`internal/firewall/service.go` 里有相关字样但未暴露接口。
+**GeoIP 的现状要修正一处**：我们**已有** `GeoipRegions` 的字段与传递链路
+（handler → service → 下发参数），缺的是**IP 库的导入与更新**——即对方
+`/firewall/geoip/import|update` 那两个接口。也就是说现状是「能用，但库要靠
+其它途径装上」，不是完全空白。
 
 ---
 
@@ -187,7 +190,12 @@ max_runtime_hours                          运行时长配额
 max_snapshots / max_port_forwards          数量配额
 ```
 
-**我们的现状是「采了但不用」**：`vm_runtime_daily` 与 `traffic_stat_daily` 两张表已经在按天累计，但没有超限判定与处置。
+**我们的现状是「采了但不用」，而且字段也是死的**：
+
+- `vm_runtime_daily` 与 `traffic_stat_daily` 两张表在按天累计，但没有超限判定与处置
+- `model/network.go` 里的 `BandwidthInMbps` / `BandwidthOutMbps` **只被定义，
+  全仓没有任何一处读取或写入**——连赋值都没有。它是纯死字段，而"表里有这一列"
+  最容易让人以为带宽限制已经实现了。
 
 这是最可惜的一处——数据就在库里，缺的只是"拿它做判断"。
 
