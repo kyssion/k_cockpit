@@ -26,6 +26,7 @@ import (
 	"k_cockpit/internal/diagnostics"
 	"k_cockpit/internal/firewall"
 	"k_cockpit/internal/importer"
+	"k_cockpit/internal/logging"
 	"k_cockpit/internal/monitor"
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/networkbridge"
@@ -58,6 +59,24 @@ func main() {
 	if err != nil {
 		log.Fatalf("加载配置失败: %v", err)
 	}
+	// 日志器要在**任何组件之前**建好：一旦有组件先输出过日志，那些行就
+	// 落不到文件里（也不经过脱敏）。而"启动阶段的日志里恰好有初始化令牌"
+	// 正是最需要脱敏的一段——见下面打印一次性令牌那里。
+	logOpts := logging.DefaultOptions()
+	logOpts.Dir = cfg.Log.Dir
+	if lv, ok := logging.ParseLevel(cfg.Log.Level); ok {
+		logOpts.Level = lv
+	}
+	logger, err := logging.New(logOpts)
+	if err != nil {
+		log.Fatalf("初始化日志失败: %v", err)
+	}
+	defer func() { _ = logger.Close() }()
+	// 接管 stdlib log：项目里已有一百多处 log.Printf，逐个改写是一次大范围
+	// 改动而收益只是"能按级别过滤"。接管之后它们立刻进入同一个落点
+	// （同一份文件、同一个环形缓冲、同一套脱敏规则）。
+	log.SetOutput(logger.Writer())
+
 	log.Printf("配置加载完成: %s", cfg)
 
 	db, err := database.Open(cfg.DB, cfg.Debug)
@@ -270,6 +289,7 @@ func main() {
 		NetworkBridge: netSvc,
 		AuditLog:      auditLogSvc,
 		AuditRecorder: recorder,
+		Logging:       logger,
 		UserAdmin:     userAdminSvc,
 		VMTag:         tagSvc,
 		Monitor:       monitorSvc,

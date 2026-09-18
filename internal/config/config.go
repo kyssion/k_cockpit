@@ -37,6 +37,19 @@ type Config struct {
 	Session  Session
 	Agent    Agent
 	Security Security
+	Log      Log
+}
+
+// Log 是服务端日志的配置（F-9-02）。
+//
+// 级别与目录都可以在运行时通过界面调整（级别）或部署时指定（目录）。
+// 这里的环境变量是**初始值**，而不是唯一来源——级别是运行期最容易需要
+// 临时调高的一项（"把 debug 打开看看"），要求重启才能改会让它形同虚设。
+type Log struct {
+	// Dir 是日志目录。为空则只写内存与 stderr，不落盘。
+	Dir string
+	// Level 是初始级别：debug / info / warn / error。
+	Level string
 }
 
 // Security 是高风险操作防护相关的配置。
@@ -233,6 +246,10 @@ func Load() (Config, error) {
 		},
 		Security: Security{
 			DevBypassCode: env("SECURITY_DEV_BYPASS_CODE", ""),
+		},
+		Log: Log{
+			Dir:   env("LOG_DIR", "data/logs"),
+			Level: env("LOG_LEVEL", "info"),
 		},
 	}
 

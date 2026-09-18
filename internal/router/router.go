@@ -22,6 +22,7 @@ import (
 	"k_cockpit/internal/firewall"
 	"k_cockpit/internal/handler"
 	"k_cockpit/internal/importer"
+	"k_cockpit/internal/logging"
 	"k_cockpit/internal/monitor"
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/networkbridge"
@@ -93,6 +94,8 @@ type Deps struct {
 	NetworkBridge *networkbridge.Service
 	// AuditLog 提供审计流水查询（F-1-12）。
 	AuditLog *auditlog.Service
+	// Logging 提供服务端日志的级别、查看、导出与清理（F-9-02）。
+	Logging *logging.Logger
 	// AuditRecorder 供**跨服务**的写操作记审计用。
 	//
 	// 多数 handler 不需要它：那个包的 service 自己持有记录器。但账号自管理
@@ -143,6 +146,7 @@ func Register(h *server.Hertz, deps Deps) {
 	captureHandler := handler.NewCapture(deps.Capture)
 	diagnosticsHandler := handler.NewDiagnostics(deps.Diagnostics)
 	versionHandler := handler.NewVersion()
+	loggingHandler := handler.NewLogging(deps.Logging, deps.AuditRecorder)
 	firewallHandler := handler.NewFirewall(deps.Firewall)
 	apiKeyHandler := handler.NewAPIKey(deps.APIKey)
 	mirrorHandler := handler.NewPortMirror(deps.PortMirror)
@@ -402,6 +406,19 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.GetVMPolicy)
 		v1.PUT("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.SetVMPolicy)
 		v1.DELETE("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.ClearVMPolicy)
+
+		// 日志管理（F-9-02）。
+		//
+		// 归管理员：日志里有**全部请求的上下文**（谁在什么时候访问了什么）
+		// 以及服务端内部的报错细节，对租户既无意义也不该被看到。
+		//
+		// 调级别与清理都记审计：把级别调到 DEBUG 会让日志量显著上升，
+		// 而清理之后就无法回溯了——两者事后都要能回答「是谁在什么时候做的」。
+		v1.GET("/settings/log/status", requireAuth, adminOnly, loggingHandler.Status)
+		v1.GET("/settings/log/read", requireAuth, adminOnly, loggingHandler.Read)
+		v1.PUT("/settings/log/level", requireAuth, adminOnly, loggingHandler.SetLevel)
+		v1.GET("/settings/log/export", requireAuth, adminOnly, loggingHandler.Export)
+		v1.POST("/settings/log/delete", requireAuth, adminOnly, loggingHandler.Delete)
 
 		// 版本与关于（F-9-05）。
 		//
