@@ -28,6 +28,7 @@ import { DiagnosticsPage } from '@/views/system/DiagnosticsPage'
 import { VersionPage } from '@/views/system/VersionPage'
 import { LogPage } from '@/views/system/LogPage'
 import { HostTuningPage } from '@/views/system/HostTuningPage'
+import { PlatformCheckPage } from '@/views/system/PlatformCheckPage'
 import { ResourceQuotaPage } from '@/views/settings/ResourceQuotaPage'
 import { TemplatePage } from '@/views/template/TemplatePage'
 import { APIKeyPage } from '@/views/security/APIKeyPage'
@@ -102,6 +103,7 @@ export const router = createBrowserRouter([
           { path: 'version', element: <VersionPage /> },
           { path: 'logs', element: <LogPage /> },
           { path: 'host-tuning', element: <HostTuningPage /> },
+          { path: 'platform-check', element: <PlatformCheckPage /> },
           { path: 'resource-quota', element: <ResourceQuotaPage /> },
           { path: 'network', element: <NetworkPage /> },
           { path: 'network/base', element: <NetworkPage2 /> },
