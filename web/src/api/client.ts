@@ -123,6 +123,14 @@ export function setRiskVerificationHandler(handler: RiskVerificationHandler): vo
 interface RequestOptions {
   method?: string
   body?: unknown
+  /**
+   * 原始请求体，**不经过 JSON 序列化**。
+   *
+   * 只用于分片上传这种真的在传二进制的场景：把一段二进制 base64 包进 JSON
+   * 会让体积涨 33%，而一次 8MiB 的分片就是多传 2.7MiB，服务端还要再解一次码
+   * ——两条路径都不产生额外信息。
+   */
+  rawBody?: BodyInit
   query?: Record<string, string | number | undefined>
   /** 一次性许可，仅在验证通过后重放原请求时携带。 */
   grant?: string
@@ -144,10 +152,14 @@ function buildUrl(path: string, query?: RequestOptions['query']): string {
  * 返回完整响应体而非只返回 `data`——分页接口需要读取 `pagination`。
  */
 async function rawRequest<B>(path: string, options: RequestOptions = {}): Promise<B> {
-  const { method = 'GET', body, query, grant } = options
+  const { method = 'GET', body, rawBody, query, grant } = options
 
   const headers: Record<string, string> = {}
-  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  // 原始体**不设 Content-Type**：让浏览器按实际内容推断（Blob 会带上它自己的
+  // type），而硬写一个 application/json 会让服务端去解析二进制。
+  if (body !== undefined && rawBody === undefined) {
+    headers['Content-Type'] = 'application/json'
+  }
   // 许可走请求头而非 Cookie：它只对紧接着的这一次重放有意义，不应被浏览器
   // 自动附加到后续所有请求上（那会把「一次性」变成「一段时间内全程有效」）。
   if (grant) headers[GRANT_HEADER] = grant
@@ -157,7 +169,7 @@ async function rawRequest<B>(path: string, options: RequestOptions = {}): Promis
     response = await fetch(buildUrl(path, query), {
       method,
       headers: Object.keys(headers).length > 0 ? headers : undefined,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: rawBody ?? (body === undefined ? undefined : JSON.stringify(body)),
       // 会话凭据经 Cookie 传递，必须显式带上。
       credentials: 'same-origin',
     })
@@ -235,6 +247,15 @@ export function post<T>(path: string, body?: unknown): Promise<T> {
 /** 发起 PUT 请求。 */
 export function put<T>(path: string, body?: unknown): Promise<T> {
   return request<T>(path, { method: 'PUT', body })
+}
+
+/**
+ * 发起 PUT 请求，请求体是**原始二进制**而非 JSON。
+ *
+ * 只用于分片上传（见 RequestOptions.rawBody）。
+ */
+export function putRaw<T>(path: string, rawBody: BodyInit): Promise<T> {
+  return request<T>(path, { method: 'PUT', rawBody })
 }
 
 /** 发起 PATCH 请求。 */

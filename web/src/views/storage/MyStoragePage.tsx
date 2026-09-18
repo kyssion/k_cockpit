@@ -298,7 +298,10 @@ function UploadModal({
         const start = idx * CHUNK_SIZE
         const chunk = file.slice(start, Math.min(start + CHUNK_SIZE, file.size))
         setProgress(`上传中 ${i + 1}/${missing.length} 片`)
-        await userStorageApi.putChunk(session.upload_id, idx, await sha256Hex(chunk))
+        // 先算这一片的摘要再传：服务端会比对，不匹配就拒绝并让客户端重传。
+        // 不校验的话，一个传坏的分片会被当成好的收下，而最终文件在装系统时
+        // 才失败——那时已经很难追到是哪个环节坏的。
+        await userStorageApi.putChunk(session.upload_id, idx, chunk, await sha256Hex(chunk))
       }
 
       setProgress('收尾…')

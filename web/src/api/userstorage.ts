@@ -6,7 +6,7 @@
  * 「问服务端我还要传哪几片」——`missing_chunks` 给的是**序号列表**，
  * 客户端据此只传缺的那几片，而不是重传全部。
  */
-import { del, get, post, put } from './client'
+import { del, get, post, putRaw } from './client'
 
 export type FileCategory = 'iso' | 'share' | 'disk'
 
@@ -72,8 +72,19 @@ export const userStorageApi = {
   getUpload: (uploadID: string) =>
     get<UploadView>(`/api/v1/my-storage/uploads/${uploadID}`),
 
-  putChunk: (uploadID: string, index: number, sha256?: string) =>
-    put<UploadView>(`/api/v1/my-storage/uploads/${uploadID}/chunks`, { index, sha256 }),
+  /**
+   * 上传一个分片的**字节**。
+   *
+   * 请求体是裸二进制而不是 JSON——分片本身就是二进制，base64 包进 JSON
+   * 会让体积涨 33%，而一次 8MiB 的分片就是多传 2.7MiB。摘要放在查询参数里
+   * 让服务端校验；不匹配时服务端会拒绝并让客户端重传该片。
+   */
+  putChunk: (uploadID: string, index: number, data: Blob, sha256?: string) =>
+    putRaw<UploadView>(
+      `/api/v1/my-storage/uploads/${uploadID}/chunks/${index}` +
+        (sha256 ? `?sha256=${sha256}` : ''),
+      data,
+    ),
 
   complete: (uploadID: string) =>
     post<FileView>(`/api/v1/my-storage/uploads/${uploadID}/complete`, {}),
