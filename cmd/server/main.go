@@ -26,6 +26,7 @@ import (
 	"k_cockpit/internal/diagnostics"
 	"k_cockpit/internal/firewall"
 	"k_cockpit/internal/hostfirewall"
+	"k_cockpit/internal/hosttuning"
 	"k_cockpit/internal/importer"
 	"k_cockpit/internal/logging"
 	"k_cockpit/internal/monitor"
@@ -195,6 +196,8 @@ func main() {
 	queue.Register(hostfirewall.NewExecutor(db, mockAgent))
 	// PCIe 直通设备的挂载与卸载。
 	queue.Register(passthrough.NewExecutor(db, mockAgent))
+	// 宿主机性能调优。
+	queue.Register(hosttuning.NewExecutor(db, mockAgent))
 	// 网络变更（F-2-03）：三种资源各一个执行器，共用 vm:<id> 资源锁。
 	queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
 	queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))
@@ -305,6 +308,7 @@ func main() {
 		QuotaEnforce:  quotaEnforceSvc,
 		HostFirewall:  hostFirewallSvc,
 		Passthrough:   passthrough.NewService(db, queue, mockAgent, recorder),
+		HostTuning:    hosttuning.NewService(db, queue, mockAgent, recorder),
 		Diagnostics:   diagnosticsSvc,
 		Firewall:      firewallSvc,
 		APIKey:        apiKeySvc,

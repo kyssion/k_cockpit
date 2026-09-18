@@ -53,6 +53,17 @@ func (m *MockClient) WithStageDelay(d time.Duration) *MockClient {
 // 控制面不该替它猜。
 func stagePlan(op Operation) [][2]string {
 	switch op.Kind {
+	case OpHostTuning:
+		return [][2]string{
+			{"read_sysfs", "读取内核状态"},
+			{"read_metrics", "读取收益与代价数据"},
+		}
+	case OpHostTuningApply:
+		return [][2]string{
+			{"validate", "校验参数"},
+			{"write_sysfs", "写入内核参数"},
+			{"verify", "确认生效"},
+		}
 	case OpHostPCIDevices:
 		return [][2]string{
 			{"scan_pci", "扫描 PCI 设备"},
@@ -751,6 +762,36 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 
 	case OpNetworkCaptureDelete:
 		data[CaptureDataKey] = CaptureInfo{Message: "抓包文件已删除"}
+
+	case OpHostTuning:
+		// KSM **开着但几乎没省下东西**——刻意让这条分支可达。
+		//
+		// 它是最容易被用户忽略、也最不该被忽略的一种状态：开关显示"已启用"，
+		// 而实际上这台机器上根本没有可合并的页，它只是在白耗 CPU。只给
+		// "省了 8GB" 的漂亮数据，用户就永远学不会去看扫描轮次与收益。
+		data[TuningStateKey] = TuningState{
+			KSM: KSMState{
+				Enabled: true, PagesShared: 42, PagesSharing: 55,
+				PagesUnshared: 1_200_000, SavedBytes: 53 * 4096,
+				FullScans: 1841, RunMode: "always",
+			},
+			ZRAM: ZRAMState{
+				Enabled: true, DisksizeBytes: 4 << 30,
+				UsedBytes: 512 << 20, OrigDataBytes: 2 << 30,
+				Algorithm: "lz4", MemLimitBytes: 2 << 30,
+			},
+			// 嵌套虚拟化开着但**不是持久的**：重启就没了。这条分支同样要可达
+			// ——用户在界面上看到"已启用"，重启之后又变回去，而他会以为是
+			// 面板没保存成功。
+			Nested: NestedState{
+				Enabled: true, Supported: true, Persistent: false,
+				Fix: "写入 /etc/modprobe.d/kvm.conf：options kvm_intel nested=1",
+			},
+		}
+
+	case OpHostTuningApply:
+		item, _ := op.Params["item"].(string)
+		data[HostFirewallDataKey] = PCIBindInfo{Message: "调优项 " + item + " 已下发"}
 
 	case OpHostPCIDevices:
 		// 三块设备，含**一个两块卡同组**的分组：只给"每块卡各自一组"的假

@@ -124,6 +124,9 @@ const (
 	// 目录共享的挂载与卸载（f-5-06）。
 	TaskShareMount = "share.mount"
 
+	// 宿主机性能调优（KSM / ZRAM / 嵌套虚拟化）。
+	TaskHostTuning = "host.tuning.apply"
+
 	// 虚拟机直通设备的挂载与卸载。
 	TaskPassthroughChange = "vm.passthrough.change"
 

@@ -22,6 +22,7 @@ import (
 	"k_cockpit/internal/firewall"
 	"k_cockpit/internal/handler"
 	"k_cockpit/internal/hostfirewall"
+	"k_cockpit/internal/hosttuning"
 	"k_cockpit/internal/importer"
 	"k_cockpit/internal/logging"
 	"k_cockpit/internal/monitor"
@@ -105,6 +106,8 @@ type Deps struct {
 	HostFirewall *hostfirewall.Service
 	// Passthrough 提供 PCIe 直通。
 	Passthrough *passthrough.Service
+	// HostTuning 提供宿主机性能调优。
+	HostTuning *hosttuning.Service
 	// AuditRecorder 供**跨服务**的写操作记审计用。
 	//
 	// 多数 handler 不需要它：那个包的 service 自己持有记录器。但账号自管理
@@ -159,6 +162,7 @@ func Register(h *server.Hertz, deps Deps) {
 	quotaEnforceHandler := handler.NewQuotaEnforce(deps.QuotaEnforce)
 	hostFirewallHandler := handler.NewHostFirewall(deps.HostFirewall)
 	passthroughHandler := handler.NewPassthrough(deps.Passthrough)
+	tuningHandler := handler.NewHostTuning(deps.HostTuning)
 	firewallHandler := handler.NewFirewall(deps.Firewall)
 	apiKeyHandler := handler.NewAPIKey(deps.APIKey)
 	mirrorHandler := handler.NewPortMirror(deps.PortMirror)
@@ -418,6 +422,17 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.GetVMPolicy)
 		v1.PUT("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.SetVMPolicy)
 		v1.DELETE("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.ClearVMPolicy)
+
+		// 宿主机性能调优（KSM / ZRAM / 嵌套虚拟化 / CPU 亲和）。
+		//
+		// 归管理员：这几项改的是**宿主机自己**的行为——ZRAM 会占掉一块
+		// 物理内存、嵌套虚拟化会向所有来宾暴露虚拟化扩展。租户不该有能力
+		// 影响同宿主上别人的机器。
+		v1.GET("/host/tuning", requireAuth, adminOnly, tuningHandler.Get)
+		v1.PUT("/host/tuning", requireAuth, adminOnly, tuningHandler.Apply)
+		v1.GET("/host/cpu-affinity-presets", requireAuth, adminOnly, tuningHandler.ListPresets)
+		v1.POST("/host/cpu-affinity-presets", requireAuth, adminOnly, tuningHandler.CreatePreset)
+		v1.DELETE("/host/cpu-affinity-presets/:id", requireAuth, adminOnly, tuningHandler.DeletePreset)
 
 		// PCIe 直通（GPU 等）。
 		//
