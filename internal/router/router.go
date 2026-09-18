@@ -19,6 +19,7 @@ import (
 	"k_cockpit/internal/firewall"
 	"k_cockpit/internal/handler"
 	"k_cockpit/internal/importer"
+	"k_cockpit/internal/monitor"
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/networkbridge"
 	"k_cockpit/internal/node"
@@ -83,6 +84,8 @@ type Deps struct {
 	UserAdmin *useradmin.Service
 	// VMTag 提供虚拟机标签（F-2-16）。
 	VMTag *vmtag.Service
+	// Monitor 提供指标历史查询（F-8-01 / F-8-02）。
+	Monitor *monitor.Service
 
 	SecureCookie bool
 	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
@@ -121,6 +124,7 @@ func Register(h *server.Hertz, deps Deps) {
 	auditHandler := handler.NewAuditLog(deps.AuditLog)
 	userAdminHandler := handler.NewUserAdmin(deps.UserAdmin)
 	tagHandler := handler.NewVMTag(deps.VMTag)
+	monitorHandler := handler.NewMonitor(deps.Monitor)
 	importerHandler := handler.NewImporter(deps.Importer)
 
 	// 挂上 API 凭证认证：客户端可用 `Authorization: Bearer kc_...` 代替会话 Cookie。
@@ -245,6 +249,18 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/imports", requireAuth, importerHandler.Create)
 		v1.GET("/imports/:id", requireAuth, importerHandler.Get)
 		v1.DELETE("/imports/:id", requireAuth, importerHandler.Delete)
+
+		// 指标历史（F-8-01 / F-8-02）。
+		//
+		// 数据由**独立采集器按固定间隔写入**，不是「用户看页面时顺便采一次」
+		// ——后者的密度由点击行为决定，用它算「过去一周的负载」会得到与真实
+		// 情况毫无关系的结果，而它看起来像一份正常的图表。
+		//
+		// 默认时间范围是最近 1 小时：不给默认值的话，一次不带参数的调用会
+		// 扫全表，而数据攒了几个月之后那会慢到让人以为接口挂了。
+		v1.GET("/monitor/host", requireAuth, adminOnly, monitorHandler.HostSeries)
+		v1.GET("/vms/:id/monitor", requireAuth, monitorHandler.VMSeries)
+		v1.GET("/vms/:id/runtime", requireAuth, monitorHandler.Runtime)
 
 		// 虚拟机标签（F-2-16）。
 		//

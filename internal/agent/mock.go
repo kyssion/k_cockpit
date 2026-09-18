@@ -192,6 +192,11 @@ func stagePlan(op Operation) [][2]string {
 			{"target.define", "在目标节点定义"},
 			{"source.cleanup", "清理源侧"},
 		}
+	case OpHostStats:
+		return [][2]string{
+			{"read_proc", "读取 /proc 指标"},
+			{"read_devices", "读取设备统计"},
+		}
 	case OpStorageFileCommit:
 		return [][2]string{
 			{"verify_checksum", "校验文件摘要"},
@@ -386,6 +391,17 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 			// 「我原来接的网络、配的转发还在不在」。
 			Moved:           []string{"系统盘与数据盘", "全部网卡", "静态地址与端口转发"},
 			DurationSeconds: 47,
+		}
+
+	case OpHostStats:
+		// 稳定值：mock 不维护状态，随机值会让曲线自己抖动——那看起来像
+		// 真实负载在变化，而实际什么都没发生。
+		data[HostStatsDataKey] = HostStats{
+			CPUPercent: 23.5, MemUsedMB: 6144, MemTotalMB: 16384, SwapUsedMB: 0,
+			Load1: 0.8, Load5: 0.6, Load15: 0.5,
+			NetInBytes: 12_345_678, NetOutBytes: 8_765_432,
+			DiskReadBytes: 45_678_901, DiskWriteBytes: 23_456_789,
+			UptimeSeconds: 864_000,
 		}
 
 	case OpStorageFileCommit:

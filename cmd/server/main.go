@@ -24,6 +24,7 @@ import (
 	"k_cockpit/internal/database"
 	"k_cockpit/internal/firewall"
 	"k_cockpit/internal/importer"
+	"k_cockpit/internal/monitor"
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/networkbridge"
 	"k_cockpit/internal/node"
@@ -184,6 +185,7 @@ func main() {
 	auditLogSvc := auditlog.NewService(db)
 	userAdminSvc := useradmin.NewService(db, recorder, quotaAdapter{svc: quotaSvc})
 	tagSvc := vmtag.NewService(db, recorder)
+	monitorSvc := monitor.NewService(db)
 	networkSvc := network.NewService(db, mockAgent, queue, recorder)
 
 	// vm 与 storage 都要读设置里的陈旧阈值：把 settingsSvc 作为 Provider
@@ -227,12 +229,24 @@ func main() {
 		AuditLog:      auditLogSvc,
 		UserAdmin:     userAdminSvc,
 		VMTag:         tagSvc,
+		Monitor:       monitorSvc,
 		Storage:       storageSvc,
 		Network:       networkSvc,
 		Settings:      settingsSvc,
 		SecureCookie:  cfg.Session.SecureCookie,
 		SimulateAgent: cfg.Agent.Transport == config.AgentTransportMock,
 	})
+
+	// 指标采集器：按固定间隔落库。
+	//
+	// **它必须独立于页面访问**——「用户看页面时顺便采一次」得到的是密度由
+	// 点击行为决定的伪历史：有人看的时候一秒一条，没人看的时候一条都没有。
+	// 用它算出来的任何趋势都与真实情况无关，而它看起来像一份正常的图表。
+	//
+	// 采集有它自己的节奏，与谁在看无关。
+	collector := monitor.NewCollector(db, mockAgent, monitor.DefaultOptions())
+	collector.Start(context.Background())
+	defer collector.Stop()
 
 	// Spin 阻塞运行，并在收到 SIGINT / SIGTERM / SIGHUP 时触发优雅退出。
 	log.Printf("HTTP 服务启动，监听 %s", cfg.HTTP.Addr())
