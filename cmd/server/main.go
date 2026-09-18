@@ -25,6 +25,7 @@ import (
 	"k_cockpit/internal/database"
 	"k_cockpit/internal/diagnostics"
 	"k_cockpit/internal/firewall"
+	"k_cockpit/internal/hostfirewall"
 	"k_cockpit/internal/importer"
 	"k_cockpit/internal/logging"
 	"k_cockpit/internal/monitor"
@@ -189,6 +190,8 @@ func main() {
 	queue.Register(capture.NewDeleteExecutor(db, mockAgent))
 	// 配额处置：对某用户的网络施加或撤销限速 / 断网。
 	queue.Register(quotaenforce.NewExecutor(db, mockAgent))
+	// 宿主机防火墙：应用与紧急回滚。
+	queue.Register(hostfirewall.NewExecutor(db, mockAgent))
 	// 网络变更（F-2-03）：三种资源各一个执行器，共用 vm:<id> 资源锁。
 	queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
 	queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))
@@ -242,6 +245,10 @@ func main() {
 	portSecuritySvc := portsecurity.NewService(db, mockAgent, recorder, queue)
 	captureSvc := capture.NewService(db, mockAgent, recorder, queue)
 	quotaEnforceSvc := quotaenforce.NewService(db, queue, mockAgent, recorder)
+	// 面板与 SSH 端口作为**合成的保护规则**传给服务——它们跟着配置走，
+	// 不存进表：端口改了而表里那条还在，它会保护一个不再监听的端口。
+	hostFirewallSvc := hostfirewall.NewService(
+		db, queue, mockAgent, recorder, cfg.HTTP.Port, nil)
 	// 配额评估循环：配额以月计，5 分钟一轮足够，而它要扫两张按天累计的表。
 	quotaLoop := quotaenforce.NewLoop(quotaEnforceSvc, quotaenforce.DefaultOptions())
 	quotaLoop.Observe(schedRecorder)
@@ -293,6 +300,7 @@ func main() {
 		PortSecurity:  portSecuritySvc,
 		Capture:       captureSvc,
 		QuotaEnforce:  quotaEnforceSvc,
+		HostFirewall:  hostFirewallSvc,
 		Diagnostics:   diagnosticsSvc,
 		Firewall:      firewallSvc,
 		APIKey:        apiKeySvc,

@@ -21,6 +21,7 @@ import (
 	"k_cockpit/internal/diagnostics"
 	"k_cockpit/internal/firewall"
 	"k_cockpit/internal/handler"
+	"k_cockpit/internal/hostfirewall"
 	"k_cockpit/internal/importer"
 	"k_cockpit/internal/logging"
 	"k_cockpit/internal/monitor"
@@ -99,6 +100,8 @@ type Deps struct {
 	Logging *logging.Logger
 	// QuotaEnforce 提供资源配额与超限处置（F-4-10）。
 	QuotaEnforce *quotaenforce.Service
+	// HostFirewall 提供宿主机防火墙（F-4-11 第一层）。
+	HostFirewall *hostfirewall.Service
 	// AuditRecorder 供**跨服务**的写操作记审计用。
 	//
 	// 多数 handler 不需要它：那个包的 service 自己持有记录器。但账号自管理
@@ -151,6 +154,7 @@ func Register(h *server.Hertz, deps Deps) {
 	versionHandler := handler.NewVersion()
 	loggingHandler := handler.NewLogging(deps.Logging, deps.AuditRecorder)
 	quotaEnforceHandler := handler.NewQuotaEnforce(deps.QuotaEnforce)
+	hostFirewallHandler := handler.NewHostFirewall(deps.HostFirewall)
 	firewallHandler := handler.NewFirewall(deps.Firewall)
 	apiKeyHandler := handler.NewAPIKey(deps.APIKey)
 	mirrorHandler := handler.NewPortMirror(deps.PortMirror)
@@ -410,6 +414,26 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.GetVMPolicy)
 		v1.PUT("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.SetVMPolicy)
 		v1.DELETE("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.ClearVMPolicy)
+
+		// 宿主机防火墙（F-4-11 第一层）。
+		//
+		// **与 /firewall/* 是两套**：这里保护的是**宿主机自己与面板**（SSH、
+		// 面板端口），而 /firewall/* 管的是虚拟机的入站流量。它们的配置项
+		// 长得几乎一样，而攻击面完全不同——混在一处会让用户以为改了 KVM
+		// 规则就关掉了面板的暴露面。
+		//
+		// 回滚**不需要二次验证**：它要在"已经出事了"的那一刻还能用。应用
+		// 之后连不上面板或 SSH 断了，而用户又进不去宿主机时，这是唯一的
+		// 自救入口。
+		v1.GET("/host-firewall", requireAuth, adminOnly, hostFirewallHandler.Get)
+		v1.PATCH("/host-firewall/policy", requireAuth, adminOnly, hostFirewallHandler.UpdatePolicy)
+		v1.POST("/host-firewall/rules", requireAuth, adminOnly, hostFirewallHandler.CreateRule)
+		v1.DELETE("/host-firewall/rules/:id", requireAuth, adminOnly, hostFirewallHandler.DeleteRule)
+		v1.GET("/host-firewall/precheck", requireAuth, adminOnly, hostFirewallHandler.Precheck)
+		v1.POST("/host-firewall/apply", requireAuth, adminOnly, hostFirewallHandler.Apply)
+		v1.POST("/host-firewall/rollback", requireAuth, adminOnly, hostFirewallHandler.Rollback)
+		v1.GET("/host-firewall/connections", requireAuth, adminOnly, hostFirewallHandler.Connections)
+		v1.POST("/host-firewall/connections/close", requireAuth, adminOnly, hostFirewallHandler.CloseConnection)
 
 		// 资源配额与超限处置（F-4-10）。
 		//

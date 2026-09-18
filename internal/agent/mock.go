@@ -53,6 +53,19 @@ func (m *MockClient) WithStageDelay(d time.Duration) *MockClient {
 // 控制面不该替它猜。
 func stagePlan(op Operation) [][2]string {
 	switch op.Kind {
+	case OpHostFirewallApply:
+		if act, _ := op.Params["action"].(string); act == "rollback" {
+			return [][2]string{
+				{"remove_our_rules", "撤销本系统写入的规则"},
+				{"restore_policy", "恢复 INPUT 默认策略"},
+				{"verify_manage_path", "确认管理通道可达"},
+			}
+		}
+		return [][2]string{
+			{"render_rules", "渲染规则"},
+			{"apply_rules", "写入规则链"},
+			{"set_default_policy", "最后才收紧默认策略"},
+		}
 	case OpQuotaEnforce:
 		enforce, _ := op.Params["enforce"].(bool)
 		if !enforce {
@@ -728,6 +741,42 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 
 	case OpNetworkCaptureDelete:
 		data[CaptureDataKey] = CaptureInfo{Message: "抓包文件已删除"}
+
+	case OpHostFirewallApply:
+		act, _ := op.Params["action"].(string)
+		msg := "宿主机防火墙已应用"
+		rules := 0
+		if list, ok := op.Params["rules"].([]any); ok {
+			rules = len(list)
+		}
+		if act == "rollback" {
+			msg = "宿主机防火墙已回滚：本系统写入的规则全部撤销"
+		}
+		info := HostFirewallInfo{AppliedRules: rules, Message: msg}
+		// 白名单为空 + 默认拒绝：一个**会把人锁在门外**的组合。刻意让这条
+		// 警告可达，好让界面必须处理它。
+		if auto, _ := op.Params["default_action"].(string); auto == "deny" {
+			if wl, ok := op.Params["whitelist"].([]any); ok && len(wl) == 0 {
+				info.Warnings = []string{"白名单为空且默认拒绝——应用后将无法从任何地址连上这台机器"}
+			}
+		}
+		data[HostFirewallDataKey] = info
+
+	case OpHostConnections:
+		if target, ok := op.Params["close"].(string); ok && target != "" {
+			data[HostFirewallDataKey] = HostFirewallInfo{Message: "连接 " + target + " 已关闭"}
+			break
+		}
+		// 三条有代表性的连接：面板、SSH、外部来源。只给一条会让
+		// 「关掉自己那条」的分支永远不可达。
+		data[HostConnectionsKey] = []HostConnection{
+			{RemoteAddr: "203.0.113.9:51234", LocalPort: 8080, Protocol: "tcp",
+				State: "ESTABLISHED", Process: "k-cockpit"},
+			{RemoteAddr: "203.0.113.9:51235", LocalPort: 22, Protocol: "tcp",
+				State: "ESTABLISHED", Process: "sshd"},
+			{RemoteAddr: "198.51.100.7:40000", LocalPort: 9090, Protocol: "tcp",
+				State: "TIME_WAIT", Process: "node-exporter"},
+		}
 
 	case OpQuotaEnforce:
 		enforce, _ := op.Params["enforce"].(bool)

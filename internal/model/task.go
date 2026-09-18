@@ -124,6 +124,13 @@ const (
 	// 目录共享的挂载与卸载（f-5-06）。
 	TaskShareMount = "share.mount"
 
+	// 宿主机防火墙的下发与回滚（f-4-11 第一层）。
+	//
+	// 应用与回滚共用一个类型：两者下发的都是"期望状态"，只在 enabled 上
+	// 不同。拆成两个类型会有两个执行器要注册——漏一个就是"任务永远不执行"
+	// 的静默故障。
+	TaskHostFirewallApply = "host_firewall.apply"
+
 	// 配额处置（f-4-10）：对某用户的网络施加或撤销限速 / 断网。
 	TaskQuotaEnforce = "quota.enforce"
 
