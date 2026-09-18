@@ -14,6 +14,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/joho/godotenv"
 
+	"k_cockpit/internal/accesscontrol"
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/apikey"
 	"k_cockpit/internal/audit"
@@ -313,6 +314,7 @@ func main() {
 		Passthrough:   passthrough.NewService(db, queue, mockAgent, recorder),
 		HostTuning:    hosttuning.NewService(db, queue, mockAgent, recorder),
 		PlatformCheck: platformcheck.NewService(db, queue, mockAgent, recorder),
+		AccessControl: accesscontrol.NewService(db, recorder, accesscontrol.Options{}),
 		Diagnostics:   diagnosticsSvc,
 		Firewall:      firewallSvc,
 		APIKey:        apiKeySvc,

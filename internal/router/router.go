@@ -11,6 +11,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"gorm.io/gorm"
 
+	"k_cockpit/internal/accesscontrol"
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/apikey"
 	"k_cockpit/internal/audit"
@@ -111,6 +112,8 @@ type Deps struct {
 	HostTuning *hosttuning.Service
 	// PlatformCheck 提供平台自检与修复（F-4-13）。
 	PlatformCheck *platformcheck.Service
+	// AccessControl 提供公网访问与开发模式开关（F-10-06）。
+	AccessControl *accesscontrol.Service
 	// AuditRecorder 供**跨服务**的写操作记审计用。
 	//
 	// 多数 handler 不需要它：那个包的 service 自己持有记录器。但账号自管理
@@ -167,6 +170,7 @@ func Register(h *server.Hertz, deps Deps) {
 	passthroughHandler := handler.NewPassthrough(deps.Passthrough)
 	tuningHandler := handler.NewHostTuning(deps.HostTuning)
 	platformCheckHandler := handler.NewPlatformCheck(deps.PlatformCheck)
+	accessControlHandler := handler.NewAccessControl(deps.AccessControl)
 	firewallHandler := handler.NewFirewall(deps.Firewall)
 	apiKeyHandler := handler.NewAPIKey(deps.APIKey)
 	mirrorHandler := handler.NewPortMirror(deps.PortMirror)
@@ -426,6 +430,17 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.GetVMPolicy)
 		v1.PUT("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.SetVMPolicy)
 		v1.DELETE("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.ClearVMPolicy)
+
+		// 公网访问与开发模式开关（F-10-06）。
+		//
+		// 它**看起来像普通设置项但不是**：关掉公网访问时若调用方自己就在
+		// 公网上，那一刻他的连接就断了——因此需要显式确认。而"是不是公网"
+		// 靠请求方地址判断，判错的方向是相反的。
+		//
+		// 环境变量优先于面板（与 F-9-01 一致）：部署方在启动参数里关掉之后，
+		// 面板上那个开关不该能把它打开。
+		v1.GET("/settings/access", requireAuth, adminOnly, accessControlHandler.Get)
+		v1.PUT("/settings/access", requireAuth, adminOnly, accessControlHandler.Set)
 
 		// 平台自检与修复（F-4-13）。
 		//
