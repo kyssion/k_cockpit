@@ -17,6 +17,7 @@ import (
 	"k_cockpit/internal/auth"
 	"k_cockpit/internal/authz"
 	"k_cockpit/internal/capture"
+	"k_cockpit/internal/diagnostics"
 	"k_cockpit/internal/firewall"
 	"k_cockpit/internal/handler"
 	"k_cockpit/internal/importer"
@@ -79,6 +80,8 @@ type Deps struct {
 	PortSecurity *portsecurity.Service
 	// Capture 提供抓包与网络诊断（F-4-12）。
 	Capture *capture.Service
+	// Diagnostics 提供诊断导出（F-9-03）。
+	Diagnostics *diagnostics.Service
 	// Firewall 提供双层防火墙策略（F-4-11）。
 	Firewall *firewall.Service
 	// APIKey 提供 API 凭证与一次性令牌（F-1-10）。
@@ -130,6 +133,7 @@ func Register(h *server.Hertz, deps Deps) {
 	schedulerHandler := handler.NewScheduler(deps.Scheduler)
 	portSecurityHandler := handler.NewPortSecurity(deps.PortSecurity)
 	captureHandler := handler.NewCapture(deps.Capture)
+	diagnosticsHandler := handler.NewDiagnostics(deps.Diagnostics)
 	firewallHandler := handler.NewFirewall(deps.Firewall)
 	apiKeyHandler := handler.NewAPIKey(deps.APIKey)
 	mirrorHandler := handler.NewPortMirror(deps.PortMirror)
@@ -376,6 +380,18 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.GetVMPolicy)
 		v1.PUT("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.SetVMPolicy)
 		v1.DELETE("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.ClearVMPolicy)
+
+		// 诊断导出（F-9-03）。
+		//
+		// 归管理员：包里是整个系统的内部状态（全部设置、全部审计日志），
+		// 而审计日志里含别人的操作记录。
+		//
+		// **不需要二次验证**，这是刻意的：它最常见的用法是"出问题的时候
+		// 赶紧导出来发给支持"，而在那一刻再拦一道验证会让最需要它的时候
+		// 最不好用。敢这样的前提是**脱敏发生在打包时**——包里不含密钥
+		// 明文，本身就是可以外发的。
+		v1.GET("/diagnostics/categories", requireAuth, adminOnly, diagnosticsHandler.Categories)
+		v1.GET("/diagnostics/export", requireAuth, adminOnly, diagnosticsHandler.Export)
 
 		// 抓包与网络诊断（F-4-12）。
 		//

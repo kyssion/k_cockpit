@@ -23,6 +23,7 @@ import (
 	"k_cockpit/internal/config"
 	"k_cockpit/internal/cryptoutil"
 	"k_cockpit/internal/database"
+	"k_cockpit/internal/diagnostics"
 	"k_cockpit/internal/firewall"
 	"k_cockpit/internal/importer"
 	"k_cockpit/internal/monitor"
@@ -216,6 +217,7 @@ func main() {
 	schedulerSvc := sched.NewService(db, schedRegistry)
 	portSecuritySvc := portsecurity.NewService(db, mockAgent, recorder, queue)
 	captureSvc := capture.NewService(db, mockAgent, recorder, queue)
+	diagnosticsSvc := diagnostics.NewService(db, settingsSvc, schedRegistry, recorder)
 	networkSvc := network.NewService(db, mockAgent, queue, recorder)
 
 	// vm 与 storage 都要读设置里的陈旧阈值：把 settingsSvc 作为 Provider
@@ -257,6 +259,7 @@ func main() {
 		Scheduler:     schedulerSvc,
 		PortSecurity:  portSecuritySvc,
 		Capture:       captureSvc,
+		Diagnostics:   diagnosticsSvc,
 		Firewall:      firewallSvc,
 		APIKey:        apiKeySvc,
 		PortMirror:    mirrorSvc,
