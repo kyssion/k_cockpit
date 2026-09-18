@@ -30,6 +30,7 @@ import (
 	"k_cockpit/internal/networkbridge"
 	"k_cockpit/internal/node"
 	"k_cockpit/internal/passthrough"
+	"k_cockpit/internal/platformcheck"
 	"k_cockpit/internal/portmirror"
 	"k_cockpit/internal/portsecurity"
 	"k_cockpit/internal/publicip"
@@ -108,6 +109,8 @@ type Deps struct {
 	Passthrough *passthrough.Service
 	// HostTuning 提供宿主机性能调优。
 	HostTuning *hosttuning.Service
+	// PlatformCheck 提供平台自检与修复（F-4-13）。
+	PlatformCheck *platformcheck.Service
 	// AuditRecorder 供**跨服务**的写操作记审计用。
 	//
 	// 多数 handler 不需要它：那个包的 service 自己持有记录器。但账号自管理
@@ -163,6 +166,7 @@ func Register(h *server.Hertz, deps Deps) {
 	hostFirewallHandler := handler.NewHostFirewall(deps.HostFirewall)
 	passthroughHandler := handler.NewPassthrough(deps.Passthrough)
 	tuningHandler := handler.NewHostTuning(deps.HostTuning)
+	platformCheckHandler := handler.NewPlatformCheck(deps.PlatformCheck)
 	firewallHandler := handler.NewFirewall(deps.Firewall)
 	apiKeyHandler := handler.NewAPIKey(deps.APIKey)
 	mirrorHandler := handler.NewPortMirror(deps.PortMirror)
@@ -422,6 +426,18 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.GetVMPolicy)
 		v1.PUT("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.SetVMPolicy)
 		v1.DELETE("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.ClearVMPolicy)
+
+		// 平台自检与修复（F-4-13）。
+		//
+		// 自检与探测的区别：探测回答「有没有装」，自检回答「我们配的东西
+		// 现在还在不在」——**面板显示「已启用」而节点上早就没了**，那种
+		// 状态不会以任何形式报警，自检正是去找它。
+		v1.GET("/network/client-ip", requireAuth, adminOnly, platformCheckHandler.ClientIP)
+		v1.GET("/ovs/status", requireAuth, adminOnly, platformCheckHandler.OVSStatus)
+		v1.GET("/ovs/ports", requireAuth, adminOnly, platformCheckHandler.OVSPorts)
+		v1.GET("/ovs/leases", requireAuth, adminOnly, platformCheckHandler.Leases)
+		v1.POST("/ovs/check", requireAuth, adminOnly, platformCheckHandler.Check)
+		v1.POST("/ovs/repair", requireAuth, adminOnly, platformCheckHandler.Repair)
 
 		// 宿主机性能调优（KSM / ZRAM / 嵌套虚拟化 / CPU 亲和）。
 		//

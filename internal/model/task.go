@@ -124,6 +124,9 @@ const (
 	// 目录共享的挂载与卸载（f-5-06）。
 	TaskShareMount = "share.mount"
 
+	// 平台自检后的重新下发（f-4-13）。
+	TaskPlatformRepair = "platform.repair"
+
 	// 宿主机性能调优（KSM / ZRAM / 嵌套虚拟化）。
 	TaskHostTuning = "host.tuning.apply"
 

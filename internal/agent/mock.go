@@ -53,6 +53,17 @@ func (m *MockClient) WithStageDelay(d time.Duration) *MockClient {
 // 控制面不该替它猜。
 func stagePlan(op Operation) [][2]string {
 	switch op.Kind {
+	case OpPlatformCheck:
+		return [][2]string{
+			{"read_ovs", "读取 OVS 状态"},
+			{"verify_expectations", "逐项核对期望状态"},
+		}
+	case OpPlatformRepair:
+		return [][2]string{
+			{"resolve_kinds", "确定要重下发的项"},
+			{"reapply", "按期望状态重新下发"},
+			{"verify", "复核结果"},
+		}
 	case OpHostTuning:
 		return [][2]string{
 			{"read_sysfs", "读取内核状态"},
@@ -762,6 +773,79 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 
 	case OpNetworkCaptureDelete:
 		data[CaptureDataKey] = CaptureInfo{Message: "抓包文件已删除"}
+
+	case OpOVSStatus:
+		data[OVSStatusKey] = OVSStatus{
+			Available: true, Version: "2.17.9", ServiceActive: true,
+			OpenFlow13: true,
+			// meter 缺失：包速率限制依赖它，而这条分支必须可达——否则
+			// 「能力非必需但缺失」在自检里永远不会出现。
+			MeterAvailable: false,
+			BridgeCount:    2, PortCount: 7, FlowCount: 43,
+			Fix: "apt install openvswitch-common   # 需要支持 meter 的版本",
+		}
+
+	case OpOVSPorts:
+		data[OVSPortsKey] = []OVSPort{
+			{Name: "br-tenant0", Bridge: "br-tenant0", Type: "internal", Tag: 0},
+			// 虚拟机网口：VMName 由**节点**填（只有它能从 libvirt 拿到
+			// vnet 口与虚拟机的对应关系）。
+			{Name: "vnet0", Bridge: "br-tenant0", Type: "system", Tag: 100, VMName: "vm-101"},
+			{Name: "vnet1", Bridge: "br-tenant0", Type: "system", Tag: 100, VMName: "vm-102"},
+			{Name: "eth1", Bridge: "br-tenant0", Type: "system", Tag: 0},
+		}
+
+	case OpDHCPLeases:
+		data[DHCPLeasesKey] = []DHCPLease{
+			{ExpiresAt: "2026-09-20T10:00:00Z", MAC: "52:54:00:aa:bb:01",
+				IP: "192.168.122.10", Hostname: "vm-101", ClientID: "01:52:54:00:aa:bb:01"},
+			{ExpiresAt: "2026-09-20T10:00:00Z", MAC: "52:54:00:aa:bb:02",
+				IP: "192.168.122.11", Hostname: "vm-102", ClientID: "01:52:54:00:aa:bb:02"},
+			// 一条**没有主机名**的租约：多台机器抢同一个地址时它是最先
+			// 需要看到的那条，而"主机名"这一栏空着正是它的特征。
+			{ExpiresAt: "2026-09-20T09:30:00Z", MAC: "52:54:00:cc:dd:03",
+				IP: "192.168.122.10"},
+		}
+
+	case OpPlatformCheck:
+		// 逐项回报：**一部分存在、一部分是偏差**。
+		//
+		// 全都报"存在"会让偏差分支永远不可达，而那个分支是这整个功能的
+		// 意义所在——面板显示"已启用"而节点上早就没了。
+		// **期望是类型化结构体，而不是 JSON 反序列化后的 map。**
+		//
+		// 真实节点收到的是 JSON（Object → map），而进程内的 mock 拿到的是
+		// 控制面直接传过来的 []any of struct。只处理 map 的话，ID 全部读成
+		// 0、Kind 全部读成空串——而自检结果仍然会返回一批"项"，只是对不上
+		// 号。那是**看起来正常、实际全错**的一类问题。
+		exps, _ := op.Params["expectations"].([]any)
+		results := make([]PlatformCheckResult, 0, len(exps))
+		for i, it := range exps {
+			id := int64(0)
+			switch v := it.(type) {
+			case PlatformExpectation:
+				id = v.ID
+			case map[string]any:
+				switch x := v["ID"].(type) {
+				case float64:
+					id = int64(x)
+				case int64:
+					id = x
+				}
+			}
+			// 第 2 项起报偏差：让两种结果都出现在同一次自检里——
+			// 只报"全部正常"会让偏差分支永远不可达，而那是这个功能的全部意义。
+			present := i%2 == 0
+			actual := "存在"
+			if !present {
+				actual = "无对应配置（可能已被重启清除或手工改动）"
+			}
+			results = append(results, PlatformCheckResult{ID: id, Present: present, Actual: actual})
+		}
+		data[PlatformCheckKey] = results
+
+	case OpPlatformRepair:
+		data[HostFirewallDataKey] = PCIBindInfo{Message: "已按控制面记录重新下发"}
 
 	case OpHostTuning:
 		// KSM **开着但几乎没省下东西**——刻意让这条分支可达。

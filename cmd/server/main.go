@@ -34,6 +34,7 @@ import (
 	"k_cockpit/internal/networkbridge"
 	"k_cockpit/internal/node"
 	"k_cockpit/internal/passthrough"
+	"k_cockpit/internal/platformcheck"
 	"k_cockpit/internal/portmirror"
 	"k_cockpit/internal/portsecurity"
 	"k_cockpit/internal/publicip"
@@ -198,6 +199,8 @@ func main() {
 	queue.Register(passthrough.NewExecutor(db, mockAgent))
 	// 宿主机性能调优。
 	queue.Register(hosttuning.NewExecutor(db, mockAgent))
+	// 平台自检后的重新下发。
+	queue.Register(platformcheck.NewExecutor(db, mockAgent))
 	// 网络变更（F-2-03）：三种资源各一个执行器，共用 vm:<id> 资源锁。
 	queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
 	queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))
@@ -309,6 +312,7 @@ func main() {
 		HostFirewall:  hostFirewallSvc,
 		Passthrough:   passthrough.NewService(db, queue, mockAgent, recorder),
 		HostTuning:    hosttuning.NewService(db, queue, mockAgent, recorder),
+		PlatformCheck: platformcheck.NewService(db, queue, mockAgent, recorder),
 		Diagnostics:   diagnosticsSvc,
 		Firewall:      firewallSvc,
 		APIKey:        apiKeySvc,
