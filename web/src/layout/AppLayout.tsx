@@ -36,6 +36,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/node', label: '节点管理', roles: ['admin'] },
   { to: '/storage-pool', label: '存储池', roles: ['admin'] },
   { to: '/storage-volume', label: '存储卷', roles: ['admin'] },
+  { to: '/scheduler', label: '调度器', roles: ['admin'] },
   { to: '/network', label: '网络中心', roles: ['admin'] },
   { to: '/network/base', label: '网络底座', roles: ['admin'] },
   { to: '/firewall', label: '防火墙', roles: ['admin'] },
