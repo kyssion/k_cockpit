@@ -32,6 +32,11 @@ func RegisterBuiltins(r *Registry, opts BuiltinOptions) {
 		IntervalSeconds: int(opts.ScheduleInterval.Seconds()),
 	})
 	r.Register(Info{
+		Key: KeyQuotaEvaluate, Name: "配额超限评估", Group: GroupQuota,
+		Description:     "按当前周期重算各用户的流量与运行时长，跨越阈值时按策略处置（限速 / 断网）。**有变化才记事件**——绝大多数轮次里没有配额跨越阈值。",
+		IntervalSeconds: int(opts.QuotaEvalInterval.Seconds()),
+	})
+	r.Register(Info{
 		Key: KeyTaskQueue, Name: "任务队列派发", Group: GroupTasks,
 		Description:     "把待执行任务派发给执行器，受并发上限与资源锁约束。**它不产生调度事件**——它执行的每个动作本身都已经是一条任务记录，在这里再记一遍只是把同一件事说两次。",
 		IntervalSeconds: int(opts.QueuePollInterval.Seconds()),
@@ -44,4 +49,5 @@ type BuiltinOptions struct {
 	MetricsCleanupInterval time.Duration
 	ScheduleInterval       time.Duration
 	QueuePollInterval      time.Duration
+	QuotaEvalInterval      time.Duration
 }

@@ -124,6 +124,9 @@ const (
 	// 目录共享的挂载与卸载（f-5-06）。
 	TaskShareMount = "share.mount"
 
+	// 配额处置（f-4-10）：对某用户的网络施加或撤销限速 / 断网。
+	TaskQuotaEnforce = "quota.enforce"
+
 	// 抓包与删除抓包文件（f-4-12）。
 	//
 	// 两者分开：抓包是**长时间运行**的（要等 duration 秒），而删除是秒级

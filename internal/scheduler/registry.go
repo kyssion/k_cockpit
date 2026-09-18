@@ -27,6 +27,7 @@ const (
 	GroupTasks     = "任务队列"
 	GroupScheduled = "定时任务"
 	GroupMaintain  = "数据维护"
+	GroupQuota     = "配额与计量"
 )
 
 // 内置调度器的标识。
@@ -34,13 +35,14 @@ const (
 // 写成常量而不是散在各包里的字符串：这些 key 会进事件表，拼错一个字母不会
 // 报错，只会让那一类事件永远与注册表对不上——而那种错误从界面上看不出来。
 const (
-	KeyTaskQueue    = "task.queue.poll"
-	KeyTaskCleanup  = "task.queue.cleanup"
-	KeyScheduleScan = "schedule.scan"
-	KeyMetricsHost  = "metrics.host"
-	KeyMetricsGuest = "metrics.guest"
-	KeyMetricsDaily = "metrics.daily"
-	KeyRiskCleanup  = "risk.grant.cleanup"
+	KeyTaskQueue     = "task.queue.poll"
+	KeyTaskCleanup   = "task.queue.cleanup"
+	KeyScheduleScan  = "schedule.scan"
+	KeyMetricsHost   = "metrics.host"
+	KeyMetricsGuest  = "metrics.guest"
+	KeyMetricsDaily  = "metrics.daily"
+	KeyRiskCleanup   = "risk.grant.cleanup"
+	KeyQuotaEvaluate = "quota.evaluate"
 )
 
 // Info 描述一个已注册的调度器。

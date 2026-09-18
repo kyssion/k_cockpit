@@ -31,6 +31,7 @@ import (
 	"k_cockpit/internal/portsecurity"
 	"k_cockpit/internal/publicip"
 	"k_cockpit/internal/quota"
+	"k_cockpit/internal/quotaenforce"
 	"k_cockpit/internal/risk"
 	"k_cockpit/internal/schedule"
 	"k_cockpit/internal/scheduler"
@@ -96,6 +97,8 @@ type Deps struct {
 	AuditLog *auditlog.Service
 	// Logging 提供服务端日志的级别、查看、导出与清理（F-9-02）。
 	Logging *logging.Logger
+	// QuotaEnforce 提供资源配额与超限处置（F-4-10）。
+	QuotaEnforce *quotaenforce.Service
 	// AuditRecorder 供**跨服务**的写操作记审计用。
 	//
 	// 多数 handler 不需要它：那个包的 service 自己持有记录器。但账号自管理
@@ -147,6 +150,7 @@ func Register(h *server.Hertz, deps Deps) {
 	diagnosticsHandler := handler.NewDiagnostics(deps.Diagnostics)
 	versionHandler := handler.NewVersion()
 	loggingHandler := handler.NewLogging(deps.Logging, deps.AuditRecorder)
+	quotaEnforceHandler := handler.NewQuotaEnforce(deps.QuotaEnforce)
 	firewallHandler := handler.NewFirewall(deps.Firewall)
 	apiKeyHandler := handler.NewAPIKey(deps.APIKey)
 	mirrorHandler := handler.NewPortMirror(deps.PortMirror)
@@ -406,6 +410,17 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.GetVMPolicy)
 		v1.PUT("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.SetVMPolicy)
 		v1.DELETE("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.ClearVMPolicy)
+
+		// 资源配额与超限处置（F-4-10）。
+		//
+		// 归管理员：配额是**跨用户的资源分配**，一个租户给自己调额度等于
+		// 没有配额。
+		//
+		// 「提高上限会清除处置状态」写进了接口说明：不清的话，用户明明已经
+		// 合规，网络却还是慢的，而界面上显示「已超限」。
+		v1.GET("/resource-quotas", requireAuth, adminOnly, quotaEnforceHandler.List)
+		v1.PUT("/resource-quotas", requireAuth, adminOnly, quotaEnforceHandler.Set)
+		v1.DELETE("/resource-quotas/:id", requireAuth, adminOnly, quotaEnforceHandler.Delete)
 
 		// 日志管理（F-9-02）。
 		//

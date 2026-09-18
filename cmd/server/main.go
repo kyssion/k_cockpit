@@ -35,6 +35,7 @@ import (
 	"k_cockpit/internal/portsecurity"
 	"k_cockpit/internal/publicip"
 	"k_cockpit/internal/quota"
+	"k_cockpit/internal/quotaenforce"
 	"k_cockpit/internal/risk"
 	"k_cockpit/internal/router"
 	"k_cockpit/internal/schedule"
@@ -186,6 +187,8 @@ func main() {
 	// 抓包：一次限时的抓包，以及删除节点上的抓包文件。
 	queue.Register(capture.NewExecutor(db, mockAgent))
 	queue.Register(capture.NewDeleteExecutor(db, mockAgent))
+	// 配额处置：对某用户的网络施加或撤销限速 / 断网。
+	queue.Register(quotaenforce.NewExecutor(db, mockAgent))
 	// 网络变更（F-2-03）：三种资源各一个执行器，共用 vm:<id> 资源锁。
 	queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
 	queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))
@@ -227,6 +230,7 @@ func main() {
 		MetricsCleanupInterval: monitor.DefaultOptions().CleanupInterval,
 		ScheduleInterval:       schedule.DefaultOptions().Interval,
 		QueuePollInterval:      task.DefaultOptions().PollInterval,
+		QuotaEvalInterval:      quotaenforce.DefaultOptions().Interval,
 	})
 	// 记录器在这里声明（在**所有**周期组件之前）：定时任务扫描器在构造之后
 	// 马上就要接上它，而采集器要到下面才构造。声明点取两者的最早者，省得
@@ -237,6 +241,10 @@ func main() {
 	schedulerSvc := sched.NewService(db, schedRegistry)
 	portSecuritySvc := portsecurity.NewService(db, mockAgent, recorder, queue)
 	captureSvc := capture.NewService(db, mockAgent, recorder, queue)
+	quotaEnforceSvc := quotaenforce.NewService(db, queue, mockAgent, recorder)
+	// 配额评估循环：配额以月计，5 分钟一轮足够，而它要扫两张按天累计的表。
+	quotaLoop := quotaenforce.NewLoop(quotaEnforceSvc, quotaenforce.DefaultOptions())
+	quotaLoop.Observe(schedRecorder)
 	diagnosticsSvc := diagnostics.NewService(db, settingsSvc, schedRegistry, recorder)
 	// 版本摘要进诊断包：排障时第一个要问的就是「跑的是哪个版本」，
 	// 而它应当随包一起走，不必再让人回头去问。
@@ -257,6 +265,8 @@ func main() {
 	// 观测要在启动之前接上，否则启动后到接上之间那一轮的动作不会被记录。
 	scheduler.Observe(schedRecorder)
 	scheduler.Start(context.Background())
+	quotaLoop.Start(context.Background())
+	defer quotaLoop.Stop()
 
 	// 控制台密码需要可逆加密（f-2-08 R-005）：它要交给 agent 参与 VNC 认证，
 	// 因此不能用单向哈希。用途标签与会话签名分开派生。
@@ -282,6 +292,7 @@ func main() {
 		Scheduler:     schedulerSvc,
 		PortSecurity:  portSecuritySvc,
 		Capture:       captureSvc,
+		QuotaEnforce:  quotaEnforceSvc,
 		Diagnostics:   diagnosticsSvc,
 		Firewall:      firewallSvc,
 		APIKey:        apiKeySvc,

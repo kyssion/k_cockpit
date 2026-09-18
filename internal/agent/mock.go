@@ -53,6 +53,19 @@ func (m *MockClient) WithStageDelay(d time.Duration) *MockClient {
 // 控制面不该替它猜。
 func stagePlan(op Operation) [][2]string {
 	switch op.Kind {
+	case OpQuotaEnforce:
+		enforce, _ := op.Params["enforce"].(bool)
+		if !enforce {
+			return [][2]string{
+				{"remove_rules", "移除限速/阻断规则"},
+				{"verify_restore", "确认网络恢复"},
+			}
+		}
+		return [][2]string{
+			{"resolve_targets", "确定生效范围"},
+			{"apply_rule", "施加限流规则"},
+			{"verify_rule", "校验规则生效"},
+		}
 	case OpNetworkCapture:
 		return [][2]string{
 			{"start_tcpdump", "启动抓包"},
@@ -715,6 +728,19 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 
 	case OpNetworkCaptureDelete:
 		data[CaptureDataKey] = CaptureInfo{Message: "抓包文件已删除"}
+
+	case OpQuotaEnforce:
+		enforce, _ := op.Params["enforce"].(bool)
+		action, _ := op.Params["action"].(string)
+		msg := "配额处置已生效"
+		if !enforce {
+			msg = "配额处置已撤销"
+		} else if action == "block" {
+			msg = "已按配额断开该用户的网络"
+		} else {
+			msg = "已按配额限制该用户的带宽"
+		}
+		data[QuotaDataKey] = QuotaInfo{Applied: true, Affected: 1, Message: msg}
 
 	case OpPortSecurityPrecheck:
 		// **这里报告 OVS 可用，而 OpNetworkProbe / OpNodeNetwork 报告它缺失。**
