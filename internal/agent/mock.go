@@ -266,6 +266,23 @@ func stagePlan(op Operation) [][2]string {
 			{"flush_rules", "清空本次规则"},
 			{"verify_open", "确认已不拦截"},
 		}
+	case OpStorageVolumeApply:
+		action, _ := op.Params["action"].(string)
+		if action == "delete" {
+			return [][2]string{
+				{"lv_remove", "移除逻辑卷"},
+				{"vg_remove", "移除卷组"},
+				{"pv_release", "释放物理卷"},
+			}
+		}
+		// 顺序体现 LVM 的三层：物理卷 → 卷组 → 逻辑卷。镜像与条带都在
+		// 最后一步传参，因此前三步是共用的。
+		return [][2]string{
+			{"pv_create", "创建物理卷"},
+			{"vg_create", "创建卷组"},
+			{"lv_create", "创建逻辑卷"},
+			{"verify_status", "确认卷状态"},
+		}
 	case OpShareMount:
 		action, _ := op.Params["action"].(string)
 		if action == "unmount" {
@@ -488,6 +505,26 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 		data[FirewallDataKey] = FirewallInfo{
 			Message: "已撤销本次下发，防火墙恢复为不拦截",
 		}
+
+	case OpStorageVolumeApply:
+		action, _ := op.Params["action"].(string)
+		if action == "delete" {
+			data[VolumeDataKey] = VolumeInfo{Message: "存储卷已删除，设备已释放"}
+			break
+		}
+		mirror, _ := op.Params["mirror_count"].(int)
+		size, _ := op.Params["size_gb"].(int)
+		info := VolumeInfo{SizeGB: size, PhysicalGB: size, Status: "active",
+			Message: "存储卷已创建"}
+		if mirror > 1 {
+			info.PhysicalGB = size * mirror
+			// 镜像卷建好之后要同步几小时，期间写明显变慢——节点如实回报
+			// 「同步中」，而不是一律说 active。
+			info.Status = "sync"
+			info.Message = "存储卷已创建，镜像正在初始同步"
+			info.Warnings = []string{"同步期间写性能会明显下降，完成后自动转为正常"}
+		}
+		data[VolumeDataKey] = info
 
 	case OpShareMount:
 		action, _ := op.Params["action"].(string)

@@ -117,6 +117,7 @@ func Register(h *server.Hertz, deps Deps) {
 	publicIPHandler := handler.NewPublicIP(deps.PublicIP)
 	sgHandler := handler.NewSecurityGroup(deps.SecurityGroup)
 	userStorageHandler := handler.NewUserStorage(deps.UserStorage)
+	volumeHandler := handler.NewStorageVolume(deps.Storage)
 	firewallHandler := handler.NewFirewall(deps.Firewall)
 	apiKeyHandler := handler.NewAPIKey(deps.APIKey)
 	mirrorHandler := handler.NewPortMirror(deps.PortMirror)
@@ -363,6 +364,21 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.GetVMPolicy)
 		v1.PUT("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.SetVMPolicy)
 		v1.DELETE("/vms/:id/firewall", requireAuth, adminOnly, firewallHandler.ClearVMPolicy)
+
+		// 存储卷（F-5-02，LVM 多盘聚合）。
+		//
+		// 归管理员：卷会**独占物理设备**，选错盘会影响这台宿主机上所有
+		// 虚拟机的存储。与存储池同一档。
+		//
+		// 创建走**预检 → 确认**两步：条带与镜像的组合里有一个直觉容易
+		// 出错的乘法（需要 stripe × mirror 块盘），而"条带没有冗余"更是
+		// 几乎所有人都会有的误解——看到「用了 4 块盘」很自然会以为那是
+		// 4 块盘的冗余。
+		v1.GET("/storage-volumes", requireAuth, adminOnly, volumeHandler.List)
+		v1.POST("/storage-volumes/preview", requireAuth, adminOnly, volumeHandler.Preview)
+		v1.POST("/storage-volumes", requireAuth, adminOnly, volumeHandler.Create)
+		// 删除**会销毁卷里的全部数据**，不可恢复。
+		v1.DELETE("/storage-volumes/:id", requireAuth, adminOnly, volumeHandler.Delete)
 
 		// 用户存储空间与文件管理（F-5-03/04/05）。
 		//

@@ -155,6 +155,8 @@ func main() {
 	queue.Register(securitygroup.NewApplyExecutor(db, mockAgent))
 	// 目录共享要往虚拟机的域配置里加一块 virtio-9p 设备。
 	queue.Register(storage.NewShareExecutor(db, mockAgent))
+	// 存储卷要跑 pvcreate/vgcreate/lvcreate，删卷还要逆序释放设备。
+	queue.Register(storage.NewVolumeExecutor(db, mockAgent))
 	// 网络变更（F-2-03）：三种资源各一个执行器，共用 vm:<id> 资源锁。
 	queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
 	queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))

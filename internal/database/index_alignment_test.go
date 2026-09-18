@@ -43,7 +43,7 @@ func TestUniqueIndexesMatchBetweenModelAndMigration(t *testing.T) {
 		&model.VMInterface{}, &model.StaticIP{}, &model.Template{},
 		&model.PublicIP{}, &model.PublicIPBinding{},
 		&model.SecurityGroup{}, &model.SecurityGroupRule{}, &model.InterfaceSecurityGroup{},
-		&model.ShareMount{},
+		&model.ShareMount{}, &model.StorageVolume{},
 		&model.FirewallPolicy{}, &model.FirewallRule{}, &model.FirewallVMPolicy{},
 		&model.UserAPIKey{}, &model.AuthActionToken{},
 		&model.PortMirror{}, &model.NetworkBridge{},

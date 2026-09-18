@@ -34,6 +34,18 @@ const (
 	TaskStoragePoolCreate = "storage.pool.create"
 	TaskStoragePoolDelete = "storage.pool.delete"
 
+	// 存储卷的创建与删除（f-5-02）。
+	//
+	// **两者共用一个类型**，由 Params 里的 action 区分——它们的参数几乎
+	// 一样（都只要卷名与设备），而拆成两个类型会有两个直接后果：执行器
+	// 要注册两份（漏一份就是一个「任务永远不执行」的静默故障），以及
+	// 「哪些参数属于哪一边」要在两处各维护一遍。
+	//
+	// 与存储池分开则是另一回事：池是「把这几块盘组织起来」，而卷要跑
+	// pvcreate/vgcreate/lvcreate 三条命令、镜像还要等初始同步，耗时差一个
+	// 量级，混在一起会让任务列表上看不出哪个慢在哪。
+	TaskStorageVolumeApply = "storage.volume.apply"
+
 	// 快照（F-2-07）。三者共用资源锁键 vm:<id>，因此与电源操作天然互斥：
 	// 恢复快照时不会有并发的开机请求插进来——那会让恢复出来的磁盘状态
 	// 立刻被一次开机覆盖掉一半。

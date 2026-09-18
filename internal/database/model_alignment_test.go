@@ -42,7 +42,7 @@ func TestModelColumnsExistInMigrations(t *testing.T) {
 		&model.ImageImport{}, &model.VMMigration{},
 		&model.PublicIP{}, &model.PublicIPBinding{},
 		&model.SecurityGroup{}, &model.SecurityGroupRule{}, &model.InterfaceSecurityGroup{},
-		&model.ShareMount{},
+		&model.ShareMount{}, &model.StorageVolume{},
 		&model.FirewallPolicy{}, &model.FirewallRule{}, &model.FirewallVMPolicy{},
 		&model.UserAPIKey{}, &model.AuthActionToken{},
 		&model.PortMirror{}, &model.NetworkBridge{},
