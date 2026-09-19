@@ -525,6 +525,12 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/settings/log/read", requireAuth, adminOnly, loggingHandler.Read)
 		v1.PUT("/settings/log/level", requireAuth, adminOnly, loggingHandler.SetLevel)
 		v1.GET("/settings/log/export", requireAuth, adminOnly, loggingHandler.Export)
+		// 实时日志流（SSE）。见 GAP_CLOSURE 的 G-28 论证：日志在线查看是
+		// 唯一「持续在变、而且停不下来」的那条流，也是唯一值得换成推送的地方。
+		//
+		// 鉴权仍是 Cookie——EventSource 对同源请求会自动带上它，因此不需要
+		// 把令牌放进查询串。
+		v1.GET("/settings/log/stream", requireAuth, adminOnly, loggingHandler.Stream)
 		v1.POST("/settings/log/delete", requireAuth, adminOnly, loggingHandler.Delete)
 
 		// 版本与关于（F-9-05）。

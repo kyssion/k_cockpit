@@ -118,6 +118,9 @@ type Logger struct {
 	// 重复接管会让输出写入死循环（本包写 stderr 时又触发 stdlib log），
 	// 因此必须防止。
 	tookOver bool
+
+	// subs 是实时查看的订阅（见 subscribe.go）。为空表示没有人在看。
+	subs map[*Subscription]struct{}
 }
 
 // Entry 是一条日志。
@@ -215,9 +218,12 @@ func (l *Logger) write(level Level, line string) {
 	// 不再增长，于是那个取模结果恒为 0——所有新行都覆写第 0 个位置，而
 	// 读取时看到的是一堆互不相关的旧行。这个错误在测试里表现为顺序错乱
 	// 而不是"少了数据"，很容易被当成排序问题放过去。
-	l.ring[l.writeAtLocked()] = Entry{
-		At: now, Level: level.String(), Line: line,
-	}
+	entry := Entry{At: now, Level: level.String(), Line: line}
+	l.ring[l.writeAtLocked()] = entry
+
+	// 实时查看的订阅。**非阻塞**——见 publishLocked 的说明：一个卡住的
+	// 读者不能把日志写入（因而把整个服务）拖停。
+	l.publishLocked(entry)
 
 	if l.file != nil {
 		l.writeFile(text)
