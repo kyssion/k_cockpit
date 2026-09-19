@@ -649,6 +649,13 @@ func Register(h *server.Hertz, deps Deps) {
 		// 而连通性中断是**立刻可见**的——用户马上就知道发生了什么。
 		v1.GET("/public-ips", requireAuth, adminOnly, publicIPHandler.List)
 		v1.POST("/public-ips", requireAuth, adminOnly, publicIPHandler.Create)
+		// 批量操作。**必须注册在带 :id 的路由之前**，否则 `batch` 会被
+		// 当成一个 id 去匹配 `/public-ips/:id/bind`。
+		//
+		// 它们逐条调用单条方法，复用全部校验——在批量里重写一遍的话两处
+		// 迟早分叉，而分叉的表现是「单个能解绑、批量里解不了」。
+		v1.POST("/public-ips/batch/bind", requireAuth, adminOnly, publicIPHandler.BatchBind)
+		v1.POST("/public-ips/batch/unbind", requireAuth, adminOnly, publicIPHandler.BatchUnbind)
 		v1.DELETE("/public-ips/:id", requireAuth, adminOnly, publicIPHandler.Delete)
 		v1.GET("/public-ips/:id/preview", requireAuth, adminOnly, publicIPHandler.Preview)
 		v1.POST("/public-ips/:id/bind", requireAuth, adminOnly, publicIPHandler.Bind)
@@ -711,6 +718,9 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.DELETE("/vms/:id/interfaces/:nicID", requireAuth, vmHandler.RemoveInterface)
 		v1.POST("/vms/:id/static-ips", requireAuth, vmHandler.BindStaticIP)
 		v1.DELETE("/vms/:id/static-ips/:ipID", requireAuth, vmHandler.UnbindStaticIP)
+		// 批量删除端口转发。逐条调用单条方法，复用全部校验（尤其是归属）。
+		// 注册在 `:id` 路由之前，理由同上。
+		v1.POST("/vms/port-forwards/batch-delete", requireAuth, vmHandler.BatchRemovePortForwards)
 		v1.GET("/vms/:id/port-forwards", requireAuth, vmHandler.PortForwards)
 		v1.POST("/vms/:id/port-forwards", requireAuth, vmHandler.AddPortForward)
 		v1.DELETE("/vms/:id/port-forwards/:pfID", requireAuth, vmHandler.RemovePortForward)
