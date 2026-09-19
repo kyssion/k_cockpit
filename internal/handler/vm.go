@@ -1191,3 +1191,38 @@ func contentDisposition(name string) string {
 	return `attachment; filename="` + fallback + `"; filename*=UTF-8''` +
 		url.PathEscape(name)
 }
+
+type resizeDiskRequest struct {
+	SizeGB int `json:"size_gb"`
+}
+
+// ResizeDisk 把虚拟机的系统盘扩容（API-029）。
+//
+// **只能扩，不能缩**：缩容会丢数据——镜像文件变小之后，文件系统里超出新边界
+// 的那些块还在原地，但已经不属于这个设备了，而文件系统自己不知道。这不是
+// 「有风险」，是「一定会坏」。
+//
+// **要求关机**：运行中的扩容请走「来宾自动化」里的「扩容磁盘」，那条路会在
+// 扩完之后顺带在来宾里扩好文件系统。两条路径各做一半的话，用户得到的是
+// 「盘大了但用不了」——正是这个功能要消灭的那种机器。
+func (h *VM) ResizeDisk(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	var req resizeDiskRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	result, err := h.svc.ResizeDisk(ctx, id, req.SizeGB, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, result)
+}

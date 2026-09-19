@@ -202,6 +202,8 @@ func main() {
 	queue.Register(hosttuning.NewExecutor(db, mockAgent))
 	// 平台自检后的重新下发。
 	queue.Register(platformcheck.NewExecutor(db, mockAgent))
+	// 关机状态下的磁盘扩容。
+	queue.Register(vm.NewDiskResizeExecutor(db, mockAgent))
 	// 网络变更（F-2-03）：三种资源各一个执行器，共用 vm:<id> 资源锁。
 	queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
 	queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))

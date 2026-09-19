@@ -712,6 +712,20 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 </domain>`,
 		}
 
+	case OpVMDiskResize:
+		oldGB, _ := op.Params["old_gb"].(int)
+		newGB, _ := op.Params["new_gb"].(int)
+		data[VMDiskDataKey] = VMDiskResizeInfo{
+			Applied: true, OldGB: oldGB, NewGB: newGB,
+			// **刻意标出"来宾里还要扩"**：这是这个操作最容易让用户误解的
+			// 一点——宿主机侧扩完只是"盘子变大了"，而操作系统看到的仍是
+			// 原来的分区。让这条分支可达，界面就必须把它说清楚。
+			GuestGrowNeeded: true,
+			GuestGrowHint: "在来宾里用 growpart /dev/vda 1 扩分区，再 resize2fs /dev/vda1 扩文件系统" +
+				"（Windows 用「磁盘管理」的「扩展卷」）",
+			Message: "宿主机侧已扩容",
+		}
+
 	case OpVMXMLApply:
 		action, _ := op.Params["action"].(string)
 		if action == "validate" {

@@ -124,6 +124,9 @@ const (
 	// 目录共享的挂载与卸载（f-5-06）。
 	TaskShareMount = "share.mount"
 
+	// 关机状态下的磁盘扩容。
+	TaskVMDiskResize = "vm.disk.resize"
+
 	// 平台自检后的重新下发（f-4-13）。
 	TaskPlatformRepair = "platform.repair"
 

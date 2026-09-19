@@ -751,6 +751,9 @@ func Register(h *server.Hertz, deps Deps) {
 		// 的定义里有控制台密码，原样送出等于把界面上「只写不读」的凭据
 		// 从后门送出去。
 		v1.GET("/vms/:id/xml", requireAuth, consoleHandler.XML)
+		// 关机状态下的磁盘扩容（**只能扩，不能缩**）。运行中的扩容走
+		// 「来宾自动化」里的 expand_disk——那条路会顺带在来宾里扩好文件系统。
+		v1.POST("/vms/:id/disk/resize", requireAuth, vmHandler.ResizeDisk)
 		// 校验并给出 diff（**只读**，不需要二次验证——不产生改动，而
 		// "看一眼会影响什么"如果需要先验证一次，用户就会在还不知道要改
 		// 什么的时候被迫走一遍验证流程）。
