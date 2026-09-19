@@ -1226,3 +1226,25 @@ func (h *VM) ResizeDisk(ctx context.Context, c *app.RequestContext) {
 	}
 	api.OK(c, result)
 }
+
+// MakeDisksIndependent 把链接克隆的磁盘变成独立盘（API-290）。
+//
+// **它存在的理由是一件事：链接克隆的父盘删不掉。** 链接克隆的磁盘只是模板
+// 之上的一层覆盖，这让克隆很快、很省空间，代价是那台机器永远依赖着父盘。
+// 而模板的管理（更新、清理、下线）需要能删掉旧的父盘。
+func (h *VM) MakeDisksIndependent(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.MakeDisksIndependent(ctx, id, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task": t})
+}

@@ -390,6 +390,18 @@ func stagePlan(op Operation) [][2]string {
 			{"disk_place", "放入存储池"},
 			{"template_register", "登记为模板"},
 		}
+	case OpVMDisksIndependent:
+		return [][2]string{
+			{"verify_stopped", "确认虚拟机已停机"},
+			{"merge_backing", "合并底层镜像"},
+			{"verify_standalone", "确认不再依赖父盘"},
+		}
+	case OpVMDiskResize:
+		return [][2]string{
+			{"check_shrinking", "确认是扩容而非缩容"},
+			{"grow_image", "扩大镜像文件"},
+			{"update_domain", "更新域定义"},
+		}
 	case OpVMXML:
 		return [][2]string{
 			{"dumpxml", "导出域定义"},
@@ -710,6 +722,13 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
     </disk>
   </devices>
 </domain>`,
+		}
+
+	case OpVMDisksIndependent:
+		freed, _ := op.Params["freed_from"].(string)
+		data[VMDiskIndependentKey] = VMDiskIndependentInfo{
+			Applied: true, FreedFrom: freed, SizeBytes: 8 << 30,
+			Message: "磁盘已合并为独立镜像",
 		}
 
 	case OpVMDiskResize:

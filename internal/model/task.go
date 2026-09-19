@@ -124,6 +124,9 @@ const (
 	// 目录共享的挂载与卸载（f-5-06）。
 	TaskShareMount = "share.mount"
 
+	// 把链接克隆的磁盘变成独立盘（解除对父盘的依赖）。
+	TaskVMDisksIndependent = "vm.disks.independent"
+
 	// 关机状态下的磁盘扩容。
 	TaskVMDiskResize = "vm.disk.resize"
 

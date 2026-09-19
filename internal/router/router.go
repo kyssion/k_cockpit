@@ -754,6 +754,9 @@ func Register(h *server.Hertz, deps Deps) {
 		// 关机状态下的磁盘扩容（**只能扩，不能缩**）。运行中的扩容走
 		// 「来宾自动化」里的 expand_disk——那条路会顺带在来宾里扩好文件系统。
 		v1.POST("/vms/:id/disk/resize", requireAuth, vmHandler.ResizeDisk)
+		// 把链接克隆的磁盘变为独立盘（**需要停机**）。它存在的理由是
+		// 链接克隆的父盘删不掉，而模板的管理需要能删掉旧的父盘。
+		v1.POST("/vms/:id/disks/independent", requireAuth, vmHandler.MakeDisksIndependent)
 		// 校验并给出 diff（**只读**，不需要二次验证——不产生改动，而
 		// "看一眼会影响什么"如果需要先验证一次，用户就会在还不知道要改
 		// 什么的时候被迫走一遍验证流程）。
