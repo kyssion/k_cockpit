@@ -129,6 +129,25 @@ func (h *Template) Update(ctx context.Context, c *app.RequestContext) {
 //
 // 仍有链式克隆依赖时**同步拒绝**并说明数量与出路——父盘一删，那些虚拟机的
 // 数据就不可用了，而且不会立刻报错，要等到下次开机或读某个未缓存的数据块。
+// DeletePreview 返回删除前的检查结果（API-033）。**只读**。
+//
+// 这些约束本来就有（Delete 里会拒绝），但用户只有在点了删除之后才会撞上
+// ——而那时他看到的是一个错误提示，不是一份待办清单。预览把这件工作放在
+// 「按下按钮之前」，并且给出**具体是哪几台**，而不只是一个计数。
+func (h *Template) DeletePreview(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "模板 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	view, err := h.svc.DeletePreview(ctx, id, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, view)
+}
+
 func (h *Template) Delete(ctx context.Context, c *app.RequestContext) {
 	id, err := namedPathID(c, "id", "模板 ID")
 	if err != nil {

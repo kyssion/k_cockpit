@@ -334,29 +334,15 @@ func (s *Service) Delete(
 		return nil, err
 	}
 
-	var linked int64
-	if err := s.db.WithContext(ctx).Model(&model.VM{}).
-		Where("template_id = ? AND clone_mode = ? AND present = ?", tpl.ID, model.CloneLinked, true).
-		Count(&linked).Error; err != nil {
-		log.Printf("[template] 统计链式克隆失败: %v", err)
-		return nil, api.Internal()
+	// **判定与预览共用同一段代码。** 两处各写一遍的话迟早分叉，而分叉的表现
+	// 是「预览说可以删、点下去却报冲突」——用户会以为界面上那个绿色的
+	// 「可以删除」在骗他，而这恰恰是预览存在意义的反面。
+	blockers, err := s.deleteBlockers(ctx, tpl)
+	if err != nil {
+		return nil, err
 	}
-	if linked > 0 {
-		return nil, api.Conflict(
-			"仍有 " + strconv.FormatInt(linked, 10) + " 台链式克隆的虚拟机依赖这个模板，删除会让它们的数据不可用；" +
-				"请先把它们转为独立虚拟机")
-	}
-
-	// 派生模板（以它作为父级的）也要一并拒绝：链断在中间同样会让下游失效。
-	var children int64
-	if err := s.db.WithContext(ctx).Model(&model.Template{}).
-		Where("parent_id = ?", tpl.ID).Count(&children).Error; err != nil {
-		log.Printf("[template] 统计派生模板失败: %v", err)
-		return nil, api.Internal()
-	}
-	if children > 0 {
-		return nil, api.Conflict(
-			"仍有 " + strconv.FormatInt(children, 10) + " 个模板以它为父级，请先处理这些派生模板")
+	if len(blockers) > 0 {
+		return nil, api.Conflict(blockers[0].message())
 	}
 
 	t, err := s.queue.Enqueue(ctx, task.Spec{
@@ -382,6 +368,136 @@ func (s *Service) Delete(
 }
 
 // load 读取模板并做可见性检查。
+// Blocker 是一条阻止删除模板的依赖。
+//
+// **带上具体名字而不是只给计数。** 「仍有 3 台链式克隆依赖它」只告诉用户
+// 有麻烦，而没说找谁；他要拿这个去处理，就必须知道是哪几台。计数与名单
+// 都能给，而名单才是能用的那个。
+type Blocker struct {
+	// Kind 是依赖类型：linked_vm / child_template。
+	Kind  string   `json:"kind"`
+	Label string   `json:"label"`
+	Count int      `json:"count"`
+	Names []string `json:"names"`
+	// Unit 是量词（台 / 个）。单独一个字段而不是拼进 Label：「链式克隆的
+	// 虚拟机」作为表格标题合适，而「仍有 2 链式克隆的虚拟机」缺个量词。
+	Unit string `json:"unit"`
+	// Fix 写清「怎么解决」，而不是只说「不行」。
+	Fix string `json:"fix"`
+}
+
+func (b Blocker) message() string {
+	return "仍有 " + strconv.Itoa(b.Count) + " " + b.Unit + b.Label +
+		"依赖这个模板；" + b.Fix
+}
+
+// DeletePreviewView 是删除前的预览（F-3-01）。
+type DeletePreviewView struct {
+	CanDelete bool      `json:"can_delete"`
+	Blockers  []Blocker `json:"blockers"`
+	// DiskPath 是删除后会释放的磁盘文件，让用户知道「删掉的是什么」。
+	DiskPath string `json:"disk_path"`
+	// LinkedVMCount / ChildCount 是两项依赖各自的计数。
+	//
+	// 它们与 Blockers 里的 count 是同一个数，但**可删除时 Blockers 为空**
+	// ——那时预览里仍要说明「没有依赖，删掉只是释放磁盘」。
+	LinkedVMCount int `json:"linked_vm_count"`
+	ChildCount    int `json:"child_template_count"`
+}
+
+// DeletePreview 返回删除前的检查结果（API-033）。
+//
+// 它存在的理由：这些约束**本来就有**（Delete 里拒绝），但用户只有在点了
+// 删除之后才会撞上——而那时他看到的是一个错误提示，不是一份待办清单。
+// 预览把这件工作在「按下按钮之前」完成。
+func (s *Service) DeletePreview(ctx context.Context, id int64, v authz.Viewer) (*DeletePreviewView, error) {
+	tpl, err := s.load(ctx, id, v)
+	if err != nil {
+		return nil, err
+	}
+	blockers, err := s.deleteBlockers(ctx, tpl)
+	if err != nil {
+		return nil, err
+	}
+
+	view := &DeletePreviewView{
+		CanDelete: len(blockers) == 0,
+		Blockers:  blockers,
+		DiskPath:  tpl.DiskPathOf(),
+	}
+	for _, b := range blockers {
+		switch b.Kind {
+		case "linked_vm":
+			view.LinkedVMCount = b.Count
+		case "child_template":
+			view.ChildCount = b.Count
+		}
+	}
+	return view, nil
+}
+
+// deleteBlockers 找出阻止删除的全部依赖。
+//
+// **一次返回全部，而不是撞到第一个就返回。** 用户要处理的是一个清单：
+// 只报第一项的话，他解决了链式克隆再点一次，又会撞上派生模板——两次往返
+// 换来的信息本可以一次给全。
+func (s *Service) deleteBlockers(ctx context.Context, tpl *model.Template) ([]Blocker, error) {
+	var blockers []Blocker
+
+	// 链式克隆：它们的磁盘是**这个模板的派生**，删模板会让数据不可用。
+	var vms []model.VM
+	if err := s.db.WithContext(ctx).
+		Select("id", "name").
+		Where("template_id = ? AND clone_mode = ? AND present = ?",
+			tpl.ID, model.CloneLinked, true).
+		Limit(nameListLimit).
+		Find(&vms).Error; err != nil {
+		log.Printf("[template] 统计链式克隆失败: %v", err)
+		return nil, api.Internal()
+	}
+	if len(vms) > 0 {
+		names := make([]string, 0, len(vms))
+		for i := range vms {
+			names = append(names, vms[i].Name)
+		}
+		blockers = append(blockers, Blocker{
+			Kind: "linked_vm", Label: "链式克隆的虚拟机", Unit: "台",
+			Count: len(vms), Names: names,
+			Fix: "删除会让它们的数据不可用；请先把它们转为独立虚拟机（在虚拟机详情页的磁盘区）。",
+		})
+	}
+
+	// 派生模板：链断在中间同样会让下游失效。
+	var children []model.Template
+	if err := s.db.WithContext(ctx).
+		Select("id", "name").
+		Where("parent_id = ?", tpl.ID).
+		Limit(nameListLimit).
+		Find(&children).Error; err != nil {
+		log.Printf("[template] 统计派生模板失败: %v", err)
+		return nil, api.Internal()
+	}
+	if len(children) > 0 {
+		names := make([]string, 0, len(children))
+		for i := range children {
+			names = append(names, children[i].Name)
+		}
+		blockers = append(blockers, Blocker{
+			Kind: "child_template", Label: "以它为父级的模板", Unit: "个",
+			Count: len(children), Names: names,
+			Fix: "请先处理这些派生模板（删除或改为独立）。",
+		})
+	}
+
+	return blockers, nil
+}
+
+// nameListLimit 限制预览里列出的名字条数。
+//
+// 上限本身就是信息：真出现几百台依赖时，预览页面不该变成一份几千行的
+// 名单。超出时 Count 仍是真实总数，只是名字只列前若干条。
+const nameListLimit = 50
+
 func (s *Service) load(ctx context.Context, id int64, v authz.Viewer) (*model.Template, error) {
 	var tpl model.Template
 	err := s.db.WithContext(ctx).Where("id = ?", id).First(&tpl).Error
