@@ -306,7 +306,7 @@ POST /security/password-breach/scan|status             密码泄露检测
 | **G-11** | 账号恢复余项 | **缺** | `forgot` / `invite` / `breach` 命中均为 0；`email` 只有模型字段、没有绑定流程。缺：忘记密码、邀请注册、邮箱绑定、密码泄露检测 |
 | **G-20** | 磁盘 | **已完成** | **已有**：guest-agent 扩盘、IOPS 上限、磁盘格式转换、挂载磁盘。**本轮补**：关机状态下扩盘（`POST /vms/:id/disk/resize`）。**不做**：`disk_gb` 作为可编辑项——见下 |
 | **G-21** | 光盘 | **缺** | 只有 `BootOrder` 里的 `cdrom` 字样。缺：弹出、换 bus |
-| **G-22** | 克隆变体 | **部分** → 本轮补 make-independent | **已有**：`linked-clone`（`CloneMode: full / linked`，且注释写明「链式克隆必须是显式选择」）。**本轮补**：`make-independent`（含前端）。**缺**：`batch-clone` |
+| **G-22** | 克隆变体 | **部分** → 本轮补 make-independent | **已有**：`linked-clone`（`CloneMode: full / linked`，且注释写明「链式克隆必须是显式选择」）。**本轮补**：`make-independent`（含前端）+ `batch-clone`（后端）。**已齐** |
 | **G-23** | 迁移预览 | **缺** | `migration preview` 命中 0 |
 | **G-24** | 存储池分区 | **缺** | `partition` / `format-mount` 命中 0 |
 | **G-25** | 模板 | **部分** | **已有**：发布（`handler/template.go` 有 `Published`）。**缺**：导入预览、删除预览、prepare-linux |
@@ -676,7 +676,16 @@ SPICE 的价值在于**外部客户端**（声音、USB 重定向、多显示器
 别删模板」，而模板管理迟早需要删。弹窗里写清两项代价（时间与空间），运行中
 直接禁用并说明原因。
 
-**仍缺**：`batch-clone`；与 F-9-03 诊断包的打通。（诊断包里目前只有审计日志）。两者已用同一套
+**`batch-clone` 已完成（后端）**，前端待补（入口应在模板页：「从此模板批量
+创建」）。
+
+三处刻意的处理：
+- **一次最多 5 台**，且理由写在报错里——用户不知道为什么是 5，而这个理由
+  是关于存储 IO 的（见 API-291）
+- **整批先查重**：逐台跳过重名会建出带洞的结果，而用户看不出少了哪一台
+- **部分失败如实报告且不回滚**：撤销意味着删掉可能已经分发出去了的机器
+
+**仍缺**：`batch-clone` 的前端；与 F-9-03 诊断包的打通。（诊断包里目前只有审计日志）。两者已用同一套
 脱敏规则，打通只需把 logger 接进 diagnostics。
 
 ---

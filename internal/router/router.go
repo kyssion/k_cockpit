@@ -757,6 +757,8 @@ func Register(h *server.Hertz, deps Deps) {
 		// 把链接克隆的磁盘变为独立盘（**需要停机**）。它存在的理由是
 		// 链接克隆的父盘删不掉，而模板的管理需要能删掉旧的父盘。
 		v1.POST("/vms/:id/disks/independent", requireAuth, vmHandler.MakeDisksIndependent)
+		// 批量克隆（一次最多 5 台）。限制与存储 IO 有关，理由写在报错里。
+		v1.POST("/vms/batch-clone", requireAuth, vmHandler.BatchClone)
 		// 校验并给出 diff（**只读**，不需要二次验证——不产生改动，而
 		// "看一眼会影响什么"如果需要先验证一次，用户就会在还不知道要改
 		// 什么的时候被迫走一遍验证流程）。

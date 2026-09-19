@@ -1248,3 +1248,50 @@ func (h *VM) MakeDisksIndependent(ctx context.Context, c *app.RequestContext) {
 	}
 	api.OK(c, map[string]any{"task": t})
 }
+
+type batchCloneRequest struct {
+	NamePrefix string `json:"name_prefix"`
+	Count      int    `json:"count"`
+	NodeID     int64  `json:"node_id"`
+	VCPU       int    `json:"vcpu"`
+	MemoryMB   int    `json:"memory_mb"`
+	DiskGB     int    `json:"disk_gb"`
+	TemplateID int64  `json:"template_id"`
+	CloneMode  string `json:"clone_mode"`
+	GroupName  string `json:"group_name"`
+	Remark     string `json:"remark"`
+}
+
+// BatchClone 一次克隆多台虚拟机（API-291）。
+//
+// **一次最多 5 台**，理由在服务层的报错里写明：每台都要完整读一遍父盘再写
+// 一份新的，同时进行的台数越多，宿主机上的存储被占得越久——表现为**所有**
+// 虚拟机的 IO 都变慢，而用户很难把它和「我刚才点了克隆」联系起来。
+//
+// 这一批名称**整批先查重**（逐台跳过重名会建出带洞的结果），而**部分失败
+// 如实报告且不回滚**——第 3 台失败时前两台已经建好了，撤销意味着删掉可能
+// 已经分发出去了的机器。
+func (h *VM) BatchClone(ctx context.Context, c *app.RequestContext) {
+	var req batchCloneRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	result, err := h.svc.BatchClone(ctx, vm.BatchCloneRequest{
+		CreateRequest: vm.CreateRequest{
+			NodeID: req.NodeID, VCPU: req.VCPU, MemoryMB: req.MemoryMB,
+			DiskGB: req.DiskGB, TemplateID: req.TemplateID, CloneMode: req.CloneMode,
+			GroupName: req.GroupName, Remark: req.Remark,
+		},
+		NamePrefix: req.NamePrefix,
+		Count:      req.Count,
+	}, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, result)
+}
