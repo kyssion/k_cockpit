@@ -63,6 +63,25 @@ export interface CreateFromVmInput {
   published?: boolean
 }
 
+export interface DeleteBlocker {
+  kind: 'linked_vm' | 'child_template'
+  label: string
+  unit: string
+  count: number
+  names: string[]
+  /** 怎么解决。不能只说「不行」——那是用户在预览里唯一能照着做的。 */
+  fix: string
+}
+
+export interface DeletePreview {
+  can_delete: boolean
+  blockers: DeleteBlocker[]
+  /** 删除后会释放的磁盘文件。 */
+  disk_path: string
+  linked_vm_count: number
+  child_template_count: number
+}
+
 export const templateApi = {
   list: (params: TemplateListParams = {}) =>
     get<TemplateView[]>('/api/v1/templates', {
@@ -122,6 +141,16 @@ export const templateApi = {
   ) => patch<TemplateView>(`/api/v1/templates/${id}`, input),
 
   /** 删除模板。仍有链式克隆依赖时会被**同步拒绝**并给出数量。 */
+  /**
+   * 删除前的检查。**只读**。
+   *
+   * 这些约束本来就有（删除时会被拒绝），但用户只有在点了删除之后才会撞上
+   * ——而那时他看到的是一个错误提示，不是一份待办清单。预览把这件工作放在
+   * 「按下按钮之前」，并且给出**具体是哪几台**，而不只是一个计数。
+   */
+  deletePreview: (id: number) =>
+    get<DeletePreview>(`/api/v1/templates/${id}/delete-preview`),
+
   remove: (id: number) => del<TaskRef>(`/api/v1/templates/${id}`),
 }
 

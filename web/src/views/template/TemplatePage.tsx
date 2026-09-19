@@ -53,6 +53,14 @@ export function TemplatePage() {
     },
   })
 
+  // 删除前先拉一次检查结果。**在弹窗打开时**取，而不是在点「确认删除」时
+  // ——用户要在这个弹窗里做决定，而这些信息正是决定所需要的。
+  const deleteCheck = useQuery({
+    queryKey: ['template-delete-preview', deleteTarget?.id ?? 0],
+    queryFn: () => templateApi.deletePreview(deleteTarget!.id),
+    enabled: deleteTarget !== null,
+  })
+
   const remove = useMutation({
     mutationFn: (tpl: TemplateView) => templateApi.remove(tpl.id),
     onSuccess: () => {
@@ -234,7 +242,7 @@ export function TemplatePage() {
       <Modal
         open={deleteTarget != null}
         title={`删除模板「${deleteTarget?.name ?? ''}」`}
-        description="删除会移除宿主机上的模板盘。仍有链式克隆依赖它时会被拒绝，并告诉你还有几台。"
+        description="删除会移除宿主机上的模板盘。下面列出当前会阻止删除的依赖。"
         onClose={() => setDeleteTarget(null)}
         footer={
           <>
@@ -245,6 +253,9 @@ export function TemplatePage() {
               variant="danger"
               size="sm"
               loading={remove.isPending}
+              // 有依赖时**直接禁用**：让用户点一次再收到一个错误，等于把
+              // 上面那份清单白给了——他刚刚才看过它。
+              disabled={deleteCheck.data?.can_delete === false}
               onClick={() => deleteTarget && remove.mutate(deleteTarget)}
             >
               确认删除
@@ -262,6 +273,38 @@ export function TemplatePage() {
             会失去数据，因为它们的磁盘只是模板之上的一层覆盖——
             这类损坏不会立刻报错，要等到下次开机或读到未缓存的数据块时才暴露。
           </p>
+
+          {deleteCheck.isPending && <p className="text-ink-3">正在检查依赖…</p>}
+
+          {(deleteCheck.data?.blockers ?? []).map((b) => (
+            <div
+              key={b.kind}
+              className="rounded-control border border-danger/40 bg-danger/5 px-3 py-2"
+            >
+              <p className="text-sm text-danger">
+                {b.count} {b.unit}{b.label}依赖它，暂时不能删除
+              </p>
+              {/* 列出**具体名字**：只说「有 3 台」用户还得自己去找是哪三台。 */}
+              {b.names.length > 0 && (
+                <p className="mt-1 text-xs text-ink-2">
+                  {b.names.join('、')}
+                  {b.count > b.names.length ? ` 等 ${b.count} 项` : ''}
+                </p>
+              )}
+              <p className="mt-1 text-xs text-ink-3">{b.fix}</p>
+            </div>
+          ))}
+
+          {deleteCheck.data?.can_delete && (
+            <p className="rounded-control bg-sunken px-3 py-2 text-sm text-ink-2">
+              没有依赖，可以删除。
+              {deleteCheck.data.disk_path && (
+                <span className="mt-0.5 block text-xs text-ink-3">
+                  会释放磁盘：{deleteCheck.data.disk_path}
+                </span>
+              )}
+            </p>
+          )}
         </div>
       </Modal>
     </div>
