@@ -760,6 +760,11 @@ func Register(h *server.Hertz, deps Deps) {
 		// 批量克隆（一次最多 5 台）。限制与存储 IO 有关，理由写在报错里。
 		v1.POST("/vms/batch-clone", requireAuth, vmHandler.BatchClone)
 
+		// 迁移预检（**只读**）。它回答用户点下按钮之前唯一想知道的那件事：
+		// 这次要停多久。因此除了「能不能迁」，还给出「会怎么迁」——
+		// 停机时长由后者决定。**与迁移共用同一套校验**。
+		v1.POST("/vms/:id/migration/preview", requireAuth, vmHandler.PreviewMigration)
+
 		// 光驱（可以有多个）。**弹出与移除是两件事**：弹出之后光驱仍在
 		// （来宾里看得到一个空的托盘），移除才是设备消失。
 		// **换盘之后来宾通常看不到新介质**（多数系统缓存了介质信息），

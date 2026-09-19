@@ -61,31 +61,15 @@ func (s *Service) Migrate(
 	if req.ToNodeID <= 0 {
 		return nil, api.InvalidParameter("必须指定目标节点")
 	}
-	if req.ToNodeID == target.NodeID {
-		return nil, api.ValidationFailed("目标节点与当前节点相同，无需迁移")
-	}
 
-	if err := s.ensureMigrateTarget(ctx, req.ToNodeID); err != nil {
-		return nil, err
-	}
-
-	// 实时探测，不用投影（f-2-01 R-002）。
-	current, err := s.probeStatus(ctx, target)
-	if err != nil {
-		return nil, err
-	}
-	if current != model.VMStatusStopped {
-		return nil, api.ValidationFailed(
-			"迁移需要先关机（当前：" + DescribeStatus(current) + "）。" +
-				"运行中迁移会让磁盘在被写入的同时被复制，两侧都不可用")
-	}
-
-	active, err := s.hasActiveTask(ctx, target.ID)
-	if err != nil {
-		return nil, err
-	}
-	if active {
-		return nil, api.Conflict("该虚拟机有正在执行的任务，请先等待完成或取消")
+	// **与预览共用同一套校验。**
+	//
+	// 分两处写的话迟早会分叉，而分叉的表现是最难解释的一种：**预览说可以，
+	// 点下去被拒**。用户会反复确认自己的操作，而问题在于两处用了不同的规则。
+	if blockers := s.migrationBlockers(ctx, target, req.ToNodeID); len(blockers) > 0 {
+		// **原样返回**：状态码携带信息（409 冲突 / 404 不存在 / 422 前置
+		// 条件不满足），压成统一的 422 会让客户端无法区分。
+		return nil, blockers[0]
 	}
 
 	// 同一台机器同时只允许一次迁移。
@@ -135,12 +119,14 @@ func (s *Service) Migrate(
 		OwnerID:      ownerOf(target, v),
 		CreatedBy:    v.UserID,
 		Params: map[string]any{
-			"migration_id":    row.ID,
-			"vm_id":           target.ID,
-			"vm_name":         target.Name,
-			"from_node_id":    target.NodeID,
-			"to_node_id":      req.ToNodeID,
-			"observed_status": current,
+			"migration_id": row.ID,
+			"vm_id":        target.ID,
+			"vm_name":      target.Name,
+			"from_node_id": target.NodeID,
+			"to_node_id":   req.ToNodeID,
+			// 上面那套共用校验里已经实时探测过状态，而它必须等于"已关机"
+			// 才走得到这里——因此这里记的就是探测到的那个值。
+			"observed_status": model.VMStatusStopped,
 		},
 	})
 	if err != nil {

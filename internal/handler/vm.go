@@ -1439,3 +1439,33 @@ func (h *VM) cdromAction(ctx context.Context, c *app.RequestContext, action stri
 	}
 	api.OK(c, map[string]any{"task": t})
 }
+
+// PreviewMigration 迁移预检（API-298）。**只读**，不产生任何记录。
+//
+// 它要回答用户点下按钮**之前**唯一想知道的那件事：**这次要停多久。**
+// 因此除了「能不能迁」，还必须给出**会怎么迁**（停机迁移 + 要复制的数据量）
+// ——停机时长由后者决定，而不是由前者决定。
+//
+// **与 Migrate 共用同一套校验**：分两处写迟早会分叉，而分叉的表现是最难
+// 解释的一种——预览说可以，点下去被拒。用户会反复确认自己的操作，而问题
+// 在于两处用了不同的规则。
+func (h *VM) PreviewMigration(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	var req struct {
+		ToNodeID int64 `json:"to_node_id"`
+	}
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+	view, err := h.svc.PreviewMigration(ctx, id, req.ToNodeID, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, view)
+}
