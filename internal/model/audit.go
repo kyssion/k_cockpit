@@ -8,6 +8,12 @@ const (
 	SourceAPI       = "api"
 	SourceScheduler = "scheduler"
 	SourceSystem    = "system"
+	// SourceEmergency 是宿主机本地执行的应急脚本（f-9-06）。
+	//
+	// 单独一个取值而不是并进 system：要区分「这次重置是从面板点的还是从
+	// 宿主机命令行敲的」。能登上面板的人可能很多，能登上宿主机的人通常很少
+	// ——而这个区别正是事后追责时最要紧的那一条。
+	SourceEmergency = "emergency"
 )
 
 // AuditLog 对应 audit_log 表。
