@@ -19,6 +19,7 @@ import { Link, useNavigate, useParams } from 'react-router'
 import { TagEditor } from './TagEditor'
 
 import { ShareTab } from './ShareTab'
+import { CDROMTab } from './CDROMTab'
 import { XMLTab } from './XMLTab'
 import { VMMetricsPanel } from '@/views/monitor/MetricsPanel'
 
@@ -94,6 +95,7 @@ type TabKey =
   | 'snapshot'
   | 'network'
   | 'monitor'
+  | 'cdrom'
   | 'share'
   | 'schedule'
   | 'export'
@@ -106,6 +108,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'snapshot', label: '快照管理' },
   { key: 'network', label: '网络管理' },
   { key: 'monitor', label: '监控' },
+  { key: 'cdrom', label: '光驱' },
   { key: 'share', label: '目录共享' },
   { key: 'schedule', label: '定时任务' },
   { key: 'export', label: '导出' },
@@ -535,6 +538,8 @@ export function VmDetailPage() {
           description="指标由采样器按固定间隔采集。图上断开的地方表示那段时间没采到数据，而不是指标为 0。"
         />
       )}
+      {/* 光驱：可以多个。**弹出与移除是两件事**，界面上分开呈现。 */}
+      {tab === 'cdrom' && <CDROMTab vmID={vm.id} nodeID={vm.node_id} />}
       {tab === 'share' && <ShareTab vmID={vm.id} />}
       {tab === 'schedule' && <ScheduleTab vmID={vm.id} />}
       {tab === 'export' && <ExportTab vm={vm} />}
