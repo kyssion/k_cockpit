@@ -306,7 +306,7 @@ POST /security/password-breach/scan|status             密码泄露检测
 | **G-11** | 账号恢复余项 | **缺** | `forgot` / `invite` / `breach` 命中均为 0；`email` 只有模型字段、没有绑定流程。缺：忘记密码、邀请注册、邮箱绑定、密码泄露检测 |
 | **G-20** | 磁盘 | **已完成** | **已有**：guest-agent 扩盘、IOPS 上限、磁盘格式转换、挂载磁盘。**本轮补**：关机状态下扩盘（`POST /vms/:id/disk/resize`）。**不做**：`disk_gb` 作为可编辑项——见下 |
 | **G-21** | 光盘 | **缺** | 只有 `BootOrder` 里的 `cdrom` 字样。缺：弹出、换 bus |
-| **G-22** | 克隆变体 | **部分** → 本轮补 make-independent | **已有**：`linked-clone`（`CloneMode: full / linked`，且注释写明「链式克隆必须是显式选择」）。**本轮补**：`make-independent`。**缺**：`batch-clone` |
+| **G-22** | 克隆变体 | **部分** → 本轮补 make-independent | **已有**：`linked-clone`（`CloneMode: full / linked`，且注释写明「链式克隆必须是显式选择」）。**本轮补**：`make-independent`（含前端）。**缺**：`batch-clone` |
 | **G-23** | 迁移预览 | **缺** | `migration preview` 命中 0 |
 | **G-24** | 存储池分区 | **缺** | `partition` / `format-mount` 命中 0 |
 | **G-25** | 模板 | **部分** | **已有**：发布（`handler/template.go` 有 `Published`）。**缺**：导入预览、删除预览、prepare-linux |
@@ -670,6 +670,11 @@ SPICE 的价值在于**外部客户端**（声音、USB 重定向、多显示器
 得出「克隆完全没有实现」。真相是**它不叫这个名字**——克隆是「创建的一个
 模式」（`POST /vms` 带 `template_id` + `clone_mode`），所以 handler 里只有
 `Create` 没有 `Clone`。按上一轮写进文档的规则停下来换了种方式查，才发现。
+
+**前端已完成**：链式克隆的提示区块里加了「解除模板依赖」入口——那个区块
+原本只说清风险（「模板被删除后数据将不可用」）而不给出路，用户能做的是「那就
+别删模板」，而模板管理迟早需要删。弹窗里写清两项代价（时间与空间），运行中
+直接禁用并说明原因。
 
 **仍缺**：`batch-clone`；与 F-9-03 诊断包的打通。（诊断包里目前只有审计日志）。两者已用同一套
 脱敏规则，打通只需把 logger 接进 diagnostics。

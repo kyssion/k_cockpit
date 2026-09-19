@@ -353,6 +353,17 @@ export const vmApi = {
       { size_gb: sizeGB },
     ),
 
+  /**
+   * 把链接克隆的磁盘合并为独立盘。
+   *
+   * **它存在的理由是一件事：链接克隆的父盘删不掉。** 模板的管理需要能删掉
+   * 旧的父盘，而这一步就是让这台机器不再依赖它。
+   *
+   * **需要停机**：合并要复制整个镜像，而运行中的机器还在往那层覆盖里写。
+   */
+  makeDisksIndependent: (id: number) =>
+    post<{ task: unknown }>(`/api/v1/vms/${id}/disks/independent`, {}),
+
   /** 校验一份新的定义并给出 diff。**只读**，不应用，也不需要二次验证。 */
   xmlPrecheck: (id: number, xml: string) =>
     post<XMLPrecheck>(`/api/v1/vms/${id}/xml/precheck`, { xml }),
