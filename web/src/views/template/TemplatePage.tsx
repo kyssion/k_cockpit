@@ -31,6 +31,7 @@ import { formatBytes } from '@/utils/format'
 export function TemplatePage() {
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
+  const [batchTarget, setBatchTarget] = useState<TemplateView | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<TemplateView | null>(null)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
@@ -165,6 +166,22 @@ export function TemplatePage() {
                       >
                         {t.published ? '取消发布' : '发布'}
                       </button>
+                      {/* 批量创建放在这里而不是新建页：克隆的源头是模板，
+                          入口跟着源头走才找得到。 */}
+                      <button
+                        className="text-sm text-brand hover:underline"
+                        disabled={t.status !== 'ready' || !t.clone_enabled}
+                        title={
+                          !t.clone_enabled
+                            ? '该模板已停止提供克隆'
+                            : t.status !== 'ready'
+                              ? '模板尚未就绪'
+                              : undefined
+                        }
+                        onClick={() => setBatchTarget(t)}
+                      >
+                        批量创建
+                      </button>
                       <button
                         className="text-sm text-danger hover:underline"
                         onClick={() => setDeleteTarget(t)}
@@ -179,6 +196,21 @@ export function TemplatePage() {
           </table>
         </div>
       )}
+
+      <BatchCloneModal
+        template={batchTarget}
+        onClose={() => setBatchTarget(null)}
+        onDone={() => {
+          setBatchTarget(null)
+          setError('')
+          setNotice('批量创建任务已提交')
+          void queryClient.invalidateQueries({ queryKey: ['tasks'] })
+        }}
+        onError={(m) => {
+          setBatchTarget(null)
+          setError(m)
+        }}
+      />
 
       <CreateTemplateModal
         open={createOpen}
@@ -366,4 +398,116 @@ function CreateTemplateModal({
 function describe(error: unknown): string {
   if (error instanceof ApiError || error instanceof NetworkError) return error.message
   return '操作失败，请稍后重试'
+}
+
+/**
+ * BatchCloneModal 从此模板批量创建虚拟机。
+ *
+ * 界面上要把三件**只有后端才知道**的事先说给用户：
+ *
+ *   - **一次最多 5 台**，以及为什么（存储 IO：同时建的台数越多，宿主机上
+ *     所有虚拟机都越慢）
+ *   - **名称整批占用**：有一个重名就整批拒绝，不会跳过
+ *   - **部分失败不回滚**：已建好的那几台不会被撤销
+ */
+function BatchCloneModal({
+  template,
+  onClose,
+  onDone,
+  onError,
+}: {
+  template: TemplateView | null
+  onClose: () => void
+  onDone: () => void
+  onError: (m: string) => void
+}) {
+  const [prefix, setPrefix] = useState('')
+  const [count, setCount] = useState('2')
+  const [vcpu, setVCPU] = useState('')
+  const [memory, setMemory] = useState('')
+  const [disk, setDisk] = useState('')
+  const [result, setResult] = useState<{ message: string } | null>(null)
+
+  const n = Number(count) || 0
+  // 与服务端一致的上限。**界面自己也拦一道**是为了在用户输入时给提示，
+  // 而不是等他点了提交才收到一个错误——服务端仍然会再校验一次。
+  const overLimit = n > 5
+  const ready = prefix.trim() !== '' && n > 0 && !overLimit
+
+  const run = useMutation({
+    mutationFn: () =>
+      templateApi.batchClone({
+        name_prefix: prefix.trim(),
+        count: n,
+        node_id: template?.node_id ?? 0,
+        vcpu: Number(vcpu) || 0,
+        memory_mb: Number(memory) || 0,
+        disk_gb: Number(disk) || 0,
+        template_id: template?.id ?? 0,
+      }),
+    onSuccess: (r) => {
+      // **部分失败也要让用户看到**，而不是笼统地报成功或失败。
+      setResult({ message: r.message })
+    },
+    onError: (e) => onError(describe(e)),
+  })
+
+  return (
+    <Modal
+      open={template !== null}
+      title={`从「${template?.name ?? ''}」批量创建`}
+      onClose={result ? onDone : onClose}
+      footer={
+        result ? (
+          <Button size="sm" onClick={onDone}>
+            知道了
+          </Button>
+        ) : (
+          <>
+            <Button variant="secondary" size="sm" onClick={onClose}>
+              取消
+            </Button>
+            <Button size="sm" disabled={!ready} loading={run.isPending} onClick={() => run.mutate()}>
+              创建
+            </Button>
+          </>
+        )
+      }
+    >
+      {result ? (
+        <p className="text-base text-ink-2">{result.message}</p>
+      ) : (
+        <div className="flex flex-col gap-3.5">
+          <Input
+            label="名称前缀"
+            value={prefix}
+            onChange={(e) => setPrefix(e.target.value)}
+            hint="实际名称为「前缀-1」「前缀-2」…… 编号是必须的——不编号的话，克隆几台之后分不清哪台是哪台。这一批名称会先整批检查是否被占用：只要有一个重名就整批拒绝，因为逐台跳过重名会建出带洞的结果（只有 1、3、4 号），而你看不出少了哪一台。"
+          />
+          <div className="flex flex-col gap-1">
+            <Input
+              label="台数"
+              value={count}
+              onChange={(e) => setCount(e.target.value)}
+            />
+            {overLimit && (
+              <p className="text-xs text-warning">
+                一次最多 5 台。每台都要完整读一遍父盘再写一份新的，同时进行的台数越多，
+                这台宿主机上的存储被占得越久——表现为所有虚拟机的 IO 都变慢，而那时
+                很难把它和「我刚才点了克隆」联系起来。需要更多请分批做。
+              </p>
+            )}
+          </div>
+          <div className="flex gap-3">
+            <Input label="CPU（核）" value={vcpu} placeholder="继承模板" onChange={(e) => setVCPU(e.target.value)} />
+            <Input label="内存（MB）" value={memory} placeholder="继承模板" onChange={(e) => setMemory(e.target.value)} />
+            <Input label="磁盘（GB）" value={disk} placeholder="继承模板" onChange={(e) => setDisk(e.target.value)} />
+          </div>
+          <p className="rounded-control bg-sunken px-3 py-2 text-xs text-ink-3">
+            留空的项继承模板的配置。这一批任务在队列里依次执行，不会同时打满存储。
+          </p>
+        </div>
+      )}
+    </Modal>
+  )
 }

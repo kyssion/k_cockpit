@@ -74,6 +74,33 @@ export const templateApi = {
   get: (id: number) => get<TemplateView>(`/api/v1/templates/${id}`),
 
   /**
+   * 从此模板批量创建虚拟机。
+   *
+   * **一次最多 5 台**，且服务端在超限时会把**理由**写在报错里——理由与存储
+   * 有关：每台都要完整读一遍父盘再写一份新的，同时进行的台数越多，宿主机
+   * 上的存储被占得越久，表现为所有虚拟机都变慢。
+   *
+   * **整批先查重**：只要有一个名字被占用就整批拒绝（逐台跳过重名会建出带洞
+   * 的结果）。**部分失败不回滚**：已建好的那几台不会被撤销。
+   */
+  batchClone: (input: {
+    name_prefix: string
+    count: number
+    node_id: number
+    vcpu: number
+    memory_mb: number
+    disk_gb: number
+    template_id: number
+    clone_mode?: string
+    group_name?: string
+  }) =>
+    post<{
+      created: { name: string; task_id?: number }[] | null
+      failed: { name: string; reason?: string }[] | null
+      message: string
+    }>('/api/v1/vms/batch-clone', input),
+
+  /**
    * 从一台虚拟机的系统盘制备模板。
    *
    * **要求源虚拟机关机**：运行中的系统盘在被复制的同时还在被写入，复制出来
