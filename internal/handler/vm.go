@@ -1469,3 +1469,24 @@ func (h *VM) PreviewMigration(ctx context.Context, c *app.RequestContext) {
 	}
 	api.OK(c, view)
 }
+
+// BatchRemovePortForwards 批量删除端口转发（API-302）。
+func (h *VM) BatchRemovePortForwards(ctx context.Context, c *app.RequestContext) {
+	var req struct {
+		Items []vm.PortForwardRef `json:"items"`
+	}
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	res, err := h.svc.RemovePortForwards(ctx, req.Items,
+		authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, res)
+}

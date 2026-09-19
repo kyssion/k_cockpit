@@ -190,3 +190,49 @@ func (h *PublicIP) Preview(ctx context.Context, c *app.RequestContext) {
 	}
 	api.OK(c, preview)
 }
+
+// BatchUnbind 批量解绑（API-300）。
+//
+// **逐条调用单条方法**，复用全部校验——在本处重写一遍的话，两处迟早会分叉，
+// 而分叉的表现是「单个能解绑、批量里解不了」。
+func (h *PublicIP) BatchUnbind(ctx context.Context, c *app.RequestContext) {
+	var req struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	res, err := h.svc.BatchUnbind(ctx, req.IDs, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, res)
+}
+
+// BatchBind 批量绑定到同一台虚拟机（API-301）。
+func (h *PublicIP) BatchBind(ctx context.Context, c *app.RequestContext) {
+	var req struct {
+		IDs  []int64 `json:"ids"`
+		VMID int64   `json:"vm_id"`
+		Mode string  `json:"mode"`
+	}
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	res, err := h.svc.BatchBind(ctx, req.IDs, req.VMID, req.Mode,
+		authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, res)
+}
