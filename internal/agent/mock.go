@@ -688,6 +688,50 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 			Notes:    notes,
 		}
 
+	case OpVMXML:
+		name, _ := op.Params["domain_name"].(string)
+		if name == "" {
+			name = op.Target
+		}
+		live, _ := op.Params["live"].(bool)
+		// **定义里带一处密码**：不脱敏的话，界面特意「只写不读」的控制台
+		// 密码会从这个后门原样送出去。
+		data[VMXMLKey] = VMXMLInfo{
+			Live: live,
+			XML: `<domain type='kvm'>
+  <name>` + name + `</name>
+  <memory unit='MiB'>2048</memory>
+  <vcpu>2</vcpu>
+  <devices>
+    <graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1' passwd='s3cret'/>
+    <disk type='file' device='disk'>
+      <source file='/var/lib/libvirt/images/` + name + `.qcow2'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+  </devices>
+</domain>`,
+		}
+
+	case OpVMXMLApply:
+		action, _ := op.Params["action"].(string)
+		if action == "validate" {
+			xml, _ := op.Params["xml"].(string)
+			info := VMXMLValidateInfo{Valid: true}
+			// **刻意留一条能失败的路径**：缺少 <domain> 根元素的定义会被
+			// libvirt 拒绝，而界面上必须能渲染出那个错误。只给"永远校验通过"
+			// 的假数据，这条分支永远不会被走到。
+			if !strings.Contains(xml, "<domain") {
+				info.Valid = false
+				info.Errors = []string{"这份定义缺少 <domain> 根元素，libvirt 拒绝接受"}
+			}
+			data[VMXMLValidateKey] = info
+			break
+		}
+		data[VMXMLValidateKey] = VMXMLValidateInfo{
+			Valid:    true,
+			Warnings: []string{"该改动可能需要在虚拟机重启后才会完全生效"},
+		}
+
 	case OpVMGuest:
 		action, _ := op.Params["action"].(string)
 		data[GuestDataKey] = GuestInfo{

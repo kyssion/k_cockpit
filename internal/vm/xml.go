@@ -7,6 +7,7 @@ import (
 
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/api"
+	"k_cockpit/internal/audit"
 	"k_cockpit/internal/authz"
 )
 
@@ -148,4 +149,159 @@ func sortStrings(s []string) {
 // 看起来正常、接口返回 200，而密码就在响应体里。因此它必须能被独立测。
 func ExportRedactForTest(xml string) (string, []string) {
 	return redactXML(xml)
+}
+
+// XMLPrecheck 是编辑前的预检结果。
+type XMLPrecheck struct {
+	// Diff 是这份改动的影响范围。
+	//
+	// **必须在保存之前给出**：别处用户改的是「字段」，而这里他改的是
+	// **整份定义**——能动的范围没有边界。不给 diff 的话，他看到的是一大段
+	// XML，而要判断的是"我这一改会动到什么"，那两件事对不上。
+	Diff *XMLDiff `json:"diff"`
+	// Valid 为 false 时 Errors 说明原因。
+	Valid bool `json:"valid"`
+	// Errors 是**节点**给出的校验问题，原样返回不改写——libvirt 的报错里
+	// 有行号与元素名，改写之后那些信息往往就丢了，而用户正是靠它们定位。
+	Errors   []string `json:"errors,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// PrecheckXML 校验一份新的域定义并给出 diff。**只读**，不应用。
+//
+// 两件事一起做是有意的：用户提交新定义之后，他要同时知道「我改了什么」与
+// 「这份能不能用」。分两次请求会让他在看到 diff 之后还得再点一次才知道
+// 行不行——而那时他已经做好了决定。
+func (s *Service) PrecheckXML(
+	ctx context.Context, id int64, newXML string, v authz.Viewer,
+) (*XMLPrecheck, error) {
+	vm, err := s.load(ctx, id, v)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(newXML) == "" {
+		return nil, api.ValidationFailed("定义不能为空")
+	}
+
+	// 当前定义（持久那一份）：它是 diff 的基准。
+	current, err := s.XML(ctx, id, "", false, v)
+	if err != nil {
+		return nil, err
+	}
+
+	out := &XMLPrecheck{Diff: diffXML(current.XML, newXML)}
+
+	result, err := s.agent.Execute(ctx, agent.Operation{
+		Kind:   agent.OpVMXMLApply,
+		NodeID: vm.NodeID,
+		Target: vm.Name,
+		Params: map[string]any{"action": "validate", "xml": newXML},
+	})
+	if err != nil {
+		// 节点不可达时**不给"可以用"的结论**：让人以为能保存、点下去才失败，
+		// 比直接说读不到要糟。
+		return nil, api.Unavailable("节点不可达，无法校验这份定义")
+	}
+	if !result.Success {
+		out.Valid = false
+		out.Errors = []string{result.Message}
+		return out, nil
+	}
+	if info, ok := result.Data[agent.VMXMLValidateKey].(agent.VMXMLValidateInfo); ok {
+		out.Valid = info.Valid
+		out.Errors = info.Errors
+		out.Warnings = info.Warnings
+	}
+	return out, nil
+}
+
+// UpdateXML 应用一份新的域定义。
+//
+// **它绕过我们建立的其它全部校验**：同节点、配额、地址唯一性、端口安全的
+// 前置条件——在 XML 里都可以被绕开。因此它必须经过二次验证（由 handler
+// 强制），而审计里要记下**改动的规模**（加了几行、删了几行）：事后追查
+// 「这条配置什么时候来的」时，那是最先要看的东西，而 XML 全文塞进审计表
+// 会让那张表迅速膨胀。
+func (s *Service) UpdateXML(
+	ctx context.Context, id int64, newXML string,
+	v authz.Viewer, operatorName, clientIP string,
+) (*XMLPrecheck, error) {
+	if err := s.ensureXMLVerified(ctx); err != nil {
+		return nil, err
+	}
+	precheck, err := s.PrecheckXML(ctx, id, newXML, v)
+	if err != nil {
+		return nil, err
+	}
+	if !precheck.Valid {
+		// 校验不过就不下发。**这是"改坏一台机器"的唯一防线**——在节点上
+		// 先 validate 再 define，而 define 本身是原子的（失败不改动现有
+		// 定义），因此不需要控制面自己写回滚。
+		return precheck, api.ValidationFailed("定义未通过校验：" + strings.Join(precheck.Errors, "；"))
+	}
+	if precheck.Diff.Identical {
+		// 没有变化就不下发：一次 define 会触发节点侧完整的重新定义，而
+		// 那可能是几百毫秒的停机感知。界面也会据 Identical 禁用保存按钮，
+		// 但接口这一层也要挡住——界面不是唯一的调用方。
+		return precheck, nil
+	}
+
+	vm, err := s.load(ctx, id, v)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.agent.Execute(ctx, agent.Operation{
+		Kind:   agent.OpVMXMLApply,
+		NodeID: vm.NodeID,
+		Target: vm.Name,
+		Params: map[string]any{"action": "define", "xml": newXML},
+	})
+	if err != nil {
+		return nil, api.Unavailable("节点不可达，定义未应用")
+	}
+	if !result.Success {
+		return nil, api.ValidationFailed(result.Message)
+	}
+
+	s.record(ctx, audit.Entry{
+		OperatorID: v.UserID, OperatorName: operatorName,
+		NodeID: vm.NodeID, ResourceType: "vm",
+		ResourceID: vm.ID, ResourceName: vm.Name,
+		Action: "vm.xml.update",
+		Params: map[string]any{
+			// **记规模而不是全文**：XML 全文塞进审计表会让它迅速膨胀，
+			// 而"改了多少"已经足够回答"这条配置什么时候来的"。
+			"added_lines":   precheck.Diff.Added,
+			"removed_lines": precheck.Diff.Removed,
+			"note":          "经由 XML 直编，绕过配额与唯一性校验",
+		},
+		Success: true, ClientIP: clientIP,
+	})
+	return precheck, nil
+}
+
+// ensureXMLVerified 检查本次调用是否已完成二次验证。
+//
+// 与 ensureExposureVerified 同一套做法：具体的许可校验在 handler 层完成
+// （那里才有请求上下文），这里只做一次兜底——调用方没有标记「已验证」时
+// 一律拒绝。这样即使将来有人新增了一个绕过 guard 的入口，也不会静默地让
+// 一份任意定义落到节点上。
+//
+// **这个兜底在这里比在暴露那处更要紧**：XML 直编绕过的是我们建立的**全部**
+// 校验（同节点、配额、地址唯一性、端口安全的前置条件），而不只是暴露一个端口。
+func (s *Service) ensureXMLVerified(ctx context.Context) error {
+	if verified := ctx.Value(ctxKeyXMLVerified); verified == true {
+		return nil
+	}
+	return api.ValidationFailed("XML 直编需要先完成二次验证——它会绕过配额与唯一性校验")
+}
+
+// ctxKeyXMLVerified 是「已完成 XML 编辑验证」在 context 中的键。
+type ctxKeyXMLVerifiedType struct{}
+
+var ctxKeyXMLVerified = ctxKeyXMLVerifiedType{}
+
+// WithXMLVerified 标记本次调用已完成 XML 编辑的二次验证。
+func WithXMLVerified(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ctxKeyXMLVerified, true)
 }

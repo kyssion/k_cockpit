@@ -7,7 +7,7 @@
  *   - 创建是**异步**的：接口返回任务标识而非创建好的虚拟机，前端据任务进度
  *     跟踪结果（f-7-01 R-001）。
  */
-import { del, get, getPaged, patch, post, type Pagination } from './client'
+import { del, get, getPaged, patch, post, type Pagination, put } from './client'
 import type { TaskStatus } from './task'
 
 export type VmStatus = 'running' | 'stopped' | 'paused' | 'suspended' | 'error' | 'unknown'
@@ -340,12 +340,40 @@ export const vmApi = {
       `/api/v1/vms/${id}/xml?live=${live}`,
     ),
 
+  /** 校验一份新的定义并给出 diff。**只读**，不应用，也不需要二次验证。 */
+  xmlPrecheck: (id: number, xml: string) =>
+    post<XMLPrecheck>(`/api/v1/vms/${id}/xml/precheck`, { xml }),
+
+  /**
+   * 应用一份新的定义。
+   *
+   * **需要二次验证**：它绕过控制面建立的其它全部校验（配额、地址唯一性、
+   * 前置条件）。服务端在 428 上会说明这一点，前端据此弹出验证流程。
+   */
+  xmlUpdate: (id: number, xml: string) =>
+    put<XMLPrecheck>(`/api/v1/vms/${id}/xml`, { xml }),
+
   consoleFrameUrl: (id: number, stamp: number) =>
     `/api/v1/vms/${id}/console/frame?t=${stamp}`,
 }
 
 /** 来宾自动化动作（F-2-10）。 */
 export type GuestAction = 'password_online' | 'password_offline' | 'disk_attach' | 'expand_disk'
+
+export interface XMLDiffLine {
+  kind: 'same' | 'add' | 'del'
+  old_no?: number
+  new_no?: number
+  text: string
+}
+
+export interface XMLPrecheck {
+  diff: { lines: XMLDiffLine[]; added: number; removed: number; identical: boolean }
+  valid: boolean
+  /** 节点给的校验问题，**原样返回不改写**——里面有行号与元素名。 */
+  errors?: string[]
+  warnings?: string[]
+}
 
 export interface GuestCapabilities {
   action?: string

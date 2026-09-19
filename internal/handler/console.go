@@ -260,3 +260,67 @@ func (h *Console) XML(ctx context.Context, c *app.RequestContext) {
 	}
 	api.OK(c, view)
 }
+
+// XMLPrecheck 校验一份新的域定义并给出 diff（API-037）。**只读**，不应用。
+//
+// 两件事一起返回是有意的：用户提交新定义之后，他要同时知道「我改了什么」与
+// 「这份能不能用」。分两次请求会让他在看到 diff 之后还得再点一次才知道行不行
+// ——而那时他已经做好了决定。
+//
+// **不需要二次验证**：它不产生任何改动。而"看一眼会影响什么"这件事如果需要
+// 先验证一次，用户就会在还不知道要改什么的时候被迫走一遍验证流程。
+func (h *Console) XMLPrecheck(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	var req struct {
+		XML string `json:"xml"`
+	}
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+	view, err := h.svc.PrecheckXML(ctx, id, req.XML, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, view)
+}
+
+// XMLUpdate 应用一份新的域定义（API-038）。
+//
+// **它绕过我们建立的其它全部校验**：同节点、配额、地址唯一性、端口安全的前置
+// 条件——在 XML 里都可以被绕开。因此它比「对外暴露控制台」更需要二次验证，
+// 而不是同样需要：暴露的后果是"多开了一个入口"，而这里是可以把一台机器的
+// 电源、磁盘、网络改成任何样子。
+func (h *Console) XMLUpdate(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	var req struct {
+		XML string `json:"xml"`
+	}
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+	if !h.risk.Require(c, risk.ActionVMXMLEdit) {
+		return
+	}
+	ctx = vm.WithXMLVerified(ctx)
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	view, err := h.svc.UpdateXML(ctx, id, req.XML, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, view)
+}

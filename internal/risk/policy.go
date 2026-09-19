@@ -31,6 +31,14 @@ const (
 	// 绕过面板的后门（f-2-08 R-004 / Q-007）。
 	ActionConsoleExpose Action = "vm.console.expose"
 
+	// 直接编辑虚拟机的 libvirt 定义。
+	//
+	// **它绕过我们建立的其它全部校验**：同节点、配额、地址唯一性、端口安全的
+	// 前置条件——在 XML 里都可以被绕开。因此它比暴露控制台更需要验证，而不是
+	// 同样需要：暴露的后果是"多开了一个入口"，而这里是可以把一台机器的电源、
+	// 磁盘、网络改成任何样子。
+	ActionVMXMLEdit Action = "vm.xml.edit"
+
 	// 解除虚拟机的业务软锁（F-2-12）。
 	//
 	// **加锁不需要验证，解锁需要**——这个不对称是刻意的：锁的作用就是让
@@ -96,6 +104,11 @@ var policy = []Entry{
 		Action: ActionConsoleExpose,
 		Label:  "对外暴露控制台",
 		Reason: "将向网络开放宿主机端口，可绕过面板直接接入该虚拟机",
+	},
+	{
+		Action: ActionVMXMLEdit,
+		Label:  "直接编辑虚拟机定义",
+		Reason: "绕过配额、地址唯一性与前置条件校验，可把电源、磁盘、网络改成任意状态",
 	},
 	{
 		Action: ActionVMLockRelease,

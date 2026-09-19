@@ -27,3 +27,37 @@ type VMXMLInfo struct {
 	// 而"看的是哪一份"必须标出来。
 	Live bool
 }
+
+// OpVMXMLApply 校验或应用一份新的域定义。
+//
+// 两个动作共用一个 Kind，因为它们读的是同一份东西（用户提交的 XML），而
+// 校验是应用的前置步骤——拆成两个 Kind 会让"只校验不应用"变成一个需要记得
+// 单独实现的路径。
+//
+// 节点侧必须遵守两条：
+//
+//  1. **校验用 libvirt 自己的校验器**（`virsh define --validate` 或
+//     `virt-xml-validate`），不要自己写规则。控制面做不到这件事的原因很直接：
+//     能不能接受这份定义取决于**这台机器上的 libvirt 版本、可用的设备与
+//     后端**——同一份 XML 在另一台机器上可能是合法的。
+//
+//  2. **应用要么全成、要么完全不动**。libvirt 的 define 本身是原子的（校验
+//     失败或写入失败都不会改动现有定义），节点侧不要再自己写一套"备份-还原"
+//     ——那比 libvirt 自己的保证弱，而且多了一条会出错的路径。
+const OpVMXMLApply OpKind = "vm.xml.apply"
+
+// VMXMLValidateKey 是校验结果的键。
+const VMXMLValidateKey = "vm_xml_validate"
+
+// VMXMLValidateInfo 是校验结果。
+type VMXMLValidateInfo struct {
+	// Valid 为 false 时 Errors 说明原因。
+	Valid bool
+	// Errors 是校验器给出的问题（原样返回，不改写）。
+	//
+	// **不改写**：libvirt 的报错里有行号与元素名，而改写之后那些信息往往
+	// 就丢了——而用户正是靠它们去定位自己改坏了哪一行。
+	Errors []string
+	// Warnings 是校验通过但值得看一眼的东西（如"下次重启才会生效"）。
+	Warnings []string
+}
