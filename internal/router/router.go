@@ -759,6 +759,17 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/vms/:id/disks/independent", requireAuth, vmHandler.MakeDisksIndependent)
 		// 批量克隆（一次最多 5 台）。限制与存储 IO 有关，理由写在报错里。
 		v1.POST("/vms/batch-clone", requireAuth, vmHandler.BatchClone)
+
+		// 光驱（可以有多个）。**弹出与移除是两件事**：弹出之后光驱仍在
+		// （来宾里看得到一个空的托盘），移除才是设备消失。
+		// **换盘之后来宾通常看不到新介质**（多数系统缓存了介质信息），
+		// 界面要提示可以重新挂载或重启；**换总线通常需要重启**。
+		v1.GET("/vms/:id/cdroms", requireAuth, vmHandler.CDROMs)
+		v1.POST("/vms/:id/cdroms", requireAuth, vmHandler.AttachCDROM)
+		v1.PUT("/vms/:id/cdroms/:cdromID/iso", requireAuth, vmHandler.LoadCDROM)
+		v1.POST("/vms/:id/cdroms/:cdromID/eject", requireAuth, vmHandler.EjectCDROM)
+		v1.PUT("/vms/:id/cdroms/:cdromID/bus", requireAuth, vmHandler.SetCDROMBus)
+		v1.DELETE("/vms/:id/cdroms/:cdromID", requireAuth, vmHandler.RemoveCDROM)
 		// 校验并给出 diff（**只读**，不需要二次验证——不产生改动，而
 		// "看一眼会影响什么"如果需要先验证一次，用户就会在还不知道要改
 		// 什么的时候被迫走一遍验证流程）。

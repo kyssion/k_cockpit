@@ -124,6 +124,9 @@ const (
 	// 目录共享的挂载与卸载（f-5-06）。
 	TaskShareMount = "share.mount"
 
+	// 虚拟机光驱的挂载 / 弹出 / 换盘 / 摘除 / 换总线。
+	TaskVMCDROMApply = "vm.cdrom.apply"
+
 	// 把链接克隆的磁盘变成独立盘（解除对父盘的依赖）。
 	TaskVMDisksIndependent = "vm.disks.independent"
 

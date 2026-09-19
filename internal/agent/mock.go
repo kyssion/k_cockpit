@@ -390,6 +390,12 @@ func stagePlan(op Operation) [][2]string {
 			{"disk_place", "放入存储池"},
 			{"template_register", "登记为模板"},
 		}
+	case OpVMCDROMApply:
+		return [][2]string{
+			{"render_device", "渲染光驱设备"},
+			{"apply_domain", "写入域配置"},
+			{"verify_media", "确认介质状态"},
+		}
 	case OpVMDisksIndependent:
 		return [][2]string{
 			{"verify_stopped", "确认虚拟机已停机"},
@@ -723,6 +729,26 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
   </devices>
 </domain>`,
 		}
+
+	case OpVMCDROMApply:
+		action, _ := op.Params["action"].(string)
+		info := CDROMInfo{Message: "光驱配置已更新"}
+		switch action {
+		case "eject":
+			info.Message = "已弹出光盘（光驱仍在）"
+		case "remove":
+			info.Message = "已移除光驱"
+		case "load":
+			// **换盘之后来宾通常看不到新介质**：多数系统缓存了介质信息。
+			// 刻意让这条提示可达，界面就必须显示它——否则用户会以为换盘
+			// 失败而反复重试。
+			info.Message = "已更换光盘"
+			info.GuestRefreshNeeded = true
+		case "bus":
+			info.Message = "已更换总线类型"
+			info.RebootNeeded = true
+		}
+		data[CDROMDataKey] = info
 
 	case OpVMDisksIndependent:
 		freed, _ := op.Params["freed_from"].(string)

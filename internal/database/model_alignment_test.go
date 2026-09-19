@@ -46,7 +46,7 @@ func TestModelColumnsExistInMigrations(t *testing.T) {
 		&model.SchedulerEvent{}, &model.PortSecurityPolicy{},
 		&model.NetworkCapture{}, &model.ResourceQuota{},
 		&model.HostFirewallPolicy{}, &model.HostFirewallRule{}, &model.VMPassthrough{},
-		&model.CPUAffinityPreset{},
+		&model.CPUAffinityPreset{}, &model.VMCDROM{},
 		&model.FirewallPolicy{}, &model.FirewallRule{}, &model.FirewallVMPolicy{},
 		&model.UserAPIKey{}, &model.AuthActionToken{},
 		&model.PortMirror{}, &model.NetworkBridge{},

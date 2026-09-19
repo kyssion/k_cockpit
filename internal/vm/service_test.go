@@ -49,7 +49,7 @@ func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task
 		&model.VMCredential{}, &model.VMInterface{}, &model.StaticIP{},
 		&model.VpcSwitch{}, &model.VMSnapshot{}, &model.SystemSetting{},
 		&model.PortForward{}, &model.VMLock{}, &model.Template{}, &model.VMExport{},
-		&model.VMMigration{},
+		&model.VMMigration{}, &model.VMCDROM{}, &model.StorageFile{},
 	); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}

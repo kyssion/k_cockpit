@@ -206,6 +206,8 @@ func main() {
 	queue.Register(vm.NewDiskResizeExecutor(db, mockAgent))
 	// 链接克隆的磁盘合并为独立镜像。
 	queue.Register(vm.NewIndependentExecutor(db, mockAgent))
+	// 光驱（挂载 / 弹出 / 换盘 / 摘除 / 换总线）。
+	queue.Register(vm.NewCDROMExecutor(db, mockAgent))
 	// 网络变更（F-2-03）：三种资源各一个执行器，共用 vm:<id> 资源锁。
 	queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
 	queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))

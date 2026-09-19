@@ -1295,3 +1295,147 @@ func (h *VM) BatchClone(ctx context.Context, c *app.RequestContext) {
 	}
 	api.OK(c, result)
 }
+
+// CDROMs 返回虚拟机的光驱（API-292）。
+func (h *VM) CDROMs(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	items, err := h.svc.ListCDROMs(ctx, id, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"items": items})
+}
+
+// AttachCDROM 加一个光驱（API-293）。
+func (h *VM) AttachCDROM(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	var req struct {
+		ISOFileID int64  `json:"iso_file_id"`
+		Bus       string `json:"bus"`
+	}
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.AttachCDROM(ctx, id, req.ISOFileID, req.Bus,
+		authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task": t})
+}
+
+// LoadCDROM 给光驱放盘或换盘（API-294）。
+//
+// 换盘之后**来宾通常看不到新介质**（多数系统缓存了介质信息），界面上要
+// 提示这一点——否则用户会以为换盘失败而反复重试。
+func (h *VM) LoadCDROM(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	cdromID, err := namedPathID(c, "cdromID", "光驱 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	var req struct {
+		ISOFileID int64 `json:"iso_file_id"`
+	}
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.LoadCDROM(ctx, id, cdromID, req.ISOFileID,
+		authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task": t})
+}
+
+// EjectCDROM 弹出光盘（**光驱保留**）（API-295）。
+func (h *VM) EjectCDROM(ctx context.Context, c *app.RequestContext) {
+	h.cdromAction(ctx, c, "eject")
+}
+
+// RemoveCDROM 摘掉整个光驱（API-296）。
+func (h *VM) RemoveCDROM(ctx context.Context, c *app.RequestContext) {
+	h.cdromAction(ctx, c, "remove")
+}
+
+// SetCDROMBus 换总线类型（API-297）。**通常需要重启才生效。**
+func (h *VM) SetCDROMBus(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	cdromID, err := namedPathID(c, "cdromID", "光驱 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	var req struct {
+		Bus string `json:"bus"`
+	}
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.SetCDROMBus(ctx, id, cdromID, req.Bus,
+		authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task": t})
+}
+
+func (h *VM) cdromAction(ctx context.Context, c *app.RequestContext, action string) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	cdromID, err := namedPathID(c, "cdromID", "光驱 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	var t any
+	if action == "eject" {
+		t, err = h.svc.EjectCDROM(ctx, id, cdromID, authz.ViewerOf(c), user.Username, info.IP)
+	} else {
+		t, err = h.svc.RemoveCDROM(ctx, id, cdromID, authz.ViewerOf(c), user.Username, info.IP)
+	}
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task": t})
+}
