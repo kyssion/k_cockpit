@@ -50,6 +50,22 @@ export interface PublicIPPreview {
   warnings?: string[]
 }
 
+export interface BatchItemResult {
+  id: number
+  /** 地址本身，让用户能对上号——只给 id 的话失败清单里一列数字看不出是哪几个。 */
+  address?: string
+  task_id?: number
+  /** 失败原因（仅失败时有）。 */
+  reason?: string
+}
+
+export interface BatchResult {
+  ok: BatchItemResult[] | null
+  failed: BatchItemResult[] | null
+  /** 服务端给的总结，部分失败时写明了「已成功的那几条不会被撤销」。 */
+  message: string
+}
+
 export const publicIPApi = {
   list: (nodeID = 0) =>
     get<{ items: PublicIPView[] }>(
@@ -71,6 +87,27 @@ export const publicIPApi = {
     supported_modes?: PublicIPMode[]
     remark?: string
   }) => post<{ items: PublicIPView[] }>('/api/v1/public-ips', input),
+
+  /**
+   * 批量解绑。
+   *
+   * **逐条如实报告**：失败的项带 id 与原因。一个笼统的「批量操作失败」
+   * 会让用户不知道该处理哪几个——而那正是他要处理的东西。
+   *
+   * 已成功的那几条**不会被撤销**：回滚意味着把已经下发好的规则再撤掉，
+   * 那会让一次失败的批量操作变成两次网络变更。
+   */
+  batchUnbind: (ids: number[]) =>
+    post<BatchResult>('/api/v1/public-ips/batch/unbind', { ids }),
+
+  /**
+   * 批量绑定到**同一台**虚拟机。
+   *
+   * 只支持「多个地址 → 一台机器」这一个方向：绑定要求地址与虚拟机在同一
+   * 节点，而任意组合会让用户在面对一台失败时无法判断是地址不对还是机器不对。
+   */
+  batchBind: (ids: number[], vmID: number, mode: PublicIPMode) =>
+    post<BatchResult>('/api/v1/public-ips/batch/bind', { ids, vm_id: vmID, mode }),
 
   /** 从池中移除。**已绑定会被拒绝**——否则绑定记录会指向一条不存在的地址。 */
   remove: (id: number) => del<{ deleted: boolean }>(`/api/v1/public-ips/${id}`),
