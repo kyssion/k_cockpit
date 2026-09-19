@@ -98,6 +98,16 @@ export function StoragePoolPage() {
 
       {effectiveNodeID > 0 && (
         <>
+          {/* 空间分配视图（F-5-01 §1.2 的目标之一）。
+              各盘的状态标签与各池的容量在下面都有，但**没有一处回答
+              「这台机器一共有多少存储、分别用在哪」**——而那正是管理员
+              决定「要不要加盘」时要看的东西。
+
+              分档按「先看是否已纳入存储池」的顺序判断：一块在池里的盘
+              同时也是已挂载的，顺序反了会把池占用的容量记到「已挂载但
+              未纳入池」那一档里，而两档的含义完全不同。 */}
+          <AllocationSummary pools={pools.data ?? []} disks={disks.data ?? []} />
+
           <section className="flex flex-col gap-2">
             <h2 className="text-sm font-medium text-ink-2">存储池</h2>
 
@@ -503,4 +513,70 @@ function PoolSummary({ pool }: { pool: PoolView }) {
 function describe(error: unknown): string {
   if (error instanceof ApiError || error instanceof NetworkError) return error.message
   return '操作失败，请稍后重试'
+}
+
+/**
+ * AllocationSummary 是「空间分配视图」（F-5-01 §1.2）。
+ *
+ * 各盘的标签与各池的容量在下面都有，但没有一处回答**「这台机器一共有多少
+ * 存储、分别用在哪」**——而那正是管理员决定「要不要加盘」时要看的东西。
+ *
+ * 分档顺序有讲究：**先判断是否已纳入存储池**。一块在池里的盘同时也是已挂载
+ * 的，顺序反了就会把池占用的容量记进「已挂载但未纳入池」那一档，而两档对
+ * 管理员意味着完全不同的事——前者是「正在提供存储」，后者是「装着呢但没在用」。
+ */
+function AllocationSummary({ pools, disks }: { pools: PoolView[]; disks: DiskView[] }) {
+  const poolTotal = pools.reduce((s, p) => s + p.total_bytes, 0)
+  const poolUsable = pools.reduce((s, p) => s + p.usable_bytes, 0)
+
+  let inPool = 0
+  let system = 0
+  let mountedNotPool = 0
+  let free = 0
+  for (const d of disks) {
+    if (d.in_use_by) inPool += d.size_bytes
+    else if (d.is_system) system += d.size_bytes
+    else if (d.mounted) mountedNotPool += d.size_bytes
+    else free += d.size_bytes
+  }
+
+  const cell = (label: string, value: number, hint: string, tone = 'text-ink') => (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-xs text-ink-3">{label}</span>
+      <span className={`kc-nums text-base ${tone}`}>{formatBytes(value)}</span>
+      <span className="text-xs text-ink-3">{hint}</span>
+    </div>
+  )
+
+  return (
+    <section className="rounded-card border border-line bg-surface px-4 py-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <h2 className="text-sm font-medium text-ink-2">空间分配</h2>
+        {pools.length > 0 && (
+          <span className="text-xs text-ink-3">
+            池内合计 {formatBytes(poolUsable)} 可用 / 共 {formatBytes(poolTotal)}
+          </span>
+        )}
+      </div>
+
+      <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
+        {cell('已纳入存储池', inPool, `${pools.length} 个池`, 'text-ink')}
+        {cell('系统盘占用', system, '不可用于存储池', 'text-ink-3')}
+        {cell('已挂载未纳池', mountedNotPool, '装着呢但没在用', 'text-warning')}
+        {cell('未分配（可用）', free, '可以建池', 'text-success')}
+      </div>
+
+      {mountedNotPool > 0 && (
+        <p className="mt-2 text-xs text-warning">
+          有磁盘已挂载但未纳入任何存储池：它们占着容量却不提供存储。若这些
+          挂载点不再需要，可以先卸载再建池。
+        </p>
+      )}
+      {disks.length > 0 && free === 0 && mountedNotPool === 0 && (
+        <p className="mt-2 text-xs text-ink-3">
+          这台节点上已经没有可分配的磁盘了。需要扩容时先接入新设备。
+        </p>
+      )}
+    </section>
+  )
 }
