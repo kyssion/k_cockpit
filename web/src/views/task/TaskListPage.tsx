@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { ApiError, NetworkError } from '@/api/client'
 import { isActive, taskApi, type TaskStage, type TaskView } from '@/api/task'
 import { Button } from '@/components/common/Button'
+import { Input } from '@/components/common/Input'
 import { EmptyState, PageLoading } from '@/components/common/Feedback'
 import { Modal } from '@/components/common/Modal'
 import { StatusBadge } from '@/components/common/StatusBadge'
@@ -25,6 +26,7 @@ const STATUS_OPTIONS = [
 export function TaskListPage() {
   const queryClient = useQueryClient()
   const [page, setPage] = useState(1)
+  const [clearOpen, setClearOpen] = useState(false)
   const [status, setStatus] = useState('')
   const [cancelTarget, setCancelTarget] = useState<TaskView | null>(null)
   // 详情只记 ID 而不是整条任务：这样打开期间的后台刷新能反映到面板上
@@ -66,6 +68,7 @@ export function TaskListPage() {
           </p>
         </div>
 
+        <span className="flex items-center gap-2">
         <select
           value={status}
           onChange={(e) => {
@@ -80,6 +83,12 @@ export function TaskListPage() {
             </option>
           ))}
         </select>
+        {/* 清理是**手动**的一次性动作，因此放在这里而不是自动跑：
+            用户看到的条数变少时，他需要知道那是自己做的。 */}
+        <Button size="sm" variant="secondary" onClick={() => setClearOpen(true)}>
+          清理旧任务
+        </Button>
+        </span>
       </header>
 
       {tasks.isPending && <PageLoading />}
@@ -194,7 +203,15 @@ export function TaskListPage() {
       >
         {error && <p className="text-base text-danger">{error}</p>}
       </Modal>
-    </div>
+          <ClearTasksModal
+        open={clearOpen}
+        onClose={() => setClearOpen(false)}
+        onDone={() => {
+          setClearOpen(false)
+          void queryClient.invalidateQueries({ queryKey: ['tasks'] })
+        }}
+      />
+</div>
   )
 }
 
@@ -547,4 +564,62 @@ function ProgressBar({ value, active }: { value: number; active: boolean }) {
 function describe(error: unknown): string {
   if (error instanceof ApiError || error instanceof NetworkError) return error.message
   return '操作失败，请稍后重试'
+}
+
+/**
+ * ClearTasksModal 清理已完成的旧任务。
+ *
+ * 弹窗要写清两条**只有后端才知道**的约束，因为用户点「清理」时的预期多半是
+ * 「全都清掉」：
+ *
+ *   - **执行中与待执行的不删**（删除一个执行中的任务会让它的结果永远无处落定）
+ *   - **被引用的不删**（定时任务的「上次执行」与抓包记录都指着它们）
+ */
+function ClearTasksModal({
+  open,
+  onClose,
+  onDone,
+}: {
+  open: boolean
+  onClose: () => void
+  onDone: () => void
+}) {
+  const [days, setDays] = useState('7')
+
+  const run = useMutation({
+    mutationFn: () => taskApi.clear(Number(days) || 7),
+    onSuccess: onDone,
+  })
+
+  return (
+    <Modal
+      open={open}
+      title="清理旧任务"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            取消
+          </Button>
+          <Button size="sm" loading={run.isPending} onClick={() => run.mutate()}>
+            清理
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3">
+        <Input
+          label="保留最近几天"
+          value={days}
+          onChange={(e) => setDays(e.target.value)}
+          hint="只清理在这个天数之前就已完成的任务。刚跑完的任务不会被删——你多半还想回头看一眼它的结果。"
+        />
+        <p className="rounded-control bg-sunken px-3 py-2 text-xs text-ink-3">
+          执行中与待执行的任务不会被清理——删掉一个执行中的任务，它的结果就永远
+          无处落定。定时任务的「上次执行」与抓包记录所指向的任务也会**保留**：
+          清掉它们会让那些引用悬空，而界面点过去只会看到一个不存在的任务。
+        </p>
+      </div>
+    </Modal>
+  )
 }

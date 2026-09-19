@@ -128,12 +128,32 @@ func (q *Queue) Cancel(
 
 // Cleanup 清理终态任务（f-7-01 R-016）。
 //
-// 只删除终态任务：`pending` / `running` / `unknown` 一律不可清理——
-// 删除一个执行中的任务会让它的结果永远无处落定。
+// 两条约束，每一条对着一类会出事的情况：
+//
+//  1. **只删终态任务**：`pending` / `running` / `unknown` 一律不可清理——
+//     删除一个执行中的任务会让它的结果永远无处落定。
+//
+//  2. **被引用的任务不删**。有两张表指回任务，而那些引用是**当前状态的一部分**，
+//     不是历史：
+//
+//     vm_schedule.last_task_id    「这条定时任务上次跑的结果」——清掉它，
+//     定时任务页上的「上次执行」就永远显示不出来
+//     network_capture.task_id     从抓包记录跳到任务详情
+//
+//     清掉它们指向的任务之后，那些引用会悬空：界面上点过去是一个不存在的
+//     任务，而用户看不出是「任务被清理了」还是「记录坏了」。
+//
+//     换句话说：**清理历史时，不能把当前状态里还指着的那些一起清掉。**
 func (q *Queue) Cleanup(ctx context.Context, before time.Time) (int64, error) {
+	// **这两张表由别的包拥有**，而清理需要读它们来确定"哪些任务还被指着"。
+	// 这个耦合是真实的而不是偶然：清理必须知道当前状态里还有谁引用着任务，
+	// 而那份信息在别处。因此测试库也必须建它们——少了它们，清理会以
+	// 「服务内部错误」失败，而那个错误与真正的原因（表不存在）看不出关系。
 	res := q.db.WithContext(ctx).
 		Where("status IN ? AND finished_at < ?",
 			[]string{model.TaskSuccess, model.TaskFailed, model.TaskCanceled}, before).
+		Where("id NOT IN (SELECT last_task_id FROM vm_schedule WHERE last_task_id IS NOT NULL)").
+		Where("id NOT IN (SELECT task_id FROM network_capture WHERE task_id IS NOT NULL)").
 		Delete(&model.Task{})
 	if res.Error != nil {
 		log.Printf("[task] 清理任务失败: %v", res.Error)

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 
@@ -233,4 +234,47 @@ func pageParams(c *app.RequestContext) (int, int) {
 		pageSize = 20
 	}
 	return page, pageSize
+}
+
+// ClearTasks 清理已完成的旧任务（API-299）。
+//
+// 两条约束来自服务层，而它们的理由值得在这里也写一遍：
+//
+//  1. **只清终态任务**——删除一个执行中的任务会让它的结果永远无处落定。
+//  2. **被引用的任务不删**——`vm_schedule.last_task_id` 与
+//     `network_capture.task_id` 是**当前状态的一部分**（「这条定时任务上次
+//     跑的结果」），不是历史。清掉它们指向的任务之后那些引用会悬空，而用户
+//     看不出是「任务被清理了」还是「记录坏了」。
+//
+// 默认保留 7 天：用户点「清理」多半是想清掉旧的，而不是「把刚才那条也删了」。
+// 默认全清的话，他刚跑完一个任务、想回头看一眼结果时发现没了。
+func (h *Task) ClearTasks(ctx context.Context, c *app.RequestContext) {
+	var req struct {
+		KeepDays int `json:"keep_days"`
+	}
+	_ = c.Bind(&req)
+
+	days := req.KeepDays
+	if days <= 0 {
+		days = 7
+	}
+	if days > 3650 {
+		// **必须给出响应**：静默 return 会让客户端一直等一个永远不来的答复，
+		// 而用户看到的是一个转圈不动的界面。上限本身是为了挡住"把 keep_days
+		// 填成 999999 以为能清全部"这类误填。
+		api.Fail(c, api.InvalidParameter("保留天数不能超过 3650 天"))
+		return
+	}
+	before := time.Now().AddDate(0, 0, -days)
+
+	n, err := h.queue.Cleanup(ctx, before)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{
+		"cleared":   n,
+		"before":    before.Format(time.RFC3339),
+		"keep_days": days,
+	})
 }

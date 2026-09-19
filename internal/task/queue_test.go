@@ -54,7 +54,8 @@ func newTestQueue(t *testing.T, executors ...task.Executor) (*task.Queue, *gorm.
 	if err != nil {
 		t.Fatalf("打开测试库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.Task{}, &model.TaskStage{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.Task{}, &model.TaskStage{}, &model.AuditLog{},
+		&model.VMSchedule{}, &model.NetworkCapture{}); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
 

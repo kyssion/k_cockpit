@@ -786,6 +786,10 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/tasks", requireAuth, taskHandler.List)
 		v1.GET("/tasks/:id", requireAuth, taskHandler.Get)
 		v1.POST("/tasks/:id/cancel", requireAuth, taskHandler.Cancel)
+		// 清理已完成的旧任务。**只清终态**，且**被引用的不删**——
+		// vm_schedule.last_task_id 与 network_capture.task_id 是当前状态
+		// 的一部分，清掉它们指向的任务之后那些引用会悬空。
+		v1.POST("/tasks/clear", requireAuth, adminOnly, taskHandler.ClearTasks)
 
 		if deps.SimulateAgent {
 			// 开发期专用：调用它与节点走**同一段注册逻辑**（ADR-0007）。

@@ -84,6 +84,21 @@ export const taskApi = {
   get: (id: number) => get<TaskView>(`/api/v1/tasks/${id}`),
 
   cancel: (id: number) => post<TaskView>(`/api/v1/tasks/${id}/cancel`),
+
+  /**
+   * 清理已完成的旧任务。
+   *
+   * **只清终态**（执行中与待执行的不会被删——删除一个执行中的任务会让它的
+   * 结果永远无处落定），而且**被引用的任务不删**：定时任务的 last_task_id
+   * 与抓包记录的 task_id 是当前状态的一部分，清掉它们指向的任务之后那些
+   * 引用会悬空。
+   *
+   * 默认保留 7 天：用户点「清理」多半是想清掉旧的，而不是「把刚才那条也删了」。
+   */
+  clear: (keepDays = 7) =>
+    post<{ cleared: number; before: string; keep_days: number }>('/api/v1/tasks/clear', {
+      keep_days: keepDays,
+    }),
 }
 
 /** 任务是否仍在进行（决定是否需要轮询刷新）。 */
