@@ -145,6 +145,16 @@ function MigrateModal({
     onError: (err) => onError(describe(err)),
   })
 
+  // **选完目标节点就先预检**，而不是等点下去才看到一堆错误。
+  //
+  // 预检回答的是「这次要停多久」——那是用户在这一步真正要判断的事。把它放到
+  // 点按钮之后，等于让他在没有依据的情况下做决定。
+  const preview = useQuery({
+    queryKey: ['migration-preview', vm.id, toNodeID],
+    queryFn: () => vmApi.previewMigration(vm.id, toNodeID),
+    enabled: open && toNodeID > 0,
+  })
+
   // 只列**可作为目标**的节点：源节点本身、维护中的节点、未接入的节点
   // 列出来再被拒绝，只会让人以为是自己操作错了。
   const candidates = (nodes.data ?? []).filter(
@@ -164,7 +174,10 @@ function MigrateModal({
           </Button>
           <Button
             size="sm"
-            disabled={toNodeID === 0}
+            // 预检未通过时**直接禁用**，而不是让用户点了再被拒——那种报错
+            // 会让他以为是自己选错了什么，而问题在于目标节点当前不可作为
+            // 迁移目标。
+            disabled={toNodeID === 0 || preview.data?.ready === false}
             loading={migrate.isPending}
             onClick={() => migrate.mutate()}
           >
@@ -193,6 +206,41 @@ function MigrateModal({
             <p className="text-xs text-ink-3">
               没有可作为目标的节点。目标须已接入且不在维护模式，并且不能是当前节点。
             </p>
+          )}
+
+          {/* 预检结果。**放在确认按钮之前**——它的全部意义就是让用户在动
+              之前看到会付出什么代价。 */}
+          {preview.isPending && <p className="text-xs text-ink-3">正在预检…</p>}
+          {preview.data && (
+            <div className="flex flex-col gap-2 rounded-control border border-line bg-sunken px-3 py-2.5">
+              {(preview.data.blockers ?? []).length > 0 ? (
+                <>
+                  <span className="text-sm font-medium text-danger">当前无法迁移</span>
+                  <ul className="flex flex-col gap-1">
+                    {(preview.data.blockers ?? []).map((b) => (
+                      <li key={b} className="text-sm text-danger">
+                        {b}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                <>
+                  <span className="text-sm font-medium text-success">可以迁移</span>
+                  {/* **「会怎么迁」比「能不能迁」更影响决定**：停机时长由它
+                      决定，而用户很可能以为迁移是「不断服务地挪过去」。 */}
+                  <p className="text-sm text-ink-2">{preview.data.mode_note}</p>
+                  {preview.data.downtime_hint && (
+                    <p className="text-sm text-ink-3">{preview.data.downtime_hint}</p>
+                  )}
+                </>
+              )}
+              {(preview.data.warnings ?? []).map((w) => (
+                <p key={w} className="text-xs text-warning">
+                  {w}
+                </p>
+              ))}
+            </div>
           )}
         </div>
 

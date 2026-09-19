@@ -307,7 +307,7 @@ POST /security/password-breach/scan|status             密码泄露检测
 | **G-20** | 磁盘 | **已完成** | **已有**：guest-agent 扩盘、IOPS 上限、磁盘格式转换、挂载磁盘。**本轮补**：关机状态下扩盘（`POST /vms/:id/disk/resize`）。**不做**：`disk_gb` 作为可编辑项——见下 |
 | **G-21** | 光盘 | **已完成** | 核对后发现比清单说的严重得多：整条光盘/ISO 链路都不存在。本轮补上（前后端）。见下 |
 | **G-22** | 克隆变体 | **部分** → 本轮补 make-independent | **已有**：`linked-clone`（`CloneMode: full / linked`，且注释写明「链式克隆必须是显式选择」）。**本轮补**：`make-independent`、`batch-clone`（均前后端完整）。**已齐** |
-| **G-23** | 迁移预览 | **缺** → 本轮补（后端） | 前端待补 |
+| **G-23** | 迁移预览 | **已完成** | 前后端 |
 | **G-24** | 存储池分区 | **缺** | `partition` / `format-mount` 命中 0 |
 | **G-25** | 模板 | **部分** | **已有**：发布（`handler/template.go` 有 `Published`）。**缺**：导入预览、删除预览、prepare-linux |
 | **G-26** | 批量操作 | **部分** | **已有**：**虚拟机**批量操作（`handler/vm.go` 的 `BatchAction`，电源与删除）。**缺**：端口转发批量、公网 IP 批量、IP 映射 |

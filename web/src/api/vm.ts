@@ -304,6 +304,18 @@ export const vmApi = {
    *
    * 不需要二次验证：失败时源侧数据保留，虚拟机在原处仍然可用。
    */
+  /**
+   * 迁移预检。**只读**，不产生任何记录。
+   *
+   * 它回答点下按钮**之前**唯一想知道的那件事：**这次要停多久。** 因此除了
+   * 「能不能迁」（ready / blockers），还有「会怎么迁」（mode / disk_gb /
+   * downtime_hint）——停机时长由后者决定。
+   *
+   * 它**与 migrate 共用同一套校验**，所以预览说可以、点下去就不会被拒。
+   */
+  previewMigration: (id: number, toNodeID: number) =>
+    post<MigrationPreview>(`/api/v1/vms/${id}/migration/preview`, { to_node_id: toNodeID }),
+
   migrate: (id: number, toNodeID: number) =>
     post<TaskRef>(`/api/v1/vms/${id}/migrate`, { to_node_id: toNodeID }),
 
@@ -443,6 +455,28 @@ export const GUEST_ACTION_HINT: Record<GuestAction, { label: string; detail: str
 }
 
 /** 一次跨节点迁移的记录。 */
+export interface MigrationPreview {
+  vm_id: number
+  vm_name: string
+  from_node_id: number
+  from_node_name: string
+  to_node_id: number
+  to_node_name: string
+  /** false 时 blockers 说明原因。 */
+  ready: boolean
+  /** 会**阻止**迁移的条件。 */
+  blockers?: string[]
+  /** 不阻止但应当知道的事。 */
+  warnings?: string[]
+  mode: string
+  /** 用人话解释这种方式意味着什么。 */
+  mode_note: string
+  /** 要复制的数据量——停机时长的**主要因素**。 */
+  disk_gb: number
+  /** 停机时长的**量级与依据**，而不是精确数字。 */
+  downtime_hint: string
+}
+
 export interface MigrationView {
   id: number
   vm_id: number
