@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"strconv"
 	"strings"
 	"time"
 
@@ -96,27 +95,35 @@ func (h *Account) ChangePassword(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	// **撤销其它会话**（保留当前这一个，否则用户改完密码立刻被登出，
-	// 而他会以为改密码失败了）。
-	revoked, err := h.auth.RevokeOtherSessions(ctx, user.ID, session.ID)
-	if err != nil {
-		api.Fail(c, err)
-		return
-	}
+	// **不需要再单独撤销会话。**
+	//
+	// 上面写道 `security_updated_at = now`，而 R-010
+	// （`f-1-01-auth-session.md`）规定：该字段更新 → 该用户**全部既有会话
+	// 立即失效**。会话校验里比对的就是 `SecurityUpdatedAt.After(IssuedAt)`。
+	//
+	// 这一处曾经写错过：代码注释与界面文案都说「撤销其它会话、**保留当前
+	// 这一个**」，并为此多调了一次 RevokeOtherSessions。而实际上
+	// security_updated_at 已经把**包括当前会话在内**的全部会话作废了——
+	// 于是用户看到「已退出其它设备上的 N 个会话」，下一次点导航时自己也被
+	// 登出，而界面上没有任何地方说过这件事。
+	//
+	// 行为本身是对的（R-010 要求如此），错的是说法。现在如实说。
 	// TOTP 的一次性许可也一并作废：它们是在旧密码下签发的。
 	h.guard.RevokeUserGrants(user.ID)
 
 	h.record(ctx, audit.Entry{
 		OperatorID: user.ID, OperatorName: user.Username,
 		ResourceType: "account", ResourceID: user.ID, ResourceName: user.Username,
-		Action:  "account.password.change",
-		Params:  map[string]any{"revoked_sessions": revoked},
+		Action: "account.password.change",
+		// 不再记 revoked_sessions：那个数只反映一次多余的显式撤销，而
+		// 真正生效的是 R-010 的按时间戳作废（全部会话，数量无从统计）。
+		Params:  map[string]any{"all_sessions_invalidated": true},
 		Success: true, ClientIP: info.IP,
 	})
 
 	api.OK(c, map[string]any{
-		"revoked_sessions": revoked,
-		"notice":           "密码已修改。" + revokeNotice(revoked),
+		"notice": "密码已修改。按安全规则，你在**所有设备**（包括当前这台）上的" +
+			"登录已失效，请用新密码重新登录。",
 	})
 }
 
@@ -178,8 +185,12 @@ func (h *Account) ChangeUsername(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	// **不撤销会话**：改用户名不影响凭据的有效性，而把用户踢下线只会让他
-	// 以为操作失败了。密码才是凭据，用户名只是标识。
+	// **会话会全部失效**，这是 R-010 的要求：改用户名同样属于「安全信息
+	// 变更」，与改密码、2FA 变更、恢复码重置并列。
+	//
+	// 这里曾经写着「不撤销会话，因为用户名只是标识」——那句话与规格相反，
+	// 而代码因为更新了 security_updated_at 实际上一直在撤销。注释与行为
+	// 不一致比两者都错更麻烦：下一个读代码的人会照着注释去改行为。
 	h.record(ctx, audit.Entry{
 		OperatorID: user.ID, OperatorName: name,
 		ResourceType: "account", ResourceID: user.ID, ResourceName: name,
@@ -245,7 +256,8 @@ func (h *Account) RegenerateRecoveryCodes(ctx context.Context, c *app.RequestCon
 
 	api.OK(c, map[string]any{
 		"recovery_codes": codes,
-		"notice": "已生成一批新的恢复码，**之前的所有恢复码已全部作废**。" +
+		"notice": "已生成一批新的恢复码，之前的所有恢复码已全部作废。" +
+			"按安全规则，你的登录已全部失效，请重新登录。" +
 			"请立即保存到安全的地方——这串码只显示这一次。",
 	})
 }
@@ -285,13 +297,6 @@ func validateUsername(name string) error {
 		}
 	}
 	return nil
-}
-
-func revokeNotice(n int64) string {
-	if n <= 0 {
-		return "当前没有其它登录中的会话。"
-	}
-	return "已退出其它设备上的 " + strconv.FormatInt(n, 10) + " 个登录会话。"
 }
 
 // deny 记录一次验证失败。
