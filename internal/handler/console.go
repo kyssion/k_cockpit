@@ -233,3 +233,30 @@ func pipeConsole(conn *websocket.Conn, stream agent.Stream) {
 	_ = conn.Close()
 	_ = stream.Close()
 }
+
+// XML 返回虚拟机的 libvirt 定义（API-036）。
+//
+// **只读**。它是排查「面板显示的和实际跑的不是一回事」时唯一的真相——
+// 而那个场景里用户最需要的恰恰是一份**没被缓存过**的读数，因此服务层每次都
+// 向节点现读。
+//
+// 返回的内容**已脱敏**：libvirt 的定义里有控制台密码，原样送出等于把界面上
+// 特意「只写不读」的那些凭据从后门送出去。被替换掉的字段名一并返回，好让
+// 用户知道那里的 `[已脱敏]` 是本来的内容而不是面板读错了。
+//
+// `live` 参数区分运行中与持久定义：热插拔一块盘之后两份会不同，而用户需要
+// 知道自己在看哪一份——拿运行时的定义去判断「重启后还在不在」会出错。
+func (h *Console) XML(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	live := c.Query("live") == "true"
+	view, err := h.svc.XML(ctx, id, c.Query("protocol"), live, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, view)
+}

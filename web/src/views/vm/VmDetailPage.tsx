@@ -19,6 +19,7 @@ import { Link, useNavigate, useParams } from 'react-router'
 import { TagEditor } from './TagEditor'
 
 import { ShareTab } from './ShareTab'
+import { XMLTab } from './XMLTab'
 import { VMMetricsPanel } from '@/views/monitor/MetricsPanel'
 
 import { ApiError, NetworkError } from '@/api/client'
@@ -97,6 +98,7 @@ type TabKey =
   | 'schedule'
   | 'export'
   | 'console'
+  | 'xml'
   | 'edit'
 
 const TABS: { key: TabKey; label: string }[] = [
@@ -108,6 +110,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'schedule', label: '定时任务' },
   { key: 'export', label: '导出' },
   { key: 'console', label: '控制台' },
+  { key: 'xml', label: '定义' },
   { key: 'edit', label: '编辑' },
 ]
 
@@ -514,6 +517,9 @@ export function VmDetailPage() {
       {tab === 'share' && <ShareTab vmID={vm.id} />}
       {tab === 'schedule' && <ScheduleTab vmID={vm.id} />}
       {tab === 'export' && <ExportTab vm={vm} />}
+      {/* 只读的 libvirt 定义：排查「面板显示的和实际跑的不是一回事」时
+          它是唯一的真相。 */}
+      {tab === 'xml' && <XMLTab vmID={vm.id} />}
       {tab === 'edit' && <EditTab vmID={vm.id} onSaved={refresh} />}
 
       <Modal

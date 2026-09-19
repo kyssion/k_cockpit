@@ -390,6 +390,10 @@ func stagePlan(op Operation) [][2]string {
 			{"disk_place", "放入存储池"},
 			{"template_register", "登记为模板"},
 		}
+	case OpVMXML:
+		return [][2]string{
+			{"dumpxml", "导出域定义"},
+		}
 	case OpVMGuest:
 		// 阶段按 `host.` / `guest.` 前缀分成两段。
 		//

@@ -329,6 +329,17 @@ export const vmApi = {
    * `stamp` 用于绕过缓存：画面是「此刻的样子」，缓存住会让用户盯着一张
    * 几分钟前的图，还以为虚拟机画面卡死了。
    */
+  /**
+   * 虚拟机的 libvirt 定义（**只读**）。
+   *
+   * live 区分运行中与持久定义：热插拔一块盘之后两份会不同，而"看的是哪一份"
+   * 决定用户能不能据此判断"重启后还在不在"。
+   */
+  xml: (id: number, live: boolean) =>
+    get<{ vm_id: number; live: boolean; xml: string; redacted?: string[] }>(
+      `/api/v1/vms/${id}/xml?live=${live}`,
+    ),
+
   consoleFrameUrl: (id: number, stamp: number) =>
     `/api/v1/vms/${id}/console/frame?t=${stamp}`,
 }

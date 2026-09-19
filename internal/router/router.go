@@ -746,6 +746,11 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.PATCH("/vms/:id/console", requireAuth, consoleHandler.Update)
 		v1.GET("/vms/:id/console/screenshot", requireAuth, consoleHandler.Screenshot)
 		v1.GET("/vms/:id/console/ws", requireAuth, consoleHandler.WS)
+		// 虚拟机定义（**只读**）。排查「面板显示的和实际跑的不是一回事」时
+		// 它是唯一的真相，因此总是现读、不缓存。返回内容已脱敏——libvirt
+		// 的定义里有控制台密码，原样送出等于把界面上「只写不读」的凭据
+		// 从后门送出去。
+		v1.GET("/vms/:id/xml", requireAuth, consoleHandler.XML)
 
 		// 任务中心：tenant 只能看到自己发起的（同样由归属过滤保证）。
 		v1.GET("/tasks", requireAuth, taskHandler.List)
