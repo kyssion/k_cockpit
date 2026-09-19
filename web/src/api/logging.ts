@@ -57,6 +57,15 @@ export const logApi = {
 
   /** 交给浏览器下载：同源带会话 Cookie，自己处理大文件落盘。 */
   exportUrl: () => '/api/v1/settings/log/export',
+
+  /**
+   * 实时日志流的地址（SSE）。
+   *
+   * **不带任何令牌**：会话走 HttpOnly Cookie，而 EventSource 对同源请求会
+   * 自动带上它。这一点与参考项目的做法不同——他们要把令牌放进查询串，而那
+   * 会让凭据进入访问日志、代理日志与浏览器历史。
+   */
+  streamUrl: () => '/api/v1/settings/log/stream',
 }
 
 /** formatBytes 把字节数变成人能读的量级。 */

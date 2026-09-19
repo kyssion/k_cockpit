@@ -11,7 +11,7 @@
  *              外发，不必自己先检查一遍。
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { ApiError, NetworkError } from '@/api/client'
 import { formatBytes, logApi, LOG_LEVELS, type LogEntry } from '@/api/logging'
@@ -28,11 +28,49 @@ export function LogPage() {
   const [error, setError] = useState('')
 
   const status = useQuery({ queryKey: ['log-status'], queryFn: logApi.status, refetchInterval: 15000 })
-  const lines = useQuery({
+  // 实时日志流（见 GAP_CLOSURE 的 G-28 论证）。
+  //
+  // 日志在线查看是唯一「持续在变、而且停不下来」的那条流——用户打开这一页
+  // 的原因通常就是盯着一件事的发生。其余几处轮询仍是条件轮询，不换。
+  const [stream, setStream] = useState<{
+    lines: LogEntry[]
+    live: boolean
+    /** 服务端因消费不及时丢弃的行数。**必须让用户知道这里有缺口**。 */
+    dropped: number
+  }>({ lines: [], live: false, dropped: 0 })
+
+  useEffect(() => {
+    const es = new EventSource(logApi.streamUrl())
+
+    es.addEventListener('log', (ev) => {
+      const e = JSON.parse((ev as MessageEvent).data) as LogEntry
+      setStream((prev) => ({
+        ...prev,
+        live: true,
+        // 只留最近若干行：这一页是「看它发生」，不是回溯（回溯用导出）。
+        lines: [...prev.lines, e].slice(-300),
+      }))
+    })
+
+    // 服务端明确告知「中间漏了 N 行」。
+    es.addEventListener('gap', (ev) => {
+      const n = (JSON.parse((ev as MessageEvent).data) as { dropped: number }).dropped
+      setStream((prev) => ({ ...prev, dropped: prev.dropped + n }))
+    })
+
+    es.onopen = () => setStream((prev) => ({ ...prev, live: true }))
+    // 断开时由 EventSource 自己重连；这里只把状态标回去，好在界面上说明
+    // 「正在重连」——不说的话用户会以为日志停了，而它其实只是断了。
+    es.onerror = () => setStream((prev) => ({ ...prev, live: false }))
+
+    return () => es.close()
+  }, [])
+
+  const snapshot = useQuery({
     queryKey: ['log-read', level, keyword],
     queryFn: () => logApi.read({ limit: 300, level, keyword }),
-    // 跟在看日志的节奏上：日志会持续产生，手动刷新是把系统该做的事推给用户。
-    refetchInterval: 5000,
+    // **流连通时不再轮询**；断开时才回落到轮询，避免「两头都在取」。
+    refetchInterval: stream.live ? false : 5000,
   })
 
   const setLevelMut = useMutation({
@@ -61,7 +99,16 @@ export function LogPage() {
 
   if (status.isPending) return <PageLoading />
   const st = status.data
-  const items = lines.data?.items ?? []
+  // 展示源：流连通之后以它为准（快照只是断线期间的兜底）。
+  //
+  // **过滤在客户端做**：流是无过滤的全量推送（服务端不必为每个连接维护一套
+  // 过滤状态），因此开启过滤时这里再筛一遍。不筛的话，用户设了「只看 ERROR」
+  // 却持续看到 INFO 行滚过去，会以为过滤没生效。
+  const streamItems = stream.lines.filter(
+    (e) => (!level || e.level === level) && (!keyword || e.line.includes(keyword)),
+  )
+  const items = stream.live && streamItems.length > 0 ? streamItems : (snapshot.data?.items ?? [])
+  const lines = snapshot
 
   return (
     <div className="flex flex-col gap-5">
@@ -155,6 +202,22 @@ export function LogPage() {
             显示内存中最近 {st?.ring_lines ?? 0} 行中的一部分；更早的内容请导出。
           </span>
         </div>
+
+        {/* 「中间漏了 N 行」必须显式说出来。丢弃是服务端主动做的（不丢的话
+            一个卡住的标签会把整个服务的日志写入拖停），而客户端**无从分辨**
+            「这段时间没有日志」与「日志没推过来」——不说的话用户会照着一段
+            有缺口的历史去排查。 */}
+        {stream.dropped > 0 && (
+          <p className="rounded-control border border-warning/40 bg-warning/5 px-3 py-2 text-sm text-warning">
+            实时推送期间有 {stream.dropped} 行因来不及消费未被送达。
+            这不是「那段时间没有日志」，需要完整内容请用导出。
+          </p>
+        )}
+        {!stream.live && (
+          <p className="rounded-control border border-line bg-sunken px-3 py-2 text-sm text-ink-3">
+            实时连接已断开，正在重连；这期间按 5 秒轮询取数。
+          </p>
+        )}
 
         {lines.isPending ? (
           <PageLoading />
