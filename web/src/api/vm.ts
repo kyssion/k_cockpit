@@ -340,6 +340,19 @@ export const vmApi = {
       `/api/v1/vms/${id}/xml?live=${live}`,
     ),
 
+  /**
+   * 关机状态下的磁盘扩容（**只能扩，不能缩**）。
+   *
+   * 运行中的机器会被拒并指向「来宾自动化」里的 expand_disk——那条路会顺带
+   * 在来宾里扩好文件系统。这条路径只扩宿主机侧，来宾里的分区要自己扩
+   * （响应里的 guest_grow_needed 标出这一点）。
+   */
+  resizeDisk: (id: number, sizeGB: number) =>
+    post<{ old_gb: number; new_gb: number; guest_grow_needed: boolean }>(
+      `/api/v1/vms/${id}/disk/resize`,
+      { size_gb: sizeGB },
+    ),
+
   /** 校验一份新的定义并给出 diff。**只读**，不应用，也不需要二次验证。 */
   xmlPrecheck: (id: number, xml: string) =>
     post<XMLPrecheck>(`/api/v1/vms/${id}/xml/precheck`, { xml }),
