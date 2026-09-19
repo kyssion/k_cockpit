@@ -79,6 +79,23 @@ export const netApi = {
   addPortForward: (vmID: number, input: AddPortForwardInput) =>
     post<TaskRef>(`/api/v1/vms/${vmID}/port-forwards`, input),
 
+  /**
+   * 批量删除端口转发。
+   *
+   * 每条**必须带 vm_id**：删除要做归属校验，而归属挂在虚拟机上。
+   *
+   * **逐条如实报告**：失败的项带 id 与原因。已成功的那几条不会被撤销
+   * ——撤销意味着再做一次网络变更。
+   */
+  batchRemovePortForwards: (
+    items: { vm_id: number; pf_id: number }[],
+  ) =>
+    post<{
+      removed: { vm_id: number; pf_id: number }[] | null
+      failed: { ref: { vm_id: number; pf_id: number }; reason: string }[] | null
+      message: string
+    }>('/api/v1/vms/port-forwards/batch-delete', { items }),
+
   removePortForward: (vmID: number, pfID: number) =>
     del<TaskRef>(`/api/v1/vms/${vmID}/port-forwards/${pfID}`),
 }

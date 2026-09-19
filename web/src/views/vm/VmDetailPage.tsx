@@ -1104,8 +1104,36 @@ function NetworkTab({ vmID }: { vmID: number }) {
   const [deleteIP, setDeleteIP] = useState<StaticIP | null>(null)
   const [addingPF, setAddingPF] = useState(false)
   const [deletePF, setDeletePF] = useState<PortForward | null>(null)
+  // 端口转发的多选。与公网地址那页同一套做法——一张列表上逐条删十条
+  // 是纯粹的体力活，而它恰恰是「换个端口就重配一遍」时最常做的事。
+  const [pfSelected, setPFSelected] = useState<Set<number>>(new Set())
+  const [pfFailed, setPFFailed] = useState<
+    { pf_id: number; reason: string }[] | null
+  >(null)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
+
+  // **批量删除的 mutation 必须放在提前 return 之前。**
+  // 放到「取到数据之后」看起来很自然（它确实只在那时才有意义），但那样
+  // 就违反了 Hook 的调用规则——组件在 loading 与 ready 两次渲染中走了不同
+  // 数量的 Hook，React 会直接抛错。lint 抓住了这一处；它不会在编译期暴露，
+  // 只有运行时才炸。
+  const pfBatchRemove = useMutation({
+    mutationFn: (ids: number[]) =>
+      netApi.batchRemovePortForwards(ids.map((id) => ({ vm_id: vmID, pf_id: id }))),
+    onSuccess: (r) => {
+      setError('')
+      // 服务的失败项是 `{ref, reason}`，这里摊平成 pf_id —— 界面只需要
+      // 用它来对上号，vm_id 在当前页面里是同一个值。
+      setPFFailed(
+        (r.failed ?? []).map((f) => ({ pf_id: f.ref.pf_id, reason: f.reason })),
+      )
+      setPFSelected(new Set())
+      void queryClient.invalidateQueries({ queryKey: ['port-forwards'] })
+      void queryClient.invalidateQueries({ queryKey: ['tasks'] })
+    },
+    onError: (err) => setError(describe(err)),
+  })
 
   const interfaces = useQuery({
     queryKey: ['vm-interfaces', vmID],
@@ -1162,6 +1190,7 @@ function NetworkTab({ vmID }: { vmID: number }) {
   const nics = interfaces.data.items
   const ips = staticIPs.data.items
   const pfs = forwards.data.items
+
 
   return (
     <div className="flex flex-col gap-4">
@@ -1292,12 +1321,49 @@ function NetworkTab({ vmID }: { vmID: number }) {
       </section>
 
       <section className="rounded-card border border-line">
-        <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-2.5">
           <h2 className="text-sm font-medium text-ink-2">端口转发</h2>
-          <Button size="sm" onClick={() => setAddingPF(true)}>
-            新增转发
-          </Button>
+          <span className="flex items-center gap-2">
+            {/* 选中之后才出现：常驻会让这一行平时多两个用不上的按钮。 */}
+            {pfSelected.size > 0 && (
+              <>
+                <span className="text-xs text-ink-3">已选 {pfSelected.size} 条</span>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  loading={pfBatchRemove.isPending}
+                  onClick={() => pfBatchRemove.mutate(Array.from(pfSelected))}
+                >
+                  批量删除
+                </Button>
+                <button
+                  className="text-xs text-ink-3 hover:underline"
+                  onClick={() => setPFSelected(new Set())}
+                >
+                  取消选择
+                </button>
+              </>
+            )}
+            <Button size="sm" onClick={() => setAddingPF(true)}>
+              新增转发
+            </Button>
+          </span>
         </div>
+
+        {/* 批量删除可能**部分成功**，因此逐条列出失败原因，而不是一句
+            「批量删除失败」——那样用户不知道该处理哪几条。 */}
+        {(pfFailed?.length ?? 0) > 0 && (
+          <div className="border-b border-line bg-danger/5 px-4 py-2">
+            <p className="text-xs text-danger">以下条目删除失败：</p>
+            <ul className="mt-0.5">
+              {pfFailed?.map((f) => (
+                <li key={f.pf_id} className="text-xs text-danger">
+                  #{f.pf_id}：{f.reason}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {pfs.length === 0 ? (
           <EmptyState
@@ -1308,6 +1374,17 @@ function NetworkTab({ vmID }: { vmID: number }) {
           <table className="w-full border-collapse text-base">
             <thead>
               <tr className="border-b border-line text-xs text-ink-3">
+                <th className="w-10 px-4 py-2">
+                  <input
+                    type="checkbox"
+                    checked={pfSelected.size === pfs.length && pfs.length > 0}
+                    onChange={(e) =>
+                      setPFSelected(
+                        e.target.checked ? new Set(pfs.map((x) => x.id)) : new Set(),
+                      )
+                    }
+                  />
+                </th>
                 <th className="px-4 py-2 text-left font-normal">宿主机端口</th>
                 <th className="px-4 py-2 text-left font-normal">目标</th>
                 <th className="px-4 py-2 text-left font-normal">允许来源</th>
@@ -1318,6 +1395,20 @@ function NetworkTab({ vmID }: { vmID: number }) {
             <tbody>
               {pfs.map((p) => (
                 <tr key={p.id} className="border-t border-line">
+                  <td className="px-4 py-2.5">
+                    <input
+                      type="checkbox"
+                      checked={pfSelected.has(p.id)}
+                      onChange={() =>
+                        setPFSelected((prev) => {
+                          const next = new Set(prev)
+                          if (next.has(p.id)) next.delete(p.id)
+                          else next.add(p.id)
+                          return next
+                        })
+                      }
+                    />
+                  </td>
                   <td className="kc-mono px-4 py-2.5 text-ink">
                     {p.protocol}/{p.host_port}
                   </td>
