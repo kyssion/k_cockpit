@@ -94,6 +94,10 @@ export interface VmListParams {
   keyword?: string
   node_id?: number
   group_name?: string
+  /** 排序字段：name / vcpu / memory / disk / ip / created_at。未知取值由后端回落到默认顺序。 */
+  sort_by?: string
+  /** desc 为降序，其余均按升序。 */
+  order?: 'asc' | 'desc'
   page?: number
   page_size?: number
 }
@@ -121,6 +125,137 @@ export interface CreateVmInput {
    * 不该是默认行为。
    */
   clone_mode?: 'full' | 'linked'
+
+  // --- 创建向导的其余配置（F-2-02）---
+  //
+  // 键名与后端矩阵一致，取值与范围**以后端下发的表单为准**：这里不写死
+  // 第二份可选值，界面只是照着渲染。
+
+  disk_format?: string
+  disk_bus?: string
+  nic_model?: string
+  os_type?: string
+  machine_type?: string
+  firmware?: string
+  secure_boot?: boolean
+  boot_order?: string
+  auto_start?: boolean
+  watchdog?: string
+  cpu_type?: string
+  cpu_limit_percent?: number
+  apic?: boolean
+  pae?: boolean
+  freeze_on_start?: boolean
+  disk_iops_total?: number
+  disk_iops_read?: number
+  disk_iops_write?: number
+
+  /** 非零表示创建成功后把该镜像挂到光驱——ISO 安装路径。 */
+  iso_file_id?: number
+  switch_id?: number
+  security_group_ids?: number[]
+
+  /** 批量台数（默认 1）；多台时 name 作为前缀。 */
+  count?: number
+  /** 幂等键：重复提交只产生一个任务（F-2-02 Q-003）。 */
+  client_token?: string
+  batch_key?: string
+}
+
+/** 一块磁盘。列表来自**节点实时探测**，控制面不持有磁盘记录。 */
+export interface VmDiskView {
+  dev: string
+  capacity_gb: number
+  /** 宿主机上的实际占用。qcow2 是稀疏文件，它通常远小于配置容量。 */
+  actual_bytes: number
+  format: string
+  bus: string
+  source: string
+  is_system: boolean
+  /** 当前能否热插拔，由节点按机型与空闲槽位判断。 */
+  hotpluggable: boolean
+
+  /** 以下由控制面按运行态算出：界面按它禁用按钮，后端按它拒绝请求。 */
+  can_detach: boolean
+  detach_reason?: string
+  can_change_bus: boolean
+  change_bus_reason?: string
+}
+
+export interface VmDiskList {
+  /** 探测到的运行态——操作可用性以它为依据，而不是可能滞后的投影。 */
+  status: string
+  disks: VmDiskView[]
+  bus_options: { value: string; label: string }[]
+  /** 可挂载的虚拟磁盘文件（我的存储里的 disk 类，同节点）。 */
+  attachables: { id: number; filename: string; size_bytes: number }[]
+}
+
+export type DiskChangeAction = 'attach' | 'detach' | 'bus'
+
+/** 磁盘的挂载 / 卸载 / 换总线。三者共用一个接口，由 action 区分。 */
+export interface DiskChangeInput {
+  action: DiskChangeAction
+  /** 卸载与换总线时必填；挂载时由节点分配。 */
+  dev?: string
+  bus?: string
+  file_id?: number
+}
+
+/** 创建向导的一个配置项（由后端下发，界面只负责渲染）。 */
+export interface CreateFormField {
+  key: string
+  label: string
+  kind: 'text' | 'number' | 'boolean' | 'select'
+  group: string
+  requires_node: boolean
+  requires_shutdown: boolean
+  read_only: boolean
+  in_create: boolean
+  create_only: boolean
+  default?: string
+  options?: { value: string; label: string }[]
+  min?: number
+  max?: number
+  hint?: string
+}
+
+/** 创建向导的一个步骤。 */
+export interface CreateFormGroup {
+  key: string
+  label: string
+  /** 该步骤的内容尚未实现；界面据此显示说明而不是空表格。 */
+  planned?: boolean
+  note?: string
+}
+
+/** 一项创建前置条件。 */
+export interface CreatePrerequisite {
+  key: string
+  label: string
+  ok: boolean
+  message?: string
+  link?: string
+}
+
+/** 创建向导的表单元数据（F-2-02 R-002：规则由后端下发）。 */
+export interface CreateForm {
+  fields: CreateFormField[]
+  values: Record<string, unknown>
+  groups: CreateFormGroup[]
+  prerequisites: CreatePrerequisite[]
+  iso_files: { id: number; filename: string; size_bytes: number; os_type?: string; min_disk_gb: number }[]
+  switches: { id: number; name: string; mode: string; cidr?: string; is_system: boolean }[]
+  security_groups: { id: number; name: string; is_default: boolean }[]
+  can_submit: boolean
+}
+
+/** 创建的结果：单台与批量都返回全部任务标识。 */
+export interface CreateResult {
+  task_id: number
+  task_ids: number[]
+  count: number
+  batch_key?: string
 }
 
 /** 创建/电源/删除的结果：都是任务标识，操作本身异步执行。 */
@@ -159,20 +294,60 @@ export type PowerAction = 'start' | 'shutdown' | 'reboot' | 'poweroff' | 'reset'
 /** 磁盘处理方式。没有默认值——必须由用户显式选择（f-2-01 R-009）。 */
 export type DiskAction = 'delete' | 'keep'
 
+/** 回收站里的一台虚拟机。 */
+export interface TrashItem {
+  id: number
+  name: string
+  node_id: number
+  vcpu: number
+  memory_mb: number
+  disk_gb: number
+  status: VmStatus
+  deleted_at?: string
+  /** false 表示还有任务在跑，暂时不能彻底删除。 */
+  purgeable: boolean
+}
+
 export const vmApi = {
+  /** 回收站列表（F-2-16）。删除只是移出列表，磁盘未动。 */
+  trash: () => get<{ items: TrashItem[] }>('/api/v1/vms/trash'),
+
+  /** 恢复。恢复**不自动开机**。 */
+  restore: (id: number) => post<{ ok: boolean }>(`/api/v1/vms/trash/${id}/restore`),
+
+  /** 彻底删除：删盘 + 物理删记录，入队执行。 */
+  purge: (id: number) => del<TaskRef>(`/api/v1/vms/trash/${id}`),
+
   list: (params: VmListParams = {}): Promise<{ items: VmView[]; pagination: Pagination }> =>
     getPaged<VmView>('/api/v1/vms', {
       status: params.status,
       keyword: params.keyword,
       node_id: params.node_id,
       group_name: params.group_name,
+      sort_by: params.sort_by,
+      order: params.order,
       page: params.page,
       page_size: params.page_size,
     }),
 
   get: (id: number) => get<VmView>(`/api/v1/vms/${id}`),
 
-  create: (input: CreateVmInput) => post<TaskRef>('/api/v1/vms', input),
+  /** 修改备注与分组。它们是**纯控制面元数据**，改它们不下发节点、不用关机。 */
+  updateMetadata: (id: number, input: { remark?: string; group_name?: string }) =>
+    patch<VmView>(`/api/v1/vms/${id}/metadata`, input),
+
+  /** 磁盘列表（F-2-06）。实时向节点查询：磁盘是虚拟化层的状态，控制面存一份就要与它对账。 */
+  disks: (id: number) => get<VmDiskList>(`/api/v1/vms/${id}/disks`),
+
+  /** 挂载 / 卸载 / 换总线。三者都入队，返回任务标识。 */
+  changeDisk: (id: number, input: DiskChangeInput) =>
+    post<TaskRef>(`/api/v1/vms/${id}/disks`, input),
+
+  /** 表单元数据：字段、取值、默认值与前置条件全部由后端下发（F-2-02 R-002）。 */
+  createForm: (nodeID: number) => get<CreateForm>('/api/v1/vms/create-form', { node_id: nodeID }),
+
+  /** 创建一台或多台。返回值含全部任务标识，便于逐台跟踪。 */
+  create: (input: CreateVmInput) => post<CreateResult>('/api/v1/vms', input),
 
   power: (id: number, action: PowerAction) =>
     post<TaskRef>(`/api/v1/vms/${id}/power-actions`, { action }),

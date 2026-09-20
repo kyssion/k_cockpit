@@ -17,6 +17,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 
 import { ApiError, NetworkError } from '@/api/client'
+import { computeQuotaApi, type ComputeQuotaView } from '@/api/computequota'
 import { nodeApi } from '@/api/node'
 import { quotaEnforceApi, RESOURCE_QUOTAS, type QuotaView } from '@/api/quotaenforce'
 import { userApi } from '@/api/useradmin'
@@ -151,6 +152,10 @@ export function ResourceQuotaPage() {
           ))}
         </div>
       </section>
+
+      {/* 计算资源配额与上面的周期型配额是两类约束，因此单独成块：
+          那边按月累计、超限限速；这里看"此刻占着多少"，超限就拒绝新建。 */}
+      <ComputeQuotaSection nodeID={effectiveNodeID} users={userList} onError={setError} />
 
       <QuotaModal
         open={editing !== null}
@@ -341,6 +346,241 @@ function QuotaModal({
         <p className="rounded-control bg-sunken px-3 py-2 text-xs text-ink-3">
           修改上限会清除该维度的处置状态：把上限从 100 提到 200 之后，那条
           「已限速」的记录就不再成立——不清的话，用户明明已经合规，网络却还是慢的。
+        </p>
+      </div>
+    </Modal>
+  )
+}
+
+/**
+ * ComputeQuotaSection 设置 vCPU / 内存 / 实例数上限。
+ *
+ * 三个上限在**同一行**填写：它们总是被一起设置（"给这个用户 8 核 / 16 GB /
+ * 5 台"），分行填写的结果经常是只填了一半。
+ */
+function ComputeQuotaSection({
+  nodeID,
+  users,
+  onError,
+}: {
+  nodeID: number
+  users: { id: number; username: string }[]
+  onError: (m: string) => void
+}) {
+  const queryClient = useQueryClient()
+  const [target, setTarget] = useState<{ id: number; name: string } | null>(null)
+
+  const list = useQuery({
+    queryKey: ['compute-quotas', nodeID],
+    queryFn: () => computeQuotaApi.list(nodeID),
+    enabled: nodeID > 0,
+  })
+
+  const items = list.data?.items ?? []
+
+  return (
+    <section className="rounded-card border border-line bg-surface">
+      <header className="border-b border-line px-4 py-2.5">
+        <h2 className="text-base font-medium text-ink-2">计算资源配额</h2>
+        <p className="mt-1 text-sm text-ink-3">
+          限制 vCPU、内存与虚拟机数量。这是**存量约束**：超限不处置已有机器，
+          而是拒绝新建——把一台正在跑的机器限速掉，比不让它再建一台严重得多。
+          上限填 0 表示不限，三项全为 0 即取消该用户的配额。
+        </p>
+      </header>
+
+      {items.length === 0 ? (
+        <EmptyState
+          title="还没有计算资源配额"
+          description="不设配额的用户不受限制——这是默认行为。"
+        />
+      ) : (
+        <table className="w-full text-left text-sm">
+          <thead className="bg-sunken text-ink-3">
+            <tr>
+              <th className="px-4 py-2 font-normal">用户</th>
+              <th className="px-4 py-2 font-normal">vCPU</th>
+              <th className="px-4 py-2 font-normal">内存</th>
+              <th className="px-4 py-2 font-normal">实例数</th>
+              <th className="px-4 py-2 text-right font-normal">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((q) => (
+              <tr key={q.user_id} className="border-t border-line">
+                <td className="px-4 py-2 text-ink-2">
+                  {q.username || `#${q.user_id}`}
+                  {!q.has_quota && <span className="ml-2 text-xs text-ink-3">未设配额</span>}
+                </td>
+                <LimitCell used={q.vcpu} limit={q.quota_vcpu} unit="核" />
+                <LimitCell used={q.memory_mb} limit={q.quota_memory_mb} unit="MB" memory />
+                <LimitCell used={q.vm_count} limit={q.quota_vm_count} unit="台" />
+                <td className="whitespace-nowrap px-4 py-2 text-right">
+                  <button
+                    className="text-primary hover:underline"
+                    onClick={() =>
+                      setTarget({ id: q.user_id, name: q.username || `#${q.user_id}` })
+                    }
+                  >
+                    设置
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2 border-t border-line px-4 py-3">
+        <span className="text-sm text-ink-3">为用户设置：</span>
+        {users.map((u) => (
+          <button
+            key={u.id}
+            className="rounded-control border border-line px-2.5 py-1 text-sm text-ink-2 hover:bg-sunken"
+            onClick={() => setTarget({ id: u.id, name: u.username })}
+          >
+            {u.username}
+          </button>
+        ))}
+      </div>
+
+      <ComputeQuotaModal
+        nodeID={nodeID}
+        target={target}
+        existing={items}
+        onClose={() => setTarget(null)}
+        onDone={() => {
+          setTarget(null)
+          void queryClient.invalidateQueries({ queryKey: ['compute-quotas'] })
+        }}
+        onError={(m) => {
+          setTarget(null)
+          onError(m)
+        }}
+      />
+    </section>
+  )
+}
+
+/** 一格的「已用 / 上限」。上限为 0 时显示"不限"而不是"0"——后者会被读成
+    "一点都不许用"。 */
+function LimitCell({
+  used,
+  limit,
+  unit,
+  memory,
+}: {
+  used: number
+  limit: number
+  unit: string
+  memory?: boolean
+}) {
+  if (limit <= 0) {
+    return (
+      <td className="kc-nums px-4 py-2">
+        <span className="text-ink">{memory ? formatMB(used) : `${used} ${unit}`}</span>
+        <span className="ml-1.5 text-xs text-ink-3">/ 不限</span>
+      </td>
+    )
+  }
+  const over = used > limit
+  return (
+    <td className="kc-nums px-4 py-2">
+      <span className={over ? 'text-danger' : 'text-ink'}>
+        {memory ? formatMB(used) : `${used} ${unit}`}
+      </span>
+      <span className="ml-1 text-ink-3">
+        / {memory ? formatMB(limit) : `${limit} ${unit}`}
+      </span>
+    </td>
+  )
+}
+
+function formatMB(mb: number): string {
+  return mb >= 1024 ? `${(mb / 1024).toFixed(mb % 1024 === 0 ? 0 : 1)} GB` : `${mb} MB`
+}
+
+function ComputeQuotaModal({
+  nodeID,
+  target,
+  existing,
+  onClose,
+  onDone,
+  onError,
+}: {
+  nodeID: number
+  target: { id: number; name: string } | null
+  existing: ComputeQuotaView[]
+  onClose: () => void
+  onDone: () => void
+  onError: (m: string) => void
+}) {
+  const [vcpu, setVcpu] = useState('')
+  const [memoryMB, setMemoryMB] = useState('')
+  const [vmCount, setVMCount] = useState('')
+  const [seeded, setSeeded] = useState<number | null>(null)
+
+  // 换目标时用已有值初始化，避免用户以为"打开就是空的 = 没配过"。
+  if (seeded !== (target?.id ?? null)) {
+    setSeeded(target?.id ?? null)
+    const cur = existing.find((q) => q.user_id === target?.id)
+    setVcpu(cur && cur.quota_vcpu > 0 ? String(cur.quota_vcpu) : '')
+    setMemoryMB(cur && cur.quota_memory_mb > 0 ? String(cur.quota_memory_mb) : '')
+    setVMCount(cur && cur.quota_vm_count > 0 ? String(cur.quota_vm_count) : '')
+  }
+
+  const save = useMutation({
+    mutationFn: () =>
+      computeQuotaApi.set({
+        node_id: nodeID,
+        user_id: target?.id ?? 0,
+        vcpu: Number(vcpu) || 0,
+        memory_mb: Number(memoryMB) || 0,
+        vm_count: Number(vmCount) || 0,
+      }),
+    onSuccess: onDone,
+    onError: (e) => onError(describe(e)),
+  })
+
+  return (
+    <Modal
+      open={target !== null}
+      title={`为 ${target?.name ?? ''} 设置计算资源配额`}
+      description="留空或填 0 表示该维度不限。三项全为 0 即取消这个用户的配额。"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            取消
+          </Button>
+          <Button size="sm" loading={save.isPending} onClick={() => save.mutate()}>
+            保存
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3">
+        <Input
+          label="vCPU 上限（核）"
+          value={vcpu}
+          onChange={(e) => setVcpu(e.target.value)}
+          placeholder="留空表示不限"
+        />
+        <Input
+          label="内存上限（MB）"
+          value={memoryMB}
+          onChange={(e) => setMemoryMB(e.target.value)}
+          placeholder="留空表示不限"
+        />
+        <Input
+          label="虚拟机数量上限（台）"
+          value={vmCount}
+          onChange={(e) => setVMCount(e.target.value)}
+          placeholder="留空表示不限"
+        />
+        <p className="rounded-control bg-sunken px-3 py-2 text-xs text-ink-3">
+          统计的是**当下**的占用：关机但没删的机器仍然占着额度（它的资源是
+          预留出去的）；在虚拟化层已不存在的机器不计入。
         </p>
       </div>
     </Modal>

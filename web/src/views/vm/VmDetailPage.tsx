@@ -16,10 +16,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 
+import { useTabStore } from '@/stores/tabs'
 import { TagEditor } from './TagEditor'
 
 import { ShareTab } from './ShareTab'
 import { CDROMTab } from './CDROMTab'
+import { DiskTab } from './DiskTab'
 import { XMLTab } from './XMLTab'
 import { VMMetricsPanel } from '@/views/monitor/MetricsPanel'
 
@@ -94,6 +96,7 @@ type TabKey =
   | 'system'
   | 'snapshot'
   | 'network'
+  | 'disks'
   | 'monitor'
   | 'cdrom'
   | 'share'
@@ -107,6 +110,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'system', label: '系统信息' },
   { key: 'snapshot', label: '快照管理' },
   { key: 'network', label: '网络管理' },
+  { key: 'disks', label: '磁盘' },
   { key: 'monitor', label: '监控' },
   { key: 'cdrom', label: '光驱' },
   { key: 'share', label: '目录共享' },
@@ -120,6 +124,7 @@ const TABS: { key: TabKey; label: string }[] = [
 export function VmDetailPage() {
   const { id } = useParams<{ id: string }>()
   const vmID = Number(id)
+  const setTabTitle = useTabStore((s) => s.setTitle)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
 
@@ -154,6 +159,16 @@ export function VmDetailPage() {
   })
 
   const nodes = useQuery({ queryKey: ['nodes'], queryFn: nodeApi.list })
+
+  // 标签标题用机器名而不是「虚拟机」：路由只能给出"这是哪一类页面"，而用户
+  // 在一排标签里认的是名字。
+  //
+  // 放在**所有提前返回之前**：Hook 必须在每次渲染里都以同样顺序执行，而
+  // 详情页在加载中、出错时会提前返回。
+  const vmName = detail.data?.name
+  useEffect(() => {
+    if (vmName) setTabTitle(`/vm/${vmID}`, vmName)
+  }, [vmName, vmID, setTabTitle])
 
   function refresh() {
     void queryClient.invalidateQueries({ queryKey: ['vm', vmID] })
@@ -539,6 +554,8 @@ export function VmDetailPage() {
         />
       )}
       {/* 光驱：可以多个。**弹出与移除是两件事**，界面上分开呈现。 */}
+      {/* 磁盘：列表来自节点实时探测，换总线要关机、系统盘不可卸载。 */}
+      {tab === 'disks' && <DiskTab vmID={vm.id} />}
       {tab === 'cdrom' && <CDROMTab vmID={vm.id} nodeID={vm.node_id} />}
       {tab === 'share' && <ShareTab vmID={vm.id} />}
       {tab === 'schedule' && <ScheduleTab vmID={vm.id} />}

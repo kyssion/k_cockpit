@@ -44,6 +44,7 @@ export function MetricsPanel({
   hideRangePicker,
 }: MetricsPanelProps) {
   const [innerRange, setInnerRange] = useState<RangeKey>('1h')
+  const [diskMode, setDiskMode] = useState<'throughput' | 'iops'>('throughput')
   const range = controlledRange ?? innerRange
   const setRange = (v: RangeKey) => {
     if (controlledRange === undefined) setInnerRange(v)
@@ -147,10 +148,53 @@ export function MetricsPanel({
               />
             </MetricCard>
           </div>
+
+          {/* 磁盘 IO。口径切换只影响这一张图：IOPS 与吞吐量是同一件事的两种
+              说法，让用户选他习惯的那个，而不是两张图都画。 */}
+          <MetricCard
+            title="磁盘 IO"
+            subtitle={
+              <span className="flex items-center gap-1">
+                {(['throughput', 'iops'] as const).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setDiskMode(m)}
+                    className={
+                      'rounded-control px-1.5 py-0.5 ' +
+                      (diskMode === m ? 'bg-primary/10 text-primary' : 'text-ink-3 hover:text-ink-2')
+                    }
+                  >
+                    {m === 'throughput' ? '吞吐量' : 'IOPS'}
+                  </button>
+                ))}
+              </span>
+            }
+          >
+            {diskMode === 'iops' && !points.some((p) => p.disk_iops) ? (
+              <p className="text-sm text-ink-3">当前没有 IOPS 数据（宿主机侧不按点记录 IOPS）。</p>
+            ) : (
+              <TimeSeriesChart
+                points={points.map((p) => ({
+                  at: p.at,
+                  value:
+                    diskMode === 'iops'
+                      ? (p.disk_iops ?? 0)
+                      : p.disk_read_bytes + p.disk_write_bytes,
+                }))}
+                intervalSeconds={interval}
+                format={diskMode === 'iops' ? formatIOPS : formatBytes}
+                height={90}
+              />
+            )}
+          </MetricCard>
         </div>
       )}
     </div>
   )
+}
+
+function formatIOPS(v: number): string {
+  return `${Math.round(v)} IOPS`
 }
 
 function MetricCard({
@@ -159,7 +203,7 @@ function MetricCard({
   children,
 }: {
   title: string
-  subtitle?: string
+  subtitle?: React.ReactNode
   tone?: string
   children: React.ReactNode
 }) {
@@ -174,14 +218,52 @@ function MetricCard({
   )
 }
 
-/** 供页面直接使用的两个特化版本，避免每处都写 loader。 */
+/**
+ * HostMetricsPanel 带**按物理设备筛选**。
+ *
+ * 整体流量涨了之后第一个问题是"是哪一块涨的"，而只有总量的话这个问题
+ * 无从回答。筛选只影响网络与磁盘两张图——CPU 与内存是整机概念，界面上
+ * 明确写出这一点，避免用户以为筛选没生效。
+ */
 export function HostMetricsPanel({ nodeID, description }: { nodeID: number; description?: string }) {
+  const [device, setDevice] = useState('')
+  const devices = useQuery({
+    queryKey: ['monitor', 'host-devices', nodeID],
+    queryFn: () => monitorApi.hostDevices(nodeID),
+  })
+
+  const items = devices.data?.devices ?? []
+
   return (
-    <MetricsPanel
-      load={(key) => monitorApi.host(nodeID, key)}
-      queryKey={['monitor', 'host', nodeID]}
-      description={description}
-    />
+    <div className="flex flex-col gap-3">
+      {items.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm text-ink-3">设备</span>
+          <select
+            value={device}
+            onChange={(e) => setDevice(e.target.value)}
+            className="h-8 rounded-control border border-line-strong bg-sunken px-2 text-base text-ink"
+          >
+            <option value="">全部汇总</option>
+            {items.map((d) => (
+              <option key={d.name} value={d.name}>
+                {d.name}（{d.kind === 'net' ? '网卡' : '磁盘'}）
+              </option>
+            ))}
+          </select>
+          {device && (
+            <span className="text-xs text-ink-3">
+              已按 {device} 筛选：仅影响网络与磁盘，CPU 与内存仍为整机值。
+            </span>
+          )}
+        </div>
+      )}
+      <MetricsPanel
+        load={(key) => monitorApi.host(nodeID, key, device)}
+        queryKey={['monitor', 'host', nodeID, device]}
+        description={description}
+      />
+    </div>
   )
 }
 

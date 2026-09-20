@@ -24,8 +24,11 @@ import { ImportPage } from '@/views/storage/ImportPage'
 import { MyStoragePage } from '@/views/storage/MyStoragePage'
 import { StorageVolumePage } from '@/views/storage/StorageVolumePage'
 import { SchedulerPage } from '@/views/system/SchedulerPage'
+import { AlertPage } from '@/views/system/AlertPage'
+import { AboutPage } from '@/views/system/AboutPage'
 import { DiagnosticsPage } from '@/views/system/DiagnosticsPage'
 import { VersionPage } from '@/views/system/VersionPage'
+import { ApiDocsPage } from '@/views/apidocs/ApiDocsPage'
 import { LogPage } from '@/views/system/LogPage'
 import { HostTuningPage } from '@/views/system/HostTuningPage'
 import { PlatformCheckPage } from '@/views/system/PlatformCheckPage'
@@ -51,6 +54,7 @@ const LazyConsolePage = lazy(() =>
 )
 /* oxlint-enable react/only-export-components */
 import { VmListPage } from '@/views/vm/VmListPage'
+import { TrashPage } from '@/views/vm/TrashPage'
 
 import { RequireAuth } from './RequireAuth'
 import { RequireInitialized } from './RequireInitialized'
@@ -73,6 +77,7 @@ export const router = createBrowserRouter([
         children: [
           { index: true, element: <DashboardPage /> },
           { path: 'vm', element: <VmListPage /> },
+          { path: 'trash', element: <TrashPage /> },
           { path: 'vm/:id', element: <VmDetailPage /> },
           {
             path: 'vm/:id/console',
@@ -100,8 +105,11 @@ export const router = createBrowserRouter([
           { path: 'storage-pool', element: <StoragePoolPage /> },
           { path: 'storage-volume', element: <StorageVolumePage /> },
           { path: 'scheduler', element: <SchedulerPage /> },
+          { path: 'alerts', element: <AlertPage /> },
           { path: 'diagnostics', element: <DiagnosticsPage /> },
           { path: 'version', element: <VersionPage /> },
+          { path: 'about', element: <AboutPage /> },
+          { path: 'api-docs', element: <ApiDocsPage /> },
           { path: 'logs', element: <LogPage /> },
           { path: 'host-tuning', element: <HostTuningPage /> },
           { path: 'platform-check', element: <PlatformCheckPage /> },

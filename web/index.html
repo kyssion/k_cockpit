@@ -6,6 +6,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark light" />
     <title>K Cockpit</title>
+    <!--
+      在首屏之前定好主题，避免"深色偏好的人先看到一帧浅色"。
+      这段脚本**故意重复**了 useTheme 里的解析规则：React 挂载时再算一次
+      就已经晚了（那时第一帧已经画完）。两处不同步的表现是刷新时闪一下。
+    -->
+    <script>
+      ;(function () {
+        try {
+          var saved = localStorage.getItem('kc.theme') || 'system'
+          var dark =
+            saved === 'dark' ||
+            (saved === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+        } catch (e) {
+          document.documentElement.dataset.theme = 'dark'
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

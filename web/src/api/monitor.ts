@@ -12,8 +12,19 @@ export interface MetricPoint {
   cpu_percent: number
   mem_used_mb: number
   mem_total_mb: number
+  /** 网络与磁盘都是**累计值**：速率由相邻两点相减得到，由界面负责换算。 */
   net_in_bytes: number
   net_out_bytes: number
+  disk_read_bytes: number
+  disk_write_bytes: number
+  /** 仅虚拟机有：宿主机侧没有按点记录的 IOPS。 */
+  disk_iops?: number
+}
+
+/** 一个可筛选的物理设备（网卡 / 磁盘）。 */
+export interface MetricDevice {
+  name: string
+  kind: 'net' | 'disk'
 }
 
 export interface MetricSeries {
@@ -42,11 +53,20 @@ export function rangeOf(key: RangeKey): { from: string; to: string } {
 }
 
 export const monitorApi = {
-  /** 宿主机指标序列（API-230）。 */
-  host: (nodeID: number, key: RangeKey) => {
+  /**
+   * 宿主机指标序列（API-230）。
+   *
+   * `device` 按物理设备筛选，**只影响网络与磁盘**——CPU 与内存是整机概念，
+   * 一块网卡没有自己的内存。
+   */
+  host: (nodeID: number, key: RangeKey, device = '') => {
     const { from, to } = rangeOf(key)
-    return get<MetricSeries>('/api/v1/monitor/host', { node_id: nodeID, from, to })
+    return get<MetricSeries>('/api/v1/monitor/host', { node_id: nodeID, from, to, device })
   },
+
+  /** 该节点上可筛选的物理设备。清单来自最近一次采样。 */
+  hostDevices: (nodeID: number) =>
+    get<{ devices: MetricDevice[] }>('/api/v1/monitor/host/devices', { node_id: nodeID }),
 
   /** 虚拟机指标序列（API-231）。 */
   vm: (vmID: number, key: RangeKey) => {

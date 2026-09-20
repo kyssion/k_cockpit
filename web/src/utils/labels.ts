@@ -18,6 +18,22 @@ export const VM_STATUS_LABEL: Record<VmStatus, string> = {
   unknown: '未知',
 }
 
+/** 状态名的英文版。与上面的中文版**成对维护**：漏一个的表现是那一项在英文
+ *  界面里显示成中文，而不是报错——所以两张表必须挨在一起，改的人才会看到。 */
+export const VM_STATUS_LABEL_EN: Record<VmStatus, string> = {
+  running: 'Running',
+  stopped: 'Stopped',
+  paused: 'Paused',
+  suspended: 'Suspended',
+  error: 'Error',
+  unknown: 'Unknown',
+}
+
+/** vmStatusLabel 按语言取状态名。 */
+export function vmStatusLabel(status: VmStatus, lang: 'zh-CN' | 'en-US'): string {
+  return lang === 'en-US' ? VM_STATUS_LABEL_EN[status] : VM_STATUS_LABEL[status]
+}
+
 /** 虚拟机状态 → 语义色（FRONTEND §4.2：运行中→success，暂停/挂起→warning，已关机/未知→idle）。 */
 export const VM_STATUS_TONE: Record<VmStatus, StatusTone> = {
   running: 'success',
