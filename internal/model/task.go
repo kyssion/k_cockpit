@@ -132,6 +132,12 @@ const (
 
 	// 关机状态下的磁盘扩容。
 	TaskVMDiskResize = "vm.disk.resize"
+	// TaskVMDiskChange 覆盖挂载 / 卸载 / 换总线 / 改 IOPS（F-2-06）。
+	//
+	// 四者共用一个类型，由参数的 action 区分——与 OpVMDiskChange 同一套
+	// 划分：它们下发的是同一份"期望状态"，拆成四个类型会有四个执行器要
+	// 注册，漏一个就是"任务永远不执行"的静默故障。
+	TaskVMDiskChange = "vm.disk.change"
 
 	// 平台自检后的重新下发（f-4-13）。
 	TaskPlatformRepair = "platform.repair"

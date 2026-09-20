@@ -50,6 +50,7 @@ func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task
 		&model.VpcSwitch{}, &model.VMSnapshot{}, &model.SystemSetting{},
 		&model.PortForward{}, &model.VMLock{}, &model.Template{}, &model.VMExport{},
 		&model.VMMigration{}, &model.VMCDROM{}, &model.StorageFile{},
+		&model.StoragePool{}, &model.SecurityGroup{}, &model.InterfaceSecurityGroup{},
 	); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
@@ -58,6 +59,21 @@ func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task
 	// 「节点不存在」这条分支由 TestPowerRejectsMissingNode 单独覆盖。
 	if err := db.Create(&model.Node{ID: 1, Name: "test-node"}).Error; err != nil {
 		t.Fatalf("创建测试节点失败: %v", err)
+	}
+	// 预置一个就绪的存储池：创建虚拟机以「存在可用存储池」为前置条件
+	// （f-2-02 R-001），没有它时创建会被拦在前置校验上，而那不是这些
+	// 用例要覆盖的东西。
+	if err := db.Create(&model.StoragePool{
+		NodeID: 1, DeviceID: "disk-1", Status: model.StoragePoolReady,
+	}).Error; err != nil {
+		t.Fatalf("创建测试存储池失败: %v", err)
+	}
+	// 预置系统网络：与存储池同理，「节点上总有可用网络」是创建的默认前提。
+	if err := db.Create(&model.VpcSwitch{
+		NodeID: 1, Name: "system", BridgeName: "br-system", IsSystem: true,
+		Status: "active",
+	}).Error; err != nil {
+		t.Fatalf("创建测试网络失败: %v", err)
 	}
 
 	recorder := audit.NewRecorder(db)

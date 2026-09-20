@@ -18,9 +18,16 @@ type HostStatsRecord struct {
 	At     time.Time `gorm:"not null;index:idx_host_stats_node_at,priority:2"`
 
 	CPUPercent float64 `gorm:"column:cpu_percent;not null;default:0"`
-	MemUsedMB  int64   `gorm:"not null;default:0"`
-	MemTotalMB int64   `gorm:"not null;default:0"`
-	SwapUsedMB int64   `gorm:"not null;default:0"`
+	// CPUCores 是**宿主机的逻辑核心数**，随采样一起落库。
+	//
+	// 它必须与 CPUPercent 一起存：百分比只有配上"总共有多少核"才能换算成
+	// 承诺占比（工作台的"理论最大量"就是拿已分配的 vCPU 除以它）。此前
+	// 核数只存在于按需探测的结果里，于是任何按历史计算的需求都只能退化成
+	// 逐节点实时探测——节点一多，打开一次页面就是一次探测风暴。
+	CPUCores   int   `gorm:"column:cpu_cores;not null;default:0"`
+	MemUsedMB  int64 `gorm:"not null;default:0"`
+	MemTotalMB int64 `gorm:"not null;default:0"`
+	SwapUsedMB int64 `gorm:"not null;default:0"`
 
 	// Load1/5/15 是三个时间尺度的平均负载。
 	//

@@ -2,12 +2,14 @@ package monitor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"time"
 
 	"gorm.io/gorm"
 
+	"k_cockpit/internal/agent"
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/authz"
 	"k_cockpit/internal/model"
@@ -37,6 +39,20 @@ type Point struct {
 	MemTotalMB  int64   `json:"mem_total_mb"`
 	NetInBytes  int64   `json:"net_in_bytes"`
 	NetOutBytes int64   `json:"net_out_bytes"`
+	// DiskReadBytes / DiskWriteBytes 与网络一样是**累计值**：速率由相邻两点
+	// 相减得到（界面负责）。存累计值的理由同网络——某次采样丢了之后，速率
+	// 只是那一段变长，总量仍然对。
+	DiskReadBytes  int64 `json:"disk_read_bytes"`
+	DiskWriteBytes int64 `json:"disk_write_bytes"`
+	// DiskIOPS 仅对虚拟机有意义（宿主机侧没有按点记录的 IOPS）。
+	DiskIOPS int `json:"disk_iops,omitempty"`
+}
+
+// DeviceView 是一个可筛选的物理设备。
+type DeviceView struct {
+	Name string `json:"name"`
+	// Kind 取值 net / disk。
+	Kind string `json:"kind"`
 }
 
 // 一次查询最多返回多少点。
@@ -47,7 +63,9 @@ type Point struct {
 const maxPoints = 720
 
 // HostSeries 返回宿主机的指标序列（F-8-01）。
-func (s *Service) HostSeries(ctx context.Context, nodeID int64, from, to time.Time) (*Series, error) {
+func (s *Service) HostSeries(
+	ctx context.Context, nodeID int64, from, to time.Time, device string,
+) (*Series, error) {
 	if err := s.ensureNode(ctx, nodeID); err != nil {
 		return nil, err
 	}
@@ -62,13 +80,79 @@ func (s *Service) HostSeries(ctx context.Context, nodeID int64, from, to time.Ti
 	rows = downsampleHost(rows, maxPoints)
 	points := make([]Point, 0, len(rows))
 	for i := range rows {
+		netIn, netOut := rows[i].NetInBytes, rows[i].NetOutBytes
+		read, write := rows[i].DiskReadBytes, rows[i].DiskWriteBytes
+		// 按设备筛选只影响**网络与磁盘**：CPU 与内存是整机概念，一块网卡
+		// 没有自己的内存。此时整机值照常返回，界面上那两张图不变。
+		if device != "" {
+			if d, ok := deviceOf(rows[i].DeviceStats, device); ok {
+				if d.Kind == "net" {
+					netIn, netOut = d.ReadBytes, d.WriteBytes
+				} else {
+					read, write = d.ReadBytes, d.WriteBytes
+				}
+			}
+		}
 		points = append(points, Point{
 			At: rows[i].At.Format(time.RFC3339), CPUPercent: rows[i].CPUPercent,
 			MemUsedMB: rows[i].MemUsedMB, MemTotalMB: rows[i].MemTotalMB,
-			NetInBytes: rows[i].NetInBytes, NetOutBytes: rows[i].NetOutBytes,
+			NetInBytes: netIn, NetOutBytes: netOut,
+			DiskReadBytes: read, DiskWriteBytes: write,
 		})
 	}
 	return &Series{Points: points, Interval: s.intervalOf(len(rows), from, to)}, nil
+}
+
+// HostDevices 列出该节点上可筛选的物理设备。
+//
+// 清单取自**最近一次采样**而不是再去探测一次：设备名几乎不变，而为打开
+// 一个下拉框去节点上现取一次不值得（节点不可达时还会让整个面板失败）。
+func (s *Service) HostDevices(ctx context.Context, nodeID int64) ([]DeviceView, error) {
+	if err := s.ensureNode(ctx, nodeID); err != nil {
+		return nil, err
+	}
+	var row model.HostStatsRecord
+	err := s.db.WithContext(ctx).Where("node_id = ?", nodeID).
+		Order("at DESC").First(&row).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return []DeviceView{}, nil
+	case err != nil:
+		log.Printf("[monitor] 查询设备采样失败 node=%d: %v", nodeID, err)
+		return nil, api.Internal()
+	}
+	var devices []agent.HostDeviceStat
+	if row.DeviceStats == nil || *row.DeviceStats == "" {
+		return []DeviceView{}, nil
+	}
+	if err := json.Unmarshal([]byte(*row.DeviceStats), &devices); err != nil {
+		// 设备明细是**附加信息**：解析不了不能让整个接口失败，否则一个格式
+		// 变更会让监控页整体打不开。
+		log.Printf("[monitor] 解析设备明细失败 node=%d: %v", nodeID, err)
+		return []DeviceView{}, nil
+	}
+	out := make([]DeviceView, 0, len(devices))
+	for i := range devices {
+		out = append(out, DeviceView{Name: devices[i].Name, Kind: devices[i].Kind})
+	}
+	return out, nil
+}
+
+// deviceOf 从一条采样的设备明细里取出指定设备。
+func deviceOf(raw *string, name string) (agent.HostDeviceStat, bool) {
+	if raw == nil || *raw == "" {
+		return agent.HostDeviceStat{}, false
+	}
+	var devices []agent.HostDeviceStat
+	if err := json.Unmarshal([]byte(*raw), &devices); err != nil {
+		return agent.HostDeviceStat{}, false
+	}
+	for i := range devices {
+		if devices[i].Name == name {
+			return devices[i], true
+		}
+	}
+	return agent.HostDeviceStat{}, false
 }
 
 // VMSeries 返回虚拟机的指标序列（F-8-02）。
@@ -93,6 +177,9 @@ func (s *Service) VMSeries(
 			At: rows[i].At.Format(time.RFC3339), CPUPercent: rows[i].CPUPercent,
 			MemUsedMB:  rows[i].MemUsedMB,
 			NetInBytes: rows[i].NetInBytes, NetOutBytes: rows[i].NetOutBytes,
+			DiskReadBytes:  rows[i].DiskReadBytes,
+			DiskWriteBytes: rows[i].DiskWriteBytes,
+			DiskIOPS:       rows[i].DiskIOPS,
 		})
 	}
 	return &Series{Points: points, Interval: s.intervalOf(len(rows), from, to)}, nil

@@ -83,6 +83,13 @@ type VM struct {
 	Present bool `gorm:"not null;default:true"`
 	// LastSyncedAt 是最近一次与虚拟化层对账的时间，用于计算数据新鲜度。
 	LastSyncedAt *time.Time
+	// DeletedAt 是**移入回收站**的时刻，为空表示不在回收站里。
+	//
+	// 这里刻意**不用** gorm.DeletedAt：那个类型会让 GORM 给所有查询自动加上
+	// `deleted_at IS NULL`，于是不在列表里的机器在回收站、审计、历史任务里
+	// 也都查不到——而我们恰恰需要它们。是否"可见"由 present 决定，这一列
+	// 只回答"什么时候删的"。
+	DeletedAt *time.Time
 
 	// --- 控制台配置（f-2-08）---
 
@@ -156,6 +163,14 @@ type VM struct {
 	// --- 磁盘（f-2-05「磁盘与驱动器」子选项卡）---
 
 	DiskFormat string `gorm:"size:16;not null;default:qcow2"`
+	// DiskBus 是系统盘的驱动类型（f-2-02 创建向导）。
+	//
+	// 存成列而不是只在创建时用一次：它描述的是「这台机器用哪种磁盘控制器」
+	// 这个**事实**，详情页与编辑页都要显示它。只留在创建参数里的话，事后
+	// 想换总线就没有依据可改（换总线属于 f-2-06 的能力）。
+	DiskBus string `gorm:"size:16;not null;default:virtio"`
+	// NicModel 是创建时的网卡型号，也是之后新增网口的默认值。
+	NicModel string `gorm:"size:16;not null;default:virtio"`
 	// IOPS 限制：总量与读写分离**互斥**（f-2-06）。
 	//
 	// 三组值都保留在表里：「互斥」是业务规则，由服务层校验；用「表里只存

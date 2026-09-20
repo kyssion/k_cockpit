@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +52,8 @@ type Service struct {
 	// quota 校验存储配额（f-9-02）。**允许为 nil**：未启用配额的部署
 	// 与绝大多数单测都不需要它，此时所有校验直接放行。
 	quota QuotaChecker
+	// computeQuota 校验计算资源配额（vCPU / 内存 / 实例数）。同为可选。
+	computeQuota ComputeQuotaChecker
 
 	// sessions 是控制台会话注册表。惰性创建：不用控制台的服务实例
 	// 不必为此分配内存。
@@ -61,6 +64,21 @@ type Service struct {
 // SetEncryptionKey 设置可逆凭据的加密密钥。
 func (s *Service) SetEncryptionKey(key []byte) {
 	s.encKey = key
+}
+
+// ComputeQuotaChecker 校验计算资源配额（vCPU / 内存 / 实例数）。
+//
+// 用接口而不是直接依赖 computequota 包：配额是**可选能力**（未启用时不应
+// 有任何行为变化），而把它做成必填的构造参数会让所有不关心配额的调用方
+// （包括大批单测）都被迫构造一个空实现。
+type ComputeQuotaChecker interface {
+	// Check 校验能否再新增这些资源；超限返回可定位到维度的错误。
+	Check(ctx context.Context, userID, nodeID int64, addVMs, addVCPU, addMemoryMB int) error
+}
+
+// SetComputeQuota 装配计算配额校验器；不调用即不校验。
+func (s *Service) SetComputeQuota(c ComputeQuotaChecker) {
+	s.computeQuota = c
 }
 
 // NewService 构造虚拟机服务。
@@ -181,9 +199,40 @@ type ListFilter struct {
 	Keyword   string
 	NodeID    int64
 	GroupName string
-	Page      int
-	PageSize  int
-	Viewer    authz.Viewer
+	// SortBy 是排序字段，取值见 sortColumns；空表示按创建顺序（id 倒序）。
+	SortBy string
+	// Desc 为 true 时降序。
+	Desc     bool
+	Page     int
+	PageSize int
+	Viewer   authz.Viewer
+}
+
+// sortColumns 是允许排序的列。
+//
+// **白名单而不是直接拼接传入的字符串**：排序键出现在 ORDER BY 里，而那里
+// 无法用参数绑定——把用户输入原样拼进去就是一处注入。白名单的另一半价值
+// 是它明确了"哪些列可以排"，顺手也挡住了按一个没有索引的大字段排序。
+var sortColumns = map[string]string{
+	"name":       "name",
+	"vcpu":       "vcpu",
+	"memory":     "memory_mb",
+	"disk":       "disk_gb",
+	"ip":         "ip_summary",
+	"created_at": "created_at",
+}
+
+// sortOrder 把排序条件转成 ORDER BY 子句。
+func (f ListFilter) sortOrder() string {
+	col, ok := sortColumns[f.SortBy]
+	if !ok {
+		// 默认按新建在前：列表页的第一屏通常是「刚建的那几台」。
+		return "id DESC"
+	}
+	if f.Desc {
+		return col + " DESC"
+	}
+	return col + " ASC"
 }
 
 // List 返回虚拟机列表与总数。
@@ -203,7 +252,7 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]View, int64, error)
 	}
 
 	var vms []model.VM
-	if err := query.Order("id DESC").
+	if err := query.Order(f.sortOrder()).
 		Offset((page - 1) * pageSize).Limit(pageSize).
 		Find(&vms).Error; err != nil {
 		log.Printf("[vm] 查询虚拟机失败: %v", err)
@@ -288,6 +337,46 @@ type CreateRequest struct {
 	// 模板ID 非零时生效；留空时按 full 处理——**链式克隆必须是显式选择**，
 	// 因为它引入了「父盘没了数据就没了」这个依赖，不该是默认行为。
 	CloneMode string
+
+	// --- 创建向导的其余配置（f-2-02）---
+	//
+	// 键名与 editFields 矩阵一致：创建与编辑共用同一份取值与范围定义，
+	// 校验因此也走同一套（validateCreateConfig），不必再抄一份规则。
+
+	DiskFormat      string
+	DiskBus         string
+	NicModel        string
+	OSType          string
+	MachineType     string
+	Firmware        string
+	SecureBoot      bool
+	BootOrder       string
+	AutoStart       bool
+	Watchdog        string
+	CPUType         string
+	CPULimitPercent int
+	APIC            *bool
+	PAE             *bool
+	FreezeOnStart   bool
+	DiskIOPSTotal   int
+	DiskIOPSRead    int
+	DiskIOPSWrite   int
+
+	// ISOFileID 非零表示创建成功后把该镜像挂到光驱——ISO 安装路径
+	// （f-2-02）：虚拟机建好时空盘无法引导，挂上镜像才能进安装界面。
+	ISOFileID int64
+	// SwitchID 是主网口接入的交换机；为零表示落到节点的系统网络。
+	SwitchID int64
+	// SecurityGroupIDs 是主网口挂载的安全组。
+	SecurityGroupIDs []int64
+
+	// Count 是本次创建的台数（默认 1）。多台时 Name 作为前缀，
+	// 逐台追加 -1 / -2 后缀。
+	Count int
+	// ClientToken 是前端生成的幂等键（f-2-02 Q-003）。
+	ClientToken string
+	// BatchKey 是批量分组键，便于在任务中心按批查看与取消。
+	BatchKey string
 }
 
 // loadTemplateForClone 取出并校验要克隆的模板。
@@ -335,13 +424,34 @@ func (s *Service) loadTemplateForClone(
 	return &tpl, nil
 }
 
-// Create 入队一个创建任务并立即返回。
+// maxCreateBatch 是一次创建的最大台数。
+//
+// 与批量克隆（f-3-02）取同一个上限、同一个理由：每台都要在存储上写一份
+// 完整的镜像，同时进行的台数越多，宿主机的存储被占得越久——表现为**所有**
+// 虚拟机的 IO 都变慢，而用户很难把它和「我刚才点了创建」联系起来。
+const maxCreateBatch = 5
+
+// Create 入队一个创建任务并立即返回。单台场景的便捷入口。
 //
 // **不等待创建完成**：创建虚拟机涉及磁盘镜像复制等耗时操作，同步等待会让
 // 请求超时，也会让用户在界面上干等（f-7-01 R-001）。
 func (s *Service) Create(
 	ctx context.Context, req CreateRequest, owner authz.Viewer, operatorName, clientIP string,
 ) (*model.Task, error) {
+	tasks, err := s.CreateBatch(ctx, req, owner, operatorName, clientIP)
+	if err != nil {
+		return nil, err
+	}
+	return tasks[0], nil
+}
+
+// CreateBatch 入队一台或多台创建任务（f-2-02 R-007：N 台 = N 个独立任务）。
+//
+// 独立任务而不是「一个任务带 N 个子项」：单台失败不该影响其它台的结论，
+// 用户也需要能单独取消某一台。共享的只有 BatchKey——它只用于分组展示。
+func (s *Service) CreateBatch(
+	ctx context.Context, req CreateRequest, owner authz.Viewer, operatorName, clientIP string,
+) ([]*model.Task, error) {
 	req.Name = strings.TrimSpace(req.Name)
 	if !namePattern.MatchString(req.Name) {
 		return nil, api.InvalidParameter("虚拟机名需为 1-63 位字母、数字或连字符，且以字母或数字开头")
@@ -349,31 +459,46 @@ func (s *Service) Create(
 	if req.NodeID <= 0 {
 		return nil, api.InvalidParameter("必须指定节点")
 	}
+	if req.Count <= 0 {
+		req.Count = 1
+	}
+	if req.Count > maxCreateBatch {
+		return nil, api.InvalidParameter(
+			"一次最多创建 " + strconv.Itoa(maxCreateBatch) + " 台：每台都要写入完整镜像，" +
+				"同时进行会让宿主机存储持续占满，表现为所有虚拟机变慢")
+	}
 	if req.VCPU <= 0 || req.MemoryMB <= 0 || req.DiskGB <= 0 {
 		return nil, api.InvalidParameter("CPU、内存与磁盘必须为正数")
 	}
+	if err := validateCreateConfig(req); err != nil {
+		return nil, err
+	}
+	// 前置复核（R-001 / R-014）：打开向导时查过一次，到提交之间资源可能
+	// 已经变化。不复查等于把几分钟前的结论当成事实。
+	if err := s.ensureCreatePrerequisites(ctx, req.NodeID); err != nil {
+		return nil, err
+	}
 
-	// 配额校验放在**入队之前**：入队之后再拒会留下一条注定失败的任务，
-	// 用户还要去任务中心看它为什么失败。
+	// 配额按**整批**校验（R-005）：逐台校验会让第 N 台在写入前才发现超额，
+	// 而那时前面几台已经建好了——用户看到的是「建了一半」。
 	if s.quota != nil {
-		if err := s.quota.Check(ctx, owner.UserID, req.NodeID,
-			int64(req.DiskGB)*1024*1024*1024); err != nil {
+		total := int64(req.DiskGB) * int64(req.Count) * 1024 * 1024 * 1024
+		if err := s.quota.Check(ctx, owner.UserID, req.NodeID, total); err != nil {
+			return nil, err
+		}
+	}
+	// 计算资源配额：磁盘之外还要看核、内存与台数。它们与存储配额是**两类
+	// 约束**（一个按周期累计、一个是存量），因此分开校验、分开报错。
+	if s.computeQuota != nil {
+		if err := s.computeQuota.Check(ctx, owner.UserID, req.NodeID,
+			req.Count, req.VCPU*req.Count, req.MemoryMB*req.Count); err != nil {
 			return nil, err
 		}
 	}
 
-	params := createParams{
-		Name:      req.Name,
-		NodeID:    req.NodeID,
-		VCPU:      req.VCPU,
-		MemoryMB:  req.MemoryMB,
-		DiskGB:    req.DiskGB,
-		Remark:    req.Remark,
-		GroupName: req.GroupName,
-		OwnerID:   owner.UserID,
-	}
-
-	// 从模板克隆（f-3-02）。
+	// 模板在循环外解析一次：同一批用的是同一个模板，逐台回查既浪费、
+	// 也会让「模板在第 3 台时被删」这种中间态产生前后不一致的结果。
+	var tpl *model.Template
 	if req.TemplateID > 0 {
 		// 先归一化再传下去：loadTemplateForClone 收到的是**值拷贝**，
 		// 在它里面改 req.CloneMode 不会影响这里——那样 params.CloneMode
@@ -385,59 +510,182 @@ func (s *Service) Create(
 			return nil, api.InvalidParameter("克隆方式非法，可选 full 或 linked")
 		}
 
-		tpl, err := s.loadTemplateForClone(ctx, req, owner)
+		loaded, err := s.loadTemplateForClone(ctx, req, owner)
 		if err != nil {
 			return nil, err
 		}
-		params.TemplateID = tpl.ID
-		params.CloneMode = req.CloneMode
-		params.TemplateDiskPath = tpl.DiskPathOf()
-		// 磁盘不能小于模板自身：overlay 建在比父盘小的空间上会直接失败，
-		// 而报错信息通常是一句「write beyond end of device」，从它出发
-		// 几乎不可能定位到「你在创建时把磁盘调小了」。
-		if params.DiskGB < tpl.MinDiskGB {
-			params.DiskGB = tpl.MinDiskGB
+		tpl = loaded
+	}
+	// 磁盘不能小于模板自身：overlay 建在比父盘小的空间上会直接失败，
+	// 而报错信息通常是一句「write beyond end of device」，从它出发
+	// 几乎不可能定位到「你在创建时把磁盘调小了」。
+	diskGB := req.DiskGB
+	vcpu, memoryMB := req.VCPU, req.MemoryMB
+	if tpl != nil {
+		if diskGB < tpl.MinDiskGB {
+			diskGB = tpl.MinDiskGB
 		}
-		if params.VCPU <= 0 {
-			params.VCPU = tpl.DefaultCPU
+		if vcpu <= 0 {
+			vcpu = tpl.DefaultCPU
 		}
-		if params.MemoryMB <= 0 {
-			params.MemoryMB = tpl.DefaultMemoryMB
+		if memoryMB <= 0 {
+			memoryMB = tpl.DefaultMemoryMB
 		}
 	}
 
-	// 幂等键由业务语义构成：同名同节点的创建意图只应产生一个任务。
-	// 用时间戳或随机数做键等于没有幂等——重复点击会创建出多台虚拟机。
-	idempotencyKey := fmt.Sprintf("%s:%d:%s", model.TaskVMCreate, req.NodeID, req.Name)
+	tasks := make([]*model.Task, 0, req.Count)
+	for i := 1; i <= req.Count; i++ {
+		name := req.Name
+		if req.Count > 1 {
+			name = fmt.Sprintf("%s-%d", req.Name, i)
+		}
+		// 重名预检（R-010）：等到执行器撞唯一索引才失败，用户已经等了一轮
+		// 任务调度；而且那时他拿到的只是一句「同名」，不知道该改成什么。
+		if err := s.ensureNameAvailable(ctx, req.NodeID, name); err != nil {
+			return nil, err
+		}
 
-	t, err := s.queue.Enqueue(ctx, task.Spec{
-		Type:           model.TaskVMCreate,
-		NodeID:         req.NodeID,
-		ResourceType:   "node",
-		ResourceID:     req.NodeID,
-		ResourceName:   req.Name,
-		OwnerID:        owner.UserID,
-		CreatedBy:      owner.UserID,
-		Params:         params,
-		IdempotencyKey: idempotencyKey,
-	})
-	if err != nil {
-		return nil, err
+		params := newCreateParams(req, name, vcpu, memoryMB, diskGB, tpl, owner.UserID)
+
+		// 幂等键：有 client_token 就用它（同名不同次的创建意图也能区分），
+		// 否则退回「同名同节点」——后者足以挡住最常见的重复点击。
+		idempotencyKey := fmt.Sprintf("%s:%d:%s", model.TaskVMCreate, req.NodeID, name)
+		if req.ClientToken != "" {
+			idempotencyKey = fmt.Sprintf("vm.create:%s:%d", req.ClientToken, i)
+		}
+
+		t, err := s.queue.Enqueue(ctx, task.Spec{
+			Type:           model.TaskVMCreate,
+			NodeID:         req.NodeID,
+			ResourceType:   "node",
+			ResourceID:     req.NodeID,
+			ResourceName:   name,
+			OwnerID:        owner.UserID,
+			CreatedBy:      owner.UserID,
+			Params:         params,
+			IdempotencyKey: idempotencyKey,
+		})
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, t)
+
+		s.record(ctx, audit.Entry{
+			OperatorID:   owner.UserID,
+			OperatorName: operatorName,
+			NodeID:       req.NodeID,
+			ResourceType: "vm",
+			ResourceName: name,
+			Action:       "vm.create.request",
+			Params:       params,
+			AfterState: map[string]any{
+				"task_id": t.ID,
+				// 批量键**只**在这里留痕：任务表里没有为它加列，而排查
+				// 「这一批里哪几台是一起点出来的」靠的就是它。
+				"batch_key": req.BatchKey,
+			},
+			Success:  true,
+			ClientIP: clientIP,
+		})
+	}
+	return tasks, nil
+}
+
+// ensureNameAvailable 校验节点内名称未被占用，冲突时给出可用建议名。
+func (s *Service) ensureNameAvailable(ctx context.Context, nodeID int64, name string) error {
+	var n int64
+	if err := s.db.WithContext(ctx).Model(&model.VM{}).
+		Where("node_id = ? AND name = ?", nodeID, name).Count(&n).Error; err != nil {
+		log.Printf("[vm] 校验重名失败 node=%d name=%s: %v", nodeID, name, err)
+		return api.Internal()
+	}
+	if n == 0 {
+		return nil
+	}
+	return api.Conflict("该节点上已存在同名虚拟机，建议改用「" + s.suggestName(ctx, nodeID, name) + "」")
+}
+
+// suggestName 在给定名称后追加序号，返回第一个未被占用的名字。
+func (s *Service) suggestName(ctx context.Context, nodeID int64, base string) string {
+	for i := 2; i < 100; i++ {
+		candidate := fmt.Sprintf("%s-%d", base, i)
+		var n int64
+		if err := s.db.WithContext(ctx).Model(&model.VM{}).
+			Where("node_id = ? AND name = ?", nodeID, candidate).Count(&n).Error; err != nil {
+			break
+		}
+		if n == 0 {
+			return candidate
+		}
+	}
+	return base + "-new"
+}
+
+// validateCreateConfig 按**编辑矩阵**校验创建参数（f-2-02 R-003）。
+//
+// 规则取自 editFields 而不是在这里另写一份：创建与编辑允许的组合必须是同一
+// 套，两处各写一遍的话，用户会在向导里选中一个编辑页不接受的取值，而错误
+// 要等到保存时才出现。
+func validateCreateConfig(req CreateRequest) error {
+	selected := map[string]string{
+		"disk_format":  req.DiskFormat,
+		"disk_bus":     req.DiskBus,
+		"nic_model":    req.NicModel,
+		"os_type":      req.OSType,
+		"machine_type": req.MachineType,
+		"firmware":     req.Firmware,
+		"boot_order":   req.BootOrder,
+		"watchdog":     req.Watchdog,
+		"cpu_type":     req.CPUType,
+	}
+	numbers := map[string]int{
+		"cpu_limit_percent": req.CPULimitPercent,
+		"disk_iops_total":   req.DiskIOPSTotal,
+		"disk_iops_read":    req.DiskIOPSRead,
+		"disk_iops_write":   req.DiskIOPSWrite,
 	}
 
-	s.record(ctx, audit.Entry{
-		OperatorID:   owner.UserID,
-		OperatorName: operatorName,
-		NodeID:       req.NodeID,
-		ResourceType: "vm",
-		ResourceName: req.Name,
-		Action:       "vm.create.request",
-		Params:       params,
-		AfterState:   map[string]any{"task_id": t.ID},
-		Success:      true,
-		ClientIP:     clientIP,
-	})
-	return t, nil
+	for _, f := range editFields {
+		if !f.InCreate {
+			continue
+		}
+		if f.Kind == EditKindSelect {
+			v := selected[f.Key]
+			if v == "" {
+				continue // 留空：由执行器与数据库默认值兜底
+			}
+			ok := false
+			for _, o := range f.Options {
+				if o.Value == v {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				return api.InvalidParameter(f.Label + "的取值不合法")
+			}
+		}
+		if f.Kind == EditKindNumber {
+			// 规格三件套不在这里校验：它们的最终取值要等模板推导之后
+			// （模板会抬高磁盘下限、补齐 CPU 与内存），在此处按原始请求
+			// 校验会把「由模板带出」的合法创建判为非法。
+			if f.Key == "vcpu" || f.Key == "memory_mb" || f.Key == "disk_gb" {
+				continue
+			}
+			n := numbers[f.Key]
+			if n < f.Min || (f.Max > 0 && n > f.Max) {
+				return api.InvalidParameter(
+					f.Label + "需在 " + strconv.Itoa(f.Min) + " ~ " + strconv.Itoa(f.Max) + " 之间")
+			}
+		}
+	}
+
+	// IOPS 的「总量」与「读写分离」互斥（f-2-06）：同时给两组值会让用户
+	// 以为两个都在生效，而实际只有一组被采用——那是静默的偏差。
+	if req.DiskIOPSTotal > 0 && (req.DiskIOPSRead > 0 || req.DiskIOPSWrite > 0) {
+		return api.InvalidParameter("IOPS 的总量限值与读写分离限值只能设一组")
+	}
+	return nil
 }
 
 // 磁盘处理方式（f-2-01 R-009）。
@@ -592,6 +840,19 @@ func (s *Service) Delete(
 		VMName:         vm.Name,
 		DiskAction:     req.DiskAction,
 		ObservedStatus: current,
+	}
+
+	// 删除即**移入回收站**：记录保留、虚拟化层里还在（磁盘没动），只是从
+	// 列表里消失。彻底删除是回收站里的第二步（见 Purge）。
+	//
+	// 记下删除时刻而不是靠 updated_at 推算：「什么时候删的」是回收站里唯一
+	// 能帮用户判断"这是我上周误删的那台吗"的信息，而 updated_at 会被别的
+	// 写操作刷新。
+	now := time.Now()
+	if err := s.db.WithContext(ctx).Model(&model.VM{}).
+		Where("id = ?", vm.ID).Update("deleted_at", now).Error; err != nil {
+		log.Printf("[vm] 记录删除时刻失败 id=%d: %v", vm.ID, err)
+		// 不阻断：删除本身已经受理，缺一个时刻只是回收站里少一列显示。
 	}
 
 	t, err := s.queue.Enqueue(ctx, task.Spec{

@@ -26,6 +26,7 @@ var (
 // 子选项卡标识，与 FRONTEND.md §5.3.3 的「编辑」子选项卡对应。
 const (
 	EditGroupBasic    = "basic"
+	EditGroupHardware = "hardware"
 	EditGroupDisk     = "disk"
 	EditGroupBoot     = "boot"
 	EditGroupNetwork  = "network"
@@ -73,6 +74,20 @@ type EditField struct {
 	// 把它做成可编辑的输入框会让人以为「勾上它就能让 Guest Agent 跑起来」。
 	ReadOnly bool `json:"read_only"`
 
+	// InCreate 表示这一项出现在**创建向导**里（f-2-02）。
+	//
+	// 创建与编辑共用同一份矩阵：它们的规则是同一套（取值、范围、含义），
+	// 拆成两份之后「创建时允许的组合」与「编辑时允许的组合」迟早分叉，
+	// 而那种分叉只在用户按向导填完、提交被拒时才暴露。
+	InCreate bool `json:"in_create"`
+	// CreateOnly 表示这一项**只在创建时出现**（编辑页不渲染）。
+	//
+	// 典型是系统盘容量：创建后改它要走扩容任务（f-2-06），而不是在编辑
+	// 表单里改一个数字——后者会让用户以为「改成 20 就能缩到 20」。
+	CreateOnly bool `json:"create_only"`
+	// Default 是创建向导里的初始值。
+	Default string `json:"default,omitempty"`
+
 	Options []EditOption `json:"options,omitempty"`
 
 	Min  int    `json:"min,omitempty"`
@@ -89,29 +104,45 @@ type EditField struct {
 var editFields = []EditField{
 	// --- 基础配置 ---
 	{
-		Key: "vcpu", Label: "CPU 核数", Kind: EditKindNumber, Group: EditGroupBasic,
-		RequiresNode: true, RequiresShutdown: true, Min: 1, Max: 64,
-		Hint: "需要关机后修改。",
-	},
-	{
-		Key: "memory_mb", Label: "内存（MB）", Kind: EditKindNumber, Group: EditGroupBasic,
-		RequiresNode: true, RequiresShutdown: true, Min: 128, Max: 262144,
-		Hint: "需要关机后修改。",
-	},
-	{
 		Key: "remark", Label: "备注", Kind: EditKindText, Group: EditGroupBasic,
 		// 纯元数据：只存在于控制面，改它不需要碰虚拟化层，因此没有 RequiresShutdown。
-		RequiresNode: false,
+		RequiresNode: false, InCreate: true,
 	},
 	{
 		Key: "group_name", Label: "分组", Kind: EditKindText, Group: EditGroupBasic,
-		RequiresNode: false,
+		RequiresNode: false, InCreate: true,
+	},
+
+	// --- 硬件规格 ---
+	//
+	// vCPU 与内存单独成组而不是留在「基础配置」里：它们与备注、分组不是
+	// 一类东西——前者受运行态约束（要关机才能改），后者随时可改。混在一组
+	// 会让用户以为「改个备注也要关机」。
+	{
+		Key: "vcpu", Label: "CPU 核数", Kind: EditKindNumber, Group: EditGroupHardware,
+		RequiresNode: true, RequiresShutdown: true, Min: 1, Max: 64,
+		InCreate: true, Default: "2",
+		Hint: "需要关机后修改。",
+	},
+	{
+		Key: "memory_mb", Label: "内存（MB）", Kind: EditKindNumber, Group: EditGroupHardware,
+		RequiresNode: true, RequiresShutdown: true, Min: 128, Max: 262144,
+		InCreate: true, Default: "2048",
+		Hint: "需要关机后修改。",
 	},
 
 	// --- 磁盘与驱动器 ---
 	{
+		// 只在创建时出现：之后改容量要走扩容任务（f-2-06），而不是在表单
+		// 里改一个数字——后者会让用户以为「改成 20 就能缩到 20」。
+		Key: "disk_gb", Label: "系统盘（GB）", Kind: EditKindNumber, Group: EditGroupDisk,
+		RequiresNode: true, CreateOnly: true, InCreate: true, Default: "40",
+		Min: 5, Max: 2000,
+		Hint: "按**配置容量**计入存储配额，而不是实际占用。",
+	},
+	{
 		Key: "disk_format", Label: "磁盘格式", Kind: EditKindSelect, Group: EditGroupDisk,
-		RequiresNode: true, RequiresShutdown: true,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "qcow2",
 		Options: []EditOption{
 			{Value: "qcow2", Label: "qcow2（支持快照与精简置备）"},
 			{Value: "raw", Label: "raw（性能略好，不支持内部快照）"},
@@ -119,25 +150,48 @@ var editFields = []EditField{
 		Hint: "转换磁盘格式需要对整个镜像做一次重写。",
 	},
 	{
+		Key: "disk_bus", Label: "磁盘驱动", Kind: EditKindSelect, Group: EditGroupDisk,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "virtio",
+		Options: []EditOption{
+			{Value: "virtio", Label: "VirtIO（半虚拟化，性能最好）"},
+			{Value: "scsi", Label: "SCSI（可热插拔）"},
+			{Value: "sata", Label: "SATA（兼容性好）"},
+			{Value: "ide", Label: "IDE（老系统兼容）"},
+		},
+		Hint: "Windows 安装盘通常不带 VirtIO 驱动，需先加载驱动或选 SATA。",
+	},
+	{
 		Key: "disk_iops_total", Label: "IOPS 上限（总量）", Kind: EditKindNumber, Group: EditGroupDisk,
-		RequiresNode: true, Min: 0, Max: 1000000,
+		RequiresNode: true, Min: 0, Max: 1000000, InCreate: true, Default: "0",
 		Hint: "0 表示不限制。与读写分离的限值**互斥**，两者只能设一组。",
 	},
 	{
 		Key: "disk_iops_read", Label: "IOPS 上限（读）", Kind: EditKindNumber, Group: EditGroupDisk,
-		RequiresNode: true, Min: 0, Max: 1000000,
+		RequiresNode: true, Min: 0, Max: 1000000, InCreate: true, Default: "0",
 		Hint: "与「总量」互斥。",
 	},
 	{
 		Key: "disk_iops_write", Label: "IOPS 上限（写）", Kind: EditKindNumber, Group: EditGroupDisk,
-		RequiresNode: true, Min: 0, Max: 1000000,
+		RequiresNode: true, Min: 0, Max: 1000000, InCreate: true, Default: "0",
 		Hint: "与「总量」互斥。",
+	},
+
+	// --- 网络设置 ---
+	{
+		Key: "nic_model", Label: "网卡型号", Kind: EditKindSelect, Group: EditGroupNetwork,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "virtio",
+		Options: []EditOption{
+			{Value: "virtio", Label: "VirtIO（半虚拟化，性能最好）"},
+			{Value: "e1000", Label: "e1000（Intel 千兆，兼容性最好）"},
+			{Value: "rtl8139", Label: "rtl8139（老旧系统兼容）"},
+		},
+		Hint: "作为主网卡与之后新增网口的默认型号。",
 	},
 
 	// --- 启动与安全 ---
 	{
 		Key: "os_type", Label: "操作系统类型", Kind: EditKindSelect, Group: EditGroupBoot,
-		RequiresNode: true, RequiresShutdown: true,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "linux",
 		Options: []EditOption{
 			{Value: "linux", Label: "Linux"},
 			{Value: "windows", Label: "Windows"},
@@ -147,7 +201,7 @@ var editFields = []EditField{
 	},
 	{
 		Key: "machine_type", Label: "机器类型", Kind: EditKindSelect, Group: EditGroupBoot,
-		RequiresNode: true, RequiresShutdown: true,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "q35",
 		Options: []EditOption{
 			{Value: "q35", Label: "q35（较新，支持 PCIe）"},
 			{Value: "i440fx", Label: "i440fx（兼容老旧系统）"},
@@ -155,7 +209,7 @@ var editFields = []EditField{
 	},
 	{
 		Key: "firmware", Label: "固件类型", Kind: EditKindSelect, Group: EditGroupBoot,
-		RequiresNode: true, RequiresShutdown: true,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "bios",
 		Options: []EditOption{
 			{Value: "bios", Label: "BIOS（传统）"},
 			{Value: "uefi", Label: "UEFI"},
@@ -164,22 +218,23 @@ var editFields = []EditField{
 	},
 	{
 		Key: "secure_boot", Label: "安全启动", Kind: EditKindBoolean, Group: EditGroupBoot,
-		RequiresNode: true, RequiresShutdown: true,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "false",
 		Hint: "仅在固件为 UEFI 时有效。",
 	},
 	{
 		Key: "boot_order", Label: "引导顺序", Kind: EditKindText, Group: EditGroupBoot,
-		RequiresNode: true, RequiresShutdown: true,
-		Hint: "逗号分隔，如 disk,cdrom,network。",
+		RequiresNode: true, RequiresShutdown: true, InCreate: true,
+		Default: "disk,cdrom,network",
+		Hint:    "逗号分隔，如 disk,cdrom,network。装系统时把 cdrom 放在最前。",
 	},
 	{
 		Key: "auto_start", Label: "随宿主机自启", Kind: EditKindBoolean, Group: EditGroupBoot,
-		RequiresNode: true,
-		Hint:         "宿主机重启后自动启动这台虚拟机。",
+		RequiresNode: true, InCreate: true, Default: "false",
+		Hint: "宿主机重启后自动启动这台虚拟机。",
 	},
 	{
 		Key: "watchdog", Label: "看门狗", Kind: EditKindSelect, Group: EditGroupBoot,
-		RequiresNode: true, RequiresShutdown: true,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "none",
 		Options: []EditOption{
 			{Value: "none", Label: "关闭"},
 			{Value: "reset", Label: "重启虚拟机"},
@@ -192,7 +247,7 @@ var editFields = []EditField{
 	// --- 高级设置 ---
 	{
 		Key: "cpu_type", Label: "CPU 型号", Kind: EditKindSelect, Group: EditGroupAdvanced,
-		RequiresNode: true, RequiresShutdown: true,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "host",
 		Options: []EditOption{
 			{Value: "host", Label: "host（透传宿主机特性，性能最好）"},
 			{Value: "qemu64", Label: "qemu64（通用，便于迁移）"},
@@ -200,24 +255,24 @@ var editFields = []EditField{
 	},
 	{
 		Key: "cpu_limit_percent", Label: "CPU 使用率上限（%）", Kind: EditKindNumber,
-		Group:        EditGroupAdvanced,
+		Group: EditGroupAdvanced, InCreate: true, Default: "0",
 		RequiresNode: true, Min: 0, Max: 100,
 		Hint: "0 表示不限制。",
 	},
 	{
 		Key: "memory_hugepages", Label: "使用内存大页", Kind: EditKindBoolean,
 		Group:        EditGroupAdvanced,
-		RequiresNode: true, RequiresShutdown: true,
+		RequiresNode: true, RequiresShutdown: true, Default: "false",
 		Hint: "需要宿主机预先分配大页内存。",
 	},
 	{
 		Key: "apic", Label: "APIC", Kind: EditKindBoolean, Group: EditGroupAdvanced,
-		RequiresNode: true, RequiresShutdown: true,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "true",
 		Hint: "老系统可能需要关闭。",
 	},
 	{
 		Key: "pae", Label: "PAE", Kind: EditKindBoolean, Group: EditGroupAdvanced,
-		RequiresNode: true, RequiresShutdown: true,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "true",
 		Hint: "老系统可能需要关闭。",
 	},
 	{
@@ -233,7 +288,7 @@ var editFields = []EditField{
 	},
 	{
 		Key: "freeze_on_start", Label: "启动时冻结", Kind: EditKindBoolean,
-		Group:        EditGroupAdvanced,
+		Group: EditGroupAdvanced, InCreate: true, Default: "false",
 		RequiresNode: true,
 		Hint:         "启动后立即暂停，需手动恢复。用于调试。",
 	},
@@ -278,6 +333,7 @@ type EditGroupInfo struct {
 // editGroups 是子选项卡的顺序与名称。
 var editGroups = []EditGroupInfo{
 	{Key: EditGroupBasic, Label: "基础配置"},
+	{Key: EditGroupHardware, Label: "硬件规格"},
 	{Key: EditGroupDisk, Label: "磁盘与驱动器"},
 	{Key: EditGroupBoot, Label: "启动与安全"},
 	{
@@ -358,7 +414,10 @@ var columnToField = map[string]string{
 	"memory_mb":         "MemoryMB",
 	"remark":            "Remark",
 	"group_name":        "GroupName",
+	"disk_gb":           "DiskGB",
 	"disk_format":       "DiskFormat",
+	"disk_bus":          "DiskBus",
+	"nic_model":         "NicModel",
 	"disk_iops_total":   "DiskIOPSTotal",
 	"disk_iops_read":    "DiskIOPSRead",
 	"disk_iops_write":   "DiskIOPSWrite",
@@ -498,6 +557,13 @@ func (s *Service) UpdateConfig(
 		}
 		if f.ReadOnly {
 			return nil, api.InvalidParameter(f.Label + "是由节点上报的状态，不能修改")
+		}
+		// 只在创建时出现的项（如系统盘容量）**不接受在编辑里改**：改容量
+		// 走扩容任务（f-2-06），在那条路径上有「只能扩不能缩」与配额的
+		// 校验。在这里放行会绕过它们。
+		if f.CreateOnly {
+			return nil, api.InvalidParameter(
+				f.Label + "只能在创建时设定，之后请通过扩容调整")
 		}
 
 		value, err := coerceField(f, raw)

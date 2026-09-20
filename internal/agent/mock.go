@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"math"
@@ -390,6 +391,14 @@ func stagePlan(op Operation) [][2]string {
 			{"disk_place", "放入存储池"},
 			{"template_register", "登记为模板"},
 		}
+	case OpVMDiskChange:
+		// 两步：先在宿主机侧改设备，再确认来宾是否需要重启。第二步不是
+		// "多余的一步"——换总线之后来宾里的设备路径会变，那是唯一需要
+		// 明确告知用户的事。
+		return [][2]string{
+			{"device_apply", "应用磁盘配置"},
+			{"guest_check", "检查来宾是否需要重启"},
+		}
 	case OpVMCDROMApply:
 		return [][2]string{
 			{"render_device", "渲染光驱设备"},
@@ -507,9 +516,22 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 	case OpHostStats:
 		// 稳定值：mock 不维护状态，随机值会让曲线自己抖动——那看起来像
 		// 真实负载在变化，而实际什么都没发生。
+		// 设备明细：两块网卡 + 两块磁盘。
+		//
+		// **必须给全**：界面上的「按设备筛选」下拉与分设备曲线都靠它。给空
+		// 的话那条路径永远走不到，而它恰恰是"整体流量涨了，是哪一块涨的"
+		// 唯一能回答问题的入口。
+		devices, _ := json.Marshal([]HostDeviceStat{
+			{Name: "eth0", Kind: "net", ReadBytes: 9_000_000, WriteBytes: 6_000_000},
+			{Name: "eth1", Kind: "net", ReadBytes: 3_300_000, WriteBytes: 2_700_000},
+			{Name: "sda", Kind: "disk", ReadBytes: 30_000_000, WriteBytes: 15_000_000},
+			{Name: "sdb", Kind: "disk", ReadBytes: 15_700_000, WriteBytes: 8_400_000},
+		})
+
 		data[HostStatsDataKey] = HostStats{
-			CPUPercent: 23.5, MemUsedMB: 6144, MemTotalMB: 16384, SwapUsedMB: 0,
-			Load1: 0.8, Load5: 0.6, Load15: 0.5,
+			CPUPercent: 23.5, CPUCores: 8, MemUsedMB: 6144, MemTotalMB: 16384, SwapUsedMB: 0,
+			Devices: string(devices),
+			Load1:   0.8, Load5: 0.6, Load15: 0.5,
 			NetInBytes: 12_345_678, NetOutBytes: 8_765_432,
 			DiskReadBytes: 45_678_901, DiskWriteBytes: 23_456_789,
 			UptimeSeconds: 864_000,
@@ -770,6 +792,48 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 				"（Windows 用「磁盘管理」的「扩展卷」）",
 			Message: "宿主机侧已扩容",
 		}
+
+	case OpVMDiskList:
+		// 两块盘：系统盘（virtio / qcow2，不可卸载）+ 一块数据盘（scsi / raw）。
+		//
+		// 形状必须**完整且稳定**：界面上每一列都靠它渲染，少一个字段的表现
+		// 是那一列空白，而空白会被读成"没数据"而不是"mock 没给"。
+		data[VMDiskListDataKey] = []VMDisk{
+			{
+				Dev: "vda", CapacityGB: 40, ActualBytes: 8_500_000_000,
+				Format: "qcow2", Bus: "virtio",
+				Source:       "/var/lib/k_cockpit/images/" + op.Target + ".qcow2",
+				IsSystem:     true,
+				Hotpluggable: false,
+			},
+			{
+				Dev: "vdb", CapacityGB: 100, ActualBytes: 22_000_000_000,
+				Format: "raw", Bus: "scsi",
+				Source:       "/var/lib/k_cockpit/images/" + op.Target + "-data.img",
+				IsSystem:     false,
+				Hotpluggable: true,
+			},
+		}
+
+	case OpVMDiskChange:
+		// 换总线要重启、挂载后来宾要重新扫描：这两条提示由**动作本身**决定
+		// 而不是随机，界面要按它们给出不同的后续指引。
+		info := VMDiskChangeInfo{Dev: strParam(op.Params, "dev")}
+		switch strParam(op.Params, "action") {
+		case DiskActionBus:
+			info.RebootNeeded = true
+			info.Message = "总线类型已变更，需重启虚拟机后生效"
+		case DiskActionAttach:
+			info.Dev = "vdc"
+			info.GuestRefreshNeeded = true
+			info.Message = "磁盘已挂载为 vdc，来宾内可能需要重新扫描或挂载"
+		case DiskActionDetach:
+			info.GuestRefreshNeeded = true
+			info.Message = "磁盘已卸载；来宾内若有对应挂载点，请先卸载再操作"
+		default:
+			info.Message = "磁盘配置已更新"
+		}
+		data[VMDiskDataKey] = info
 
 	case OpVMXMLApply:
 		action, _ := op.Params["action"].(string)
@@ -1303,6 +1367,15 @@ func mockStats(target string) VMStats {
 //
 // 用运营者能一眼看出是假的格式（前缀 mock-）：如果它长得像真 UUID，
 // 排查问题时很容易把它当成真实虚拟化层的标识。
+// strParam 从操作参数里取字符串；缺失时给空串。
+//
+// mock 不校验参数的合法性——那是控制面的职责。这里只需要一种"读出来"的
+// 方式，而类型断言写得到处都是会让人误以为 mock 在意这些值。
+func strParam(params map[string]any, key string) string {
+	s, _ := params[key].(string)
+	return s
+}
+
 func mockUUID(nodeID int64, name string) string {
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%d/%s", nodeID, name)))
 	h := hex.EncodeToString(sum[:16])

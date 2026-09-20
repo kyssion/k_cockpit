@@ -31,6 +31,39 @@ type createParams struct {
 	GroupName string `json:"group_name"`
 	OwnerID   int64  `json:"owner_id"`
 
+	// --- 创建向导的硬件与系统配置（f-2-02）---
+	//
+	// 键名与矩阵（editFields）一致：这份参数是「那一次创建填了什么」，
+	// 而矩阵是「允许填什么」，两者对齐之后校验才能复用同一套规则。
+
+	DiskFormat      string `json:"disk_format,omitempty"`
+	DiskBus         string `json:"disk_bus,omitempty"`
+	NicModel        string `json:"nic_model,omitempty"`
+	OSType          string `json:"os_type,omitempty"`
+	MachineType     string `json:"machine_type,omitempty"`
+	Firmware        string `json:"firmware,omitempty"`
+	SecureBoot      bool   `json:"secure_boot"`
+	BootOrder       string `json:"boot_order,omitempty"`
+	AutoStart       bool   `json:"auto_start"`
+	Watchdog        string `json:"watchdog,omitempty"`
+	CPUType         string `json:"cpu_type,omitempty"`
+	CPULimitPercent int    `json:"cpu_limit_percent"`
+	APIC            bool   `json:"apic"`
+	PAE             bool   `json:"pae"`
+	FreezeOnStart   bool   `json:"freeze_on_start"`
+	DiskIOPSTotal   int    `json:"disk_iops_total"`
+	DiskIOPSRead    int    `json:"disk_iops_read"`
+	DiskIOPSWrite   int    `json:"disk_iops_write"`
+
+	// ISOFileID 非零表示创建后把该镜像挂到光驱（ISO 安装路径）。
+	ISOFileID int64 `json:"iso_file_id,omitempty"`
+	// SwitchID / SecurityGroupIDs 描述主网口（order 0）。
+	SwitchID         int64   `json:"switch_id,omitempty"`
+	SecurityGroupIDs []int64 `json:"security_group_ids,omitempty"`
+
+	// BatchKey 只用于任务中心的分组展示，不参与下发。
+	BatchKey string `json:"batch_key,omitempty"`
+
 	// --- 从模板克隆（f-3-02）；TemplateID 为零表示从零安装 ---
 
 	TemplateID int64  `json:"template_id,omitempty"`
@@ -40,6 +73,50 @@ type createParams struct {
 	// 不在这里回查模板表：任务可能排很久才执行，那时模板已被删除或改名，
 	// 回查会得到空值或另一份路径。**入队那一刻的路径才是这次要用的**。
 	TemplateDiskPath string `json:"template_disk_path,omitempty"`
+}
+
+// newCreateParams 由创建请求构造任务参数。
+//
+// 单独一个函数而不是在 CreateBatch 里就地拼：参数里有**默认值兜底**
+// （APIC / PAE 未提交时取 true）与模板推导（磁盘不小于模板），这两件事
+// 在受理时定下来并随任务持久化，执行阶段就不必再读模板表——任务可能排
+// 很久，那时模板早就被删了。
+func newCreateParams(
+	req CreateRequest, name string, vcpu, memoryMB, diskGB int, tpl *model.Template, ownerID int64,
+) createParams {
+	p := createParams{
+		Name: name, NodeID: req.NodeID, VCPU: vcpu, MemoryMB: memoryMB, DiskGB: diskGB,
+		Remark: req.Remark, GroupName: req.GroupName, OwnerID: ownerID,
+
+		DiskFormat: req.DiskFormat, DiskBus: req.DiskBus, NicModel: req.NicModel,
+		OSType: req.OSType, MachineType: req.MachineType, Firmware: req.Firmware,
+		SecureBoot: req.SecureBoot, BootOrder: req.BootOrder, AutoStart: req.AutoStart,
+		Watchdog: req.Watchdog, CPUType: req.CPUType, CPULimitPercent: req.CPULimitPercent,
+		// 未提交时取 true：它们默认是开着的，而 bool 的零值无法区分
+		// 「用户关掉了」与「用户没填」。用指针表达三态是这个字段唯一
+		// 正确的方式，代价只是调用方多判一次空。
+		APIC: true, PAE: true,
+		FreezeOnStart:    req.FreezeOnStart,
+		DiskIOPSTotal:    req.DiskIOPSTotal,
+		DiskIOPSRead:     req.DiskIOPSRead,
+		DiskIOPSWrite:    req.DiskIOPSWrite,
+		ISOFileID:        req.ISOFileID,
+		SwitchID:         req.SwitchID,
+		SecurityGroupIDs: req.SecurityGroupIDs,
+		BatchKey:         req.BatchKey,
+	}
+	if req.APIC != nil {
+		p.APIC = *req.APIC
+	}
+	if req.PAE != nil {
+		p.PAE = *req.PAE
+	}
+	if tpl != nil {
+		p.TemplateID = tpl.ID
+		p.CloneMode = req.CloneMode
+		p.TemplateDiskPath = tpl.DiskPathOf()
+	}
+	return p
 }
 
 // CreateExecutor 执行 vm.create 任务。
@@ -85,6 +162,29 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 			"vcpu":      p.VCPU,
 			"memory_mb": p.MemoryMB,
 			"disk_gb":   p.DiskGB,
+
+			// 下面这批是**创建时选的硬件与系统配置**（f-2-02）。随指令一次
+			// 下发而不是创建后再逐项改：后者会产生一条「先按默认建好、再改」
+			// 的中间态，而那台机器在中间态里是**可以被引导的**——用户看到
+			// 它起来了，进去装系统，然后配置被后续改动覆盖。
+			"disk_format":       p.DiskFormat,
+			"disk_bus":          p.DiskBus,
+			"os_type":           p.OSType,
+			"machine_type":      p.MachineType,
+			"firmware":          p.Firmware,
+			"secure_boot":       p.SecureBoot,
+			"boot_order":        p.BootOrder,
+			"auto_start":        p.AutoStart,
+			"watchdog":          p.Watchdog,
+			"cpu_type":          p.CPUType,
+			"cpu_limit_percent": p.CPULimitPercent,
+			"apic":              p.APIC,
+			"pae":               p.PAE,
+			"freeze_on_start":   p.FreezeOnStart,
+			"nic_model":         p.NicModel,
+			"disk_iops_total":   p.DiskIOPSTotal,
+			"disk_iops_read":    p.DiskIOPSRead,
+			"disk_iops_write":   p.DiskIOPSWrite,
 		},
 	}
 	if p.TemplateID > 0 {
@@ -119,6 +219,27 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 		Status:       model.VMStatusUnknown,
 		Present:      true,
 		LastSyncedAt: &now,
+
+		// 创建向导选定的配置（f-2-02）。留空的项由数据库默认值兜底，
+		// 与矩阵里的 Default 保持一致。
+		DiskFormat:      orDefault(p.DiskFormat, "qcow2"),
+		DiskBus:         orDefault(p.DiskBus, "virtio"),
+		NicModel:        orDefault(p.NicModel, "virtio"),
+		OSType:          orDefault(p.OSType, "linux"),
+		MachineType:     orDefault(p.MachineType, "q35"),
+		Firmware:        orDefault(p.Firmware, "bios"),
+		BootOrder:       orDefault(p.BootOrder, "disk,cdrom,network"),
+		Watchdog:        orDefault(p.Watchdog, "none"),
+		CPUType:         orDefault(p.CPUType, "host"),
+		SecureBoot:      p.SecureBoot,
+		AutoStart:       p.AutoStart,
+		CPULimitPercent: p.CPULimitPercent,
+		APIC:            p.APIC,
+		PAE:             p.PAE,
+		FreezeOnStart:   p.FreezeOnStart,
+		DiskIOPSTotal:   p.DiskIOPSTotal,
+		DiskIOPSRead:    p.DiskIOPSRead,
+		DiskIOPSWrite:   p.DiskIOPSWrite,
 	}
 	if p.TemplateID > 0 {
 		vm.TemplateID = &p.TemplateID
@@ -152,8 +273,89 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 		return api.Internal()
 	}
 
+	// 主网口：不建的话这台机器在控制面里「没有网络」——详情页的网络标签
+	// 是空的，静态地址与端口转发也无从绑定（它们都挂在网口上）。
+	if err := e.createPrimaryInterface(ctx, &vm, p); err != nil {
+		// 网口没建成**不算创建失败**：虚拟机已经能用，缺的只是控制面记录。
+		// 把它当失败会让一台实际可用的机器被标成失败，而用户更可能想去
+		// 删掉重来——那才真的丢了东西。
+		log.Printf("[vm] 写入主网口失败 vm=%d: %v", vm.ID, err)
+	}
+
+	// ISO 安装：把镜像挂到光驱，否则新机器空盘无法引导。
+	if p.ISOFileID > 0 {
+		if err := e.attachISO(ctx, &vm, p.ISOFileID); err != nil {
+			log.Printf("[vm] 挂载安装镜像失败 vm=%d: %v", vm.ID, err)
+		}
+	}
+
 	log.Printf("[vm] 已创建虚拟机 id=%d name=%s node=%d task=%d", vm.ID, vm.Name, vm.NodeID, t.ID)
 	return nil
+}
+
+// createPrimaryInterface 写入主网口与安全组关联。
+func (e *CreateExecutor) createPrimaryInterface(
+	ctx context.Context, vm *model.VM, p createParams,
+) error {
+	nic := model.VMInterface{
+		VMID:      vm.ID,
+		NodeID:    vm.NodeID,
+		Order:     0,
+		IsPrimary: true,
+		Model:     vm.NicModel,
+	}
+	if p.SwitchID > 0 {
+		nic.SwitchID = &p.SwitchID
+	}
+	if len(p.SecurityGroupIDs) > 0 {
+		nic.SecurityGroupID = &p.SecurityGroupIDs[0]
+	}
+	if err := e.db.WithContext(ctx).Create(&nic).Error; err != nil {
+		return err
+	}
+	for _, gid := range p.SecurityGroupIDs {
+		row := model.InterfaceSecurityGroup{InterfaceID: nic.ID, GroupID: gid}
+		// 重复挂载同一组不算错误：唯一索引会拦，而这里的语义是「确保挂上」。
+		if err := e.db.WithContext(ctx).
+			Where(model.InterfaceSecurityGroup{InterfaceID: nic.ID, GroupID: gid}).
+			FirstOrCreate(&row).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// attachISO 把镜像挂到新虚拟机的第一个光驱。
+//
+// 与详情页的「挂载」走同一个 agent 操作、同一张表：创建时的这一次挂载
+// 不是特殊路径，它就是一次普通的挂载，只是发生在机器刚建好时。
+func (e *CreateExecutor) attachISO(ctx context.Context, vm *model.VM, fileID int64) error {
+	isoID := fileID
+	row := model.VMCDROM{
+		VMID: vm.ID, NodeID: vm.NodeID, OrderNo: 0,
+		ISOFileID: &isoID, Bus: model.CDROMBusSATA,
+	}
+	if err := e.db.WithContext(ctx).Create(&row).Error; err != nil {
+		return err
+	}
+	_, err := e.agent.Execute(ctx, agent.Operation{
+		Kind:   agent.OpVMCDROMApply,
+		NodeID: vm.NodeID,
+		Target: vm.Name,
+		Params: map[string]any{
+			"action": "attach", "vm_id": vm.ID, "vm_name": vm.Name,
+			"order_no": 0, "bus": row.Bus, "iso_file_id": isoID,
+		},
+	})
+	return err
+}
+
+// orDefault 在值为空时取默认值。
+func orDefault(v, fallback string) string {
+	if v == "" {
+		return fallback
+	}
+	return v
 }
 
 // powerParams 是 vm.power 任务的参数。
@@ -251,6 +453,9 @@ type deleteParams struct {
 	// DiskAction 取值 delete / keep，由用户在界面上显式选择（R-009）。
 	DiskAction     string `json:"disk_action"`
 	ObservedStatus string `json:"observed_status"`
+	// Purge 为 true 表示这是回收站里的**彻底删除**：成功后物理删除记录
+	// 而不只是标记 present = false。
+	Purge bool `json:"purge,omitempty"`
 }
 
 // DeleteExecutor 执行 vm.delete 任务。
@@ -293,6 +498,32 @@ func (e *DeleteExecutor) Run(ctx context.Context, t *model.Task) error {
 	}
 	if !result.Success {
 		return api.ValidationFailed(result.Message)
+	}
+
+	// purge 表示这是回收站里的**彻底删除**：节点上已经删干净了，记录也不
+	// 必再留。它与下面的标记是互斥的两条路。
+	if p.Purge {
+		// 关联行一起清：网口、静态地址、端口转发都以虚拟机为主体，留着
+		// 会变成一串找不到主人的孤儿记录——而它们不会被任何查询用到。
+		for _, table := range []any{
+			&model.VMInterface{}, &model.StaticIP{}, &model.PortForward{},
+			&model.InterfaceSecurityGroup{}, &model.VMLock{}, &model.VMCDROM{},
+		} {
+			table := table
+			if err := e.db.WithContext(ctx).Where("vm_id = ?", p.VMID).
+				Delete(table).Error; err != nil {
+				// 只记日志：主记录删不掉才是问题，关联清理失败不至于让
+				// 整个任务失败——那样用户会以为没删掉而再点一次。
+				log.Printf("[vm] 清理关联记录失败 vm=%d table=%T: %v", p.VMID, table, err)
+			}
+		}
+		if err := e.db.WithContext(ctx).Where("id = ?", p.VMID).
+			Delete(&model.VM{}).Error; err != nil {
+			log.Printf("[vm] 彻底删除虚拟机失败 id=%d: %v", p.VMID, err)
+			return api.Internal()
+		}
+		log.Printf("[vm] 已彻底删除虚拟机 id=%d name=%s task=%d", p.VMID, p.VMName, t.ID)
+		return nil
 	}
 
 	// **不物理删除记录**：审计流水与历史任务都会引用它，删掉会让这些引用

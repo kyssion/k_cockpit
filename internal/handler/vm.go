@@ -38,9 +38,13 @@ func (h *VM) List(ctx context.Context, c *app.RequestContext) {
 		Keyword:   c.Query("keyword"),
 		NodeID:    int64(queryInt(c, "node_id")),
 		GroupName: c.Query("group_name"),
-		Page:      page,
-		PageSize:  pageSize,
-		Viewer:    authz.ViewerOf(c),
+		// 非法或未知的排序键由服务层回落到默认顺序：这里不必再校验一遍，
+		// 两处各判一次的分叉比"多查一次白名单"更贵。
+		SortBy:   c.Query("sort_by"),
+		Desc:     c.Query("order") == "desc",
+		Page:     page,
+		PageSize: pageSize,
+		Viewer:   authz.ViewerOf(c),
 	})
 	if err != nil {
 		api.Fail(c, err)
@@ -82,6 +86,42 @@ type createVMRequest struct {
 	// **链式克隆必须是显式选择**：它引入了「父盘没了数据就没了」这个
 	// 依赖，不该是默认行为。
 	CloneMode string `json:"clone_mode"`
+
+	// --- 创建向导的其余配置（F-2-02）---
+	//
+	// 键名与后端矩阵（editFields）一致，取值与范围由后端校验。
+
+	DiskFormat      string `json:"disk_format"`
+	DiskBus         string `json:"disk_bus"`
+	NicModel        string `json:"nic_model"`
+	OSType          string `json:"os_type"`
+	MachineType     string `json:"machine_type"`
+	Firmware        string `json:"firmware"`
+	SecureBoot      bool   `json:"secure_boot"`
+	BootOrder       string `json:"boot_order"`
+	AutoStart       bool   `json:"auto_start"`
+	Watchdog        string `json:"watchdog"`
+	CPUType         string `json:"cpu_type"`
+	CPULimitPercent int    `json:"cpu_limit_percent"`
+	// APIC / PAE 用指针：它们的默认值是 true，而 bool 的零值无法区分
+	// 「用户关掉了」与「用户没填」。
+	APIC          *bool `json:"apic"`
+	PAE           *bool `json:"pae"`
+	FreezeOnStart bool  `json:"freeze_on_start"`
+	DiskIOPSTotal int   `json:"disk_iops_total"`
+	DiskIOPSRead  int   `json:"disk_iops_read"`
+	DiskIOPSWrite int   `json:"disk_iops_write"`
+
+	ISOFileID        int64   `json:"iso_file_id"`
+	SwitchID         int64   `json:"switch_id"`
+	SecurityGroupIDs []int64 `json:"security_group_ids"`
+
+	// Count 为批量台数（默认 1）；多台时 name 作为前缀。
+	Count int `json:"count"`
+	// ClientToken 是前端生成的幂等键（F-2-02 Q-003）。重复提交返回已有任务。
+	ClientToken string `json:"client_token"`
+	// BatchKey 是批量分组键。
+	BatchKey string `json:"batch_key"`
 }
 
 // Create 创建虚拟机。
@@ -101,7 +141,7 @@ func (h *VM) Create(ctx context.Context, c *app.RequestContext) {
 	user := auth.CurrentUser(c)
 	info := auth.ClientInfoOf(c)
 
-	t, err := h.svc.Create(ctx, vm.CreateRequest{
+	tasks, err := h.svc.CreateBatch(ctx, vm.CreateRequest{
 		Name:       req.Name,
 		NodeID:     req.NodeID,
 		VCPU:       req.VCPU,
@@ -111,16 +151,164 @@ func (h *VM) Create(ctx context.Context, c *app.RequestContext) {
 		GroupName:  req.GroupName,
 		TemplateID: req.TemplateID,
 		CloneMode:  req.CloneMode,
+
+		DiskFormat:      req.DiskFormat,
+		DiskBus:         req.DiskBus,
+		NicModel:        req.NicModel,
+		OSType:          req.OSType,
+		MachineType:     req.MachineType,
+		Firmware:        req.Firmware,
+		SecureBoot:      req.SecureBoot,
+		BootOrder:       req.BootOrder,
+		AutoStart:       req.AutoStart,
+		Watchdog:        req.Watchdog,
+		CPUType:         req.CPUType,
+		CPULimitPercent: req.CPULimitPercent,
+		APIC:            req.APIC,
+		PAE:             req.PAE,
+		FreezeOnStart:   req.FreezeOnStart,
+		DiskIOPSTotal:   req.DiskIOPSTotal,
+		DiskIOPSRead:    req.DiskIOPSRead,
+		DiskIOPSWrite:   req.DiskIOPSWrite,
+
+		ISOFileID:        req.ISOFileID,
+		SwitchID:         req.SwitchID,
+		SecurityGroupIDs: req.SecurityGroupIDs,
+
+		Count:       req.Count,
+		ClientToken: req.ClientToken,
+		BatchKey:    req.BatchKey,
 	}, authz.ViewerOf(c), user.Username, info.IP)
 	if err != nil {
 		api.Fail(c, err)
 		return
 	}
 
+	// 批量时返回**全部任务**：调用方要能逐台跟踪，而只给第一个的话后面
+	// 几台就只能去任务中心翻。
+	ids := make([]int64, 0, len(tasks))
+	for _, t := range tasks {
+		ids = append(ids, t.ID)
+	}
 	api.OK(c, map[string]any{
-		"task_id": t.ID,
-		"status":  t.Status,
+		"task_id":   ids[0],
+		"task_ids":  ids,
+		"count":     len(tasks),
+		"batch_key": req.BatchKey,
 	})
+}
+
+// Trash 列出回收站里的虚拟机（F-2-16）。
+func (h *VM) Trash(ctx context.Context, c *app.RequestContext) {
+	items, err := h.svc.Trash(ctx, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"items": items})
+}
+
+// Restore 把回收站里的机器放回列表（F-2-16）。恢复**不自动开机**。
+func (h *VM) Restore(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+	if err := h.svc.Restore(ctx, id, authz.ViewerOf(c), user.Username, info.IP); err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"ok": true})
+}
+
+// Purge 彻底删除：下发删盘并物理删除记录（F-2-16）。
+func (h *VM) Purge(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+	t, err := h.svc.Purge(ctx, id, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
+// Disks 返回虚拟机的磁盘列表（F-2-06）。
+//
+// 实时向节点查询而不是读表——控制面不持有磁盘记录，存一份就要与虚拟化层
+// 对账，而多一块少一块都不会报错，只会在操作时表现为「改了一块不存在的盘」。
+func (h *VM) Disks(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	view, err := h.svc.Disks(ctx, id, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, view)
+}
+
+type diskChangeRequest struct {
+	Action string `json:"action"`
+	Dev    string `json:"dev"`
+	Bus    string `json:"bus"`
+	FileID int64  `json:"file_id"`
+}
+
+// ChangeDisk 挂载 / 卸载 / 换总线（F-2-06）。
+//
+// 三者都入队：它们要动宿主机上的设备，耗时与风险都不适合同步等待。
+func (h *VM) ChangeDisk(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	var req diskChangeRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.ChangeDisk(ctx, id, vm.DiskChangeRequest{
+		Action: req.Action, Dev: req.Dev, Bus: req.Bus, FileID: req.FileID,
+	}, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
+// CreateForm 返回创建向导的表单元数据（F-2-02 R-002：规则由后端下发）。
+//
+// 按 `node_id` 取上下文：可选值（镜像 / 交换机 / 安全组）都是节点内资源，
+// 换一个节点就是另一份清单。
+func (h *VM) CreateForm(ctx context.Context, c *app.RequestContext) {
+	nodeID := int64(queryInt(c, "node_id"))
+	if nodeID <= 0 {
+		api.Fail(c, api.InvalidParameter("必须指定 node_id"))
+		return
+	}
+	form, err := h.svc.CreateFormOf(ctx, nodeID, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, form)
 }
 
 type powerVMRequest struct {

@@ -199,8 +199,8 @@ func (c *Collector) collectNode(ctx context.Context, node *model.Node) (bool, in
 
 	rec := model.HostStatsRecord{
 		NodeID: node.ID, At: at,
-		CPUPercent: host.CPUPercent,
-		MemUsedMB:  host.MemUsedMB, MemTotalMB: host.MemTotalMB,
+		CPUPercent: host.CPUPercent, CPUCores: host.CPUCores,
+		MemUsedMB: host.MemUsedMB, MemTotalMB: host.MemTotalMB,
 		SwapUsedMB: host.SwapUsedMB,
 		Load1:      host.Load1, Load5: host.Load5, Load15: host.Load15,
 		NetInBytes: host.NetInBytes, NetOutBytes: host.NetOutBytes,

@@ -43,6 +43,7 @@ const (
 	KeyMetricsDaily  = "metrics.daily"
 	KeyRiskCleanup   = "risk.grant.cleanup"
 	KeyQuotaEvaluate = "quota.evaluate"
+	KeyAlertEvaluate = "alert.evaluate"
 )
 
 // Info 描述一个已注册的调度器。

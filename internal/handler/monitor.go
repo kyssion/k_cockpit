@@ -40,6 +40,9 @@ func rangeOf(c *app.RequestContext) (time.Time, time.Time) {
 }
 
 // HostSeries 宿主机的指标序列（API-230）。
+//
+// 可选 `device` 按物理设备筛选：它只影响网络与磁盘两条曲线（CPU 与内存是
+// 整机概念）。「整体流量涨了，是哪一块涨的」只有这一条路径能回答。
 func (h *Monitor) HostSeries(ctx context.Context, c *app.RequestContext) {
 	nodeID := int64(queryInt(c, "node_id"))
 	if nodeID <= 0 {
@@ -48,12 +51,27 @@ func (h *Monitor) HostSeries(ctx context.Context, c *app.RequestContext) {
 	}
 	from, to := rangeOf(c)
 
-	series, err := h.svc.HostSeries(ctx, nodeID, from, to)
+	series, err := h.svc.HostSeries(ctx, nodeID, from, to, c.Query("device"))
 	if err != nil {
 		api.Fail(c, err)
 		return
 	}
 	api.OK(c, series)
+}
+
+// HostDevices 该节点上可筛选的物理设备（API-230b）。
+func (h *Monitor) HostDevices(ctx context.Context, c *app.RequestContext) {
+	nodeID := int64(queryInt(c, "node_id"))
+	if nodeID <= 0 {
+		api.Fail(c, api.InvalidParameter("必须指定 node_id"))
+		return
+	}
+	devices, err := h.svc.HostDevices(ctx, nodeID)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"devices": devices})
 }
 
 // VMSeries 虚拟机的指标序列（API-231）。

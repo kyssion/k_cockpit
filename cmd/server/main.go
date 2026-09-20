@@ -16,13 +16,16 @@ import (
 
 	"k_cockpit/internal/accesscontrol"
 	"k_cockpit/internal/agent"
+	"k_cockpit/internal/alert"
 	"k_cockpit/internal/apikey"
 	"k_cockpit/internal/audit"
 	"k_cockpit/internal/auditlog"
 	"k_cockpit/internal/auth"
 	"k_cockpit/internal/capture"
+	"k_cockpit/internal/computequota"
 	"k_cockpit/internal/config"
 	"k_cockpit/internal/cryptoutil"
+	"k_cockpit/internal/dashboard"
 	"k_cockpit/internal/database"
 	"k_cockpit/internal/diagnostics"
 	"k_cockpit/internal/firewall"
@@ -45,6 +48,7 @@ import (
 	"k_cockpit/internal/router"
 	"k_cockpit/internal/schedule"
 	sched "k_cockpit/internal/scheduler"
+	"k_cockpit/internal/search"
 	"k_cockpit/internal/securitygroup"
 	"k_cockpit/internal/settings"
 	"k_cockpit/internal/storage"
@@ -204,6 +208,8 @@ func main() {
 	queue.Register(platformcheck.NewExecutor(db, mockAgent))
 	// 关机状态下的磁盘扩容。
 	queue.Register(vm.NewDiskResizeExecutor(db, mockAgent))
+	// 磁盘的挂载 / 卸载 / 换总线（F-2-06）。
+	queue.Register(vm.NewDiskChangeExecutor(db, mockAgent))
 	// 链接克隆的磁盘合并为独立镜像。
 	queue.Register(vm.NewIndependentExecutor(db, mockAgent))
 	// 光驱（挂载 / 弹出 / 换盘 / 摘除 / 换总线）。
@@ -257,6 +263,8 @@ func main() {
 	schedRecorder := sched.NewRecorder(db, schedRegistry)
 
 	monitorSvc := monitor.NewService(db)
+	// 工作台概览（F-8-03 / F-8-04）：只读聚合，节点运行态复用节点服务。
+	dashboardSvc := dashboard.NewService(db, nodeSvc)
 	schedulerSvc := sched.NewService(db, schedRegistry)
 	portSecuritySvc := portsecurity.NewService(db, mockAgent, recorder, queue)
 	captureSvc := capture.NewService(db, mockAgent, recorder, queue)
@@ -278,6 +286,11 @@ func main() {
 	// 注入，让「面板上改的阈值」真的影响业务行为——否则那两个设置项就是
 	// 摆设，而「改了不生效」正是 f-9-01 R-002 要消灭的现象。
 	vmSvc := vm.NewService(db, queue, recorder, mockAgent, settingsSvc, quotaSvc)
+	// 计算资源配额（vCPU / 内存 / 实例数）：创建虚拟机时校验，超限即拒绝新建。
+	computeQuotaSvc := computequota.NewService(db, recorder)
+	// 告警中心（F-8-07）。
+	alertSvc := alert.NewService(db)
+	vmSvc.SetComputeQuota(computeQuotaSvc)
 	storageSvc := storage.NewService(db, queue, recorder, mockAgent, settingsSvc)
 
 	// 定时任务（F-7-05）：调度器到点把**已有的任务类型**入队，自己不做任何
@@ -290,6 +303,12 @@ func main() {
 	scheduler.Start(context.Background())
 	quotaLoop.Start(context.Background())
 	defer quotaLoop.Stop()
+	// 告警评估循环（F-8-07）：只读库表，不探测节点——评估每五分钟跑一次，
+	// 在里面探测会让告警系统自己成为负载。
+	alertLoop := alert.NewLoop(alertSvc, alert.DefaultOptions())
+	alertLoop.Observe(schedRecorder)
+	alertLoop.Start(context.Background())
+	defer alertLoop.Stop()
 
 	// 控制台密码需要可逆加密（f-2-08 R-005）：它要交给 agent 参与 VNC 认证，
 	// 因此不能用单向哈希。用途标签与会话签名分开派生。
@@ -332,6 +351,10 @@ func main() {
 		UserAdmin:     userAdminSvc,
 		VMTag:         tagSvc,
 		Monitor:       monitorSvc,
+		Dashboard:     dashboardSvc,
+		ComputeQuota:  computeQuotaSvc,
+		Search:        search.NewService(db),
+		Alert:         alertSvc,
 		Storage:       storageSvc,
 		Network:       networkSvc,
 		Settings:      settingsSvc,

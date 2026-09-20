@@ -12,6 +12,7 @@ import (
 	"gorm.io/gorm"
 
 	"k_cockpit/internal/accesscontrol"
+	"k_cockpit/internal/alert"
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/apikey"
 	"k_cockpit/internal/audit"
@@ -19,6 +20,8 @@ import (
 	"k_cockpit/internal/auth"
 	"k_cockpit/internal/authz"
 	"k_cockpit/internal/capture"
+	"k_cockpit/internal/computequota"
+	"k_cockpit/internal/dashboard"
 	"k_cockpit/internal/diagnostics"
 	"k_cockpit/internal/firewall"
 	"k_cockpit/internal/handler"
@@ -40,6 +43,7 @@ import (
 	"k_cockpit/internal/risk"
 	"k_cockpit/internal/schedule"
 	"k_cockpit/internal/scheduler"
+	"k_cockpit/internal/search"
 	"k_cockpit/internal/securitygroup"
 	"k_cockpit/internal/settings"
 	"k_cockpit/internal/storage"
@@ -126,6 +130,14 @@ type Deps struct {
 	VMTag *vmtag.Service
 	// Monitor 提供指标历史查询（F-8-01 / F-8-02）。
 	Monitor *monitor.Service
+	// Dashboard 提供工作台概览（F-8-03 / F-8-04）。
+	Dashboard *dashboard.Service
+	// ComputeQuota 提供计算资源配额（vCPU / 内存 / 实例数）。
+	ComputeQuota *computequota.Service
+	// Search 提供跨资源检索（F-9-08）。
+	Search *search.Service
+	// Alert 提供告警中心（F-8-07）。
+	Alert *alert.Service
 
 	SecureCookie bool
 	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
@@ -179,6 +191,12 @@ func Register(h *server.Hertz, deps Deps) {
 	userAdminHandler := handler.NewUserAdmin(deps.UserAdmin)
 	tagHandler := handler.NewVMTag(deps.VMTag)
 	monitorHandler := handler.NewMonitor(deps.Monitor)
+	dashboardHandler := handler.NewDashboard(deps.Dashboard)
+	// 接口清单取自**已注册的路由**，因此必须在全部路由注册完成之后构造。
+	apiDocsHandler := handler.NewAPIDocs(h)
+	computeQuotaHandler := handler.NewComputeQuota(deps.ComputeQuota)
+	searchHandler := handler.NewSearch(deps.Search)
+	alertHandler := handler.NewAlert(deps.Alert)
 	importerHandler := handler.NewImporter(deps.Importer)
 
 	// 挂上 API 凭证认证：客户端可用 `Authorization: Bearer kc_...` 代替会话 Cookie。
@@ -276,6 +294,10 @@ func Register(h *server.Hertz, deps Deps) {
 		// 因此这里不需要按角色分路由）。
 		v1.GET("/vms", requireAuth, vmHandler.List)
 		v1.GET("/vms/:id", requireAuth, vmHandler.Get)
+		// 创建表单元数据（F-2-02）：字段、取值、默认值与前置条件**由后端
+		// 下发**，前端不维护第二份规则。放在 /vms/:id 之前注册，避免被
+		// 通配路径吃掉。
+		v1.GET("/vms/create-form", requireAuth, vmHandler.CreateForm)
 		v1.POST("/vms", requireAuth, vmHandler.Create)
 		// 批量操作（F-2-01）：电源与删除。逐台独立受理、可部分成功，
 		// 因此始终返回 200，逐台的结果在响应体里。
@@ -329,8 +351,18 @@ func Register(h *server.Hertz, deps Deps) {
 		// 默认时间范围是最近 1 小时：不给默认值的话，一次不带参数的调用会
 		// 扫全表，而数据攒了几个月之后那会慢到让人以为接口挂了。
 		v1.GET("/monitor/host", requireAuth, adminOnly, monitorHandler.HostSeries)
+		// 可筛选的物理设备（网卡 / 磁盘）。清单来自最近一次采样而不是现探一次：
+		// 设备名几乎不变，而为打开一个下拉框去节点上取一次不值得。
+		v1.GET("/monitor/host/devices", requireAuth, adminOnly, monitorHandler.HostDevices)
 		v1.GET("/vms/:id/monitor", requireAuth, monitorHandler.VMSeries)
 		v1.GET("/vms/:id/runtime", requireAuth, monitorHandler.Runtime)
+
+		// 工作台概览（F-8-03 / F-8-04）。
+		//
+		// **不要求管理员**：租户也有自己的工作台。范围由服务层按视角收敛，
+		// 而不是靠路由层切断——后者的结果是租户打开首页就 403，而首页是
+		// 登录后第一个到达的页面。
+		v1.GET("/dashboard/summary", requireAuth, dashboardHandler.Summary)
 
 		// 虚拟机标签（F-2-16）。
 		//
@@ -539,6 +571,42 @@ func Register(h *server.Hertz, deps Deps) {
 		// 它最常见的用途是「遇到问题先看一眼自己跑的是哪个版本」，把入口
 		// 藏起来只会让用户去别处猜。
 		v1.GET("/version", requireAuth, versionHandler.Get)
+
+		// 接口清单（F-9-07）。
+		//
+		// 它**不标注角色要求**：那个信息无法从路由表里可靠地取出来，而猜
+		// 出来的版本比没有更糟（写错一条就有人照着它去设计调用）。清单只
+		// 保证「有哪些接口、怎么调」，鉴权要求以 docs/03-api/API.md 为准。
+		v1.GET("/api-endpoints", requireAuth, apiDocsHandler.List)
+
+		// 告警中心（F-8-07）：与工作台的横幅同源，但这里要能翻、能确认。
+		v1.GET("/alerts", requireAuth, alertHandler.List)
+		v1.POST("/alerts/:id/ack", requireAuth, alertHandler.Ack)
+		v1.POST("/alerts/ack-all", requireAuth, alertHandler.AckAll)
+
+		// 回收站（F-2-16）：删除只是把机器移出列表，彻底删除是这里的第二步。
+		//
+		// 三步里的前两步都**可逆**：移入回收站不动磁盘，恢复只是把记录放回
+		// 列表。不可逆的（删盘 + 物理删记录）只发生在用户明确点「彻底删除」
+		// 之后。
+		v1.GET("/vms/trash", requireAuth, vmHandler.Trash)
+		v1.POST("/vms/trash/:id/restore", requireAuth, vmHandler.Restore)
+		v1.DELETE("/vms/trash/:id", requireAuth, vmHandler.Purge)
+
+		// 跨资源检索（F-9-08）：按名字找虚拟机 / 节点 / 模板。
+		//
+		// **不限制角色**，但服务层按视角收敛结果——搜索框看着只是"帮你找
+		// 东西"，实际能枚举出整个平台的资源名，因此它是最容易意外泄漏信息
+		// 的入口之一。
+		v1.GET("/search", requireAuth, searchHandler.Query)
+
+		// 计算资源配额（vCPU / 内存 / 实例数）。
+		//
+		// 它与 resource-quotas 是**两类约束**：后者按周期累计、超限后限速或
+		// 断网；这里看的是"此刻占着多少"，超限的处置是**拒绝新建**——把一台
+		// 正在跑的机器限速掉，比不让它再建一台严重得多。
+		v1.GET("/compute-quotas", requireAuth, adminOnly, computeQuotaHandler.List)
+		v1.PUT("/compute-quotas", requireAuth, adminOnly, computeQuotaHandler.Set)
 
 		// 诊断导出（F-9-03）。
 		//
@@ -773,6 +841,13 @@ func Register(h *server.Hertz, deps Deps) {
 		// 关机状态下的磁盘扩容（**只能扩，不能缩**）。运行中的扩容走
 		// 「来宾自动化」里的 expand_disk——那条路会顺带在来宾里扩好文件系统。
 		v1.POST("/vms/:id/disk/resize", requireAuth, vmHandler.ResizeDisk)
+		// 磁盘管理（F-2-06）：列表为实时探测，变更为入队操作。
+		//
+		// 三件事刻意分开成三种资源语义：扩容只能扩（缩容必坏）、卸载不能
+		// 碰系统盘、换总线必须关机。它们各自的约束差别很大，合并成一个
+		// 「改磁盘」接口会把这些约束挤成一句笼统的"不允许"。
+		v1.GET("/vms/:id/disks", requireAuth, vmHandler.Disks)
+		v1.POST("/vms/:id/disks", requireAuth, vmHandler.ChangeDisk)
 		// 把链接克隆的磁盘变为独立盘（**需要停机**）。它存在的理由是
 		// 链接克隆的父盘删不掉，而模板的管理需要能删掉旧的父盘。
 		v1.POST("/vms/:id/disks/independent", requireAuth, vmHandler.MakeDisksIndependent)

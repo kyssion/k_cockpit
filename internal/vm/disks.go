@@ -1,0 +1,413 @@
+package vm
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log"
+	"strconv"
+
+	"gorm.io/gorm"
+
+	"k_cockpit/internal/agent"
+	"k_cockpit/internal/api"
+	"k_cockpit/internal/audit"
+	"k_cockpit/internal/authz"
+	"k_cockpit/internal/model"
+	"k_cockpit/internal/task"
+)
+
+// DiskView 是一块磁盘的视图。
+type DiskView struct {
+	Dev          string `json:"dev"`
+	CapacityGB   int    `json:"capacity_gb"`
+	ActualBytes  int64  `json:"actual_bytes"`
+	Format       string `json:"format"`
+	Bus          string `json:"bus"`
+	Source       string `json:"source"`
+	IsSystem     bool   `json:"is_system"`
+	Hotpluggable bool   `json:"hotpluggable"`
+
+	// 下面三项由**控制面**按运行态算出，而不是节点给。
+	//
+	// 节点只报告事实（这块盘是什么、当前能不能热插拔）；"现在能不能卸载"
+	// 是一个规则，规则只有一份才不会分叉——界面按它禁用按钮，后端按它拒绝
+	// 请求。
+	CanDetach bool `json:"can_detach"`
+	// DetachReason 说明为什么不能卸载。空着的话用户只会看到一个灰按钮，
+	// 而他会去猜是不是权限问题。
+	DetachReason    string `json:"detach_reason,omitempty"`
+	CanChangeBus    bool   `json:"can_change_bus"`
+	ChangeBusReason string `json:"change_bus_reason,omitempty"`
+}
+
+// AttachableDisk 是一个可以挂给虚拟机的虚拟磁盘文件。
+type AttachableDisk struct {
+	ID        int64  `json:"id"`
+	Filename  string `json:"filename"`
+	SizeBytes int64  `json:"size_bytes"`
+}
+
+// DiskListView 是「磁盘」标签页的数据。
+type DiskListView struct {
+	// Status 是探测到的运行态。操作可用性以它为依据，而不是投影——
+	// 投影可能滞后，按它禁用按钮会在机器实际已关机时仍显示"需关机"。
+	Status string     `json:"status"`
+	Disks  []DiskView `json:"disks"`
+	// BusOptions 取自配置矩阵里 disk_bus 的可选值：换总线的下拉框与
+	// 「创建时选的驱动」是同一个集合，不另写一份。
+	BusOptions  []EditOption     `json:"bus_options"`
+	Attachables []AttachableDisk `json:"attachables"`
+}
+
+// DiskChangeRequest 是一次磁盘变更。
+type DiskChangeRequest struct {
+	// Action 取值 attach / detach / bus。
+	Action string
+	// Dev 是目标设备名；attach 时留空（由节点分配）。
+	Dev string
+	// Bus 仅在 action = bus 时有效。
+	Bus string
+	// FileID 仅在 action = attach 时有效，指向 storage_file（category=disk）。
+	FileID int64
+}
+
+// Disks 读取虚拟机的磁盘列表。
+//
+// **实时探测而非读表**：磁盘是虚拟化层的状态，控制面不持有它们的记录。
+// 存一份就要承担对账的责任，而多一块少一块都不会报错——只会在某次操作时
+// 变成"改了一块不存在的盘"。
+func (s *Service) Disks(ctx context.Context, vmID int64, v authz.Viewer) (*DiskListView, error) {
+	vm, err := s.load(ctx, vmID, v)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureNodeUsable(ctx, vm.NodeID); err != nil {
+		return nil, err
+	}
+
+	status, err := s.probeStatus(ctx, vm)
+	if err != nil {
+		return nil, err
+	}
+
+	disks, err := s.probeDisks(ctx, vm)
+	if err != nil {
+		return nil, err
+	}
+
+	attachables, err := s.attachableDisks(ctx, vm.NodeID, v)
+	if err != nil {
+		return nil, err
+	}
+
+	running := status == model.VMStatusRunning
+	out := &DiskListView{
+		Status:      status,
+		Disks:       make([]DiskView, 0, len(disks)),
+		BusOptions:  busOptions(),
+		Attachables: attachables,
+	}
+	for i := range disks {
+		d := &disks[i]
+		view := DiskView{
+			Dev: d.Dev, CapacityGB: d.CapacityGB, ActualBytes: d.ActualBytes,
+			Format: d.Format, Bus: d.Bus, Source: d.Source,
+			IsSystem: d.IsSystem, Hotpluggable: d.Hotpluggable,
+		}
+		switch {
+		case d.IsSystem:
+			view.CanDetach = false
+			view.DetachReason = "系统盘不可卸载"
+		case running && !d.Hotpluggable:
+			view.CanDetach = false
+			view.DetachReason = "运行中且该设备不支持热插拔，需先关机"
+		default:
+			view.CanDetach = true
+		}
+		if running {
+			view.CanChangeBus = false
+			view.ChangeBusReason = "换总线需要关机：来宾里的设备路径会变，运行中改会导致盘符漂移"
+		} else {
+			view.CanChangeBus = true
+		}
+		out.Disks = append(out.Disks, view)
+	}
+	return out, nil
+}
+
+// probeDisks 向节点查询磁盘列表。
+func (s *Service) probeDisks(ctx context.Context, vm *model.VM) ([]agent.VMDisk, error) {
+	result, err := s.agent.Execute(ctx, agent.Operation{
+		Kind:   agent.OpVMDiskList,
+		NodeID: vm.NodeID,
+		Target: vm.Name,
+		Params: map[string]any{"vm_id": vm.ID, "vm_name": vm.Name},
+	})
+	if err != nil {
+		return nil, api.Unavailable("节点不可达，读不到磁盘列表")
+	}
+	if !result.Success {
+		return nil, api.ValidationFailed(result.Message)
+	}
+	raw, ok := result.Data[agent.VMDiskListDataKey]
+	if !ok {
+		// 节点没给数据不算错误——它可能刚升级、还没实现这个操作。给一个空
+		// 列表并让界面显示"节点未提供"，比报 500 更接近事实。
+		return nil, nil
+	}
+	// 走一遍 JSON：同进程时拿到的是结构体，跨进程时是 map，两种形状都要
+	// 能读出来，而分别处理会让其中一条路径永远没被走到。
+	blob, err := json.Marshal(raw)
+	if err != nil {
+		log.Printf("[vm] 序列化磁盘列表失败 vm=%d: %v", vm.ID, err)
+		return nil, api.Internal()
+	}
+	var disks []agent.VMDisk
+	if err := json.Unmarshal(blob, &disks); err != nil {
+		log.Printf("[vm] 解析磁盘列表失败 vm=%d: %v", vm.ID, err)
+		return nil, api.Internal()
+	}
+	return disks, nil
+}
+
+// attachableDisks 列出可挂给虚拟机的虚拟磁盘文件（我的存储里的 disk 类）。
+func (s *Service) attachableDisks(
+	ctx context.Context, nodeID int64, v authz.Viewer,
+) ([]AttachableDisk, error) {
+	var files []model.StorageFile
+	err := s.db.WithContext(ctx).
+		Where(`node_id = ? AND category = ? AND uploaded_at IS NOT NULL
+			AND (user_id IS NULL OR user_id = ?)`, nodeID, model.FileCategoryDisk, v.UserID).
+		Order("filename").Find(&files).Error
+	if err != nil {
+		log.Printf("[vm] 查询可挂载磁盘失败 node=%d: %v", nodeID, err)
+		return nil, api.Internal()
+	}
+	out := make([]AttachableDisk, 0, len(files))
+	for i := range files {
+		out = append(out, AttachableDisk{
+			ID: files[i].ID, Filename: files[i].Filename, SizeBytes: files[i].SizeBytes,
+		})
+	}
+	return out, nil
+}
+
+// busOptions 取磁盘驱动的可选值（与配置矩阵同源）。
+func busOptions() []EditOption {
+	for _, f := range editFields {
+		if f.Key == "disk_bus" {
+			return f.Options
+		}
+	}
+	return nil
+}
+
+// ChangeDisk 受理一次磁盘变更并入队。
+func (s *Service) ChangeDisk(
+	ctx context.Context, vmID int64, req DiskChangeRequest,
+	v authz.Viewer, operatorName, clientIP string,
+) (*model.Task, error) {
+	vm, err := s.load(ctx, vmID, v)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureNodeUsable(ctx, vm.NodeID); err != nil {
+		return nil, err
+	}
+
+	switch req.Action {
+	case agent.DiskActionAttach, agent.DiskActionDetach, agent.DiskActionBus:
+	default:
+		return nil, api.InvalidParameter("不支持的磁盘操作，可选 attach / detach / bus")
+	}
+
+	status, err := s.probeStatus(ctx, vm)
+	if err != nil {
+		return nil, err
+	}
+	running := status == model.VMStatusRunning
+
+	params := map[string]any{
+		"action":  req.Action,
+		"vm_id":   vm.ID,
+		"vm_name": vm.Name,
+		"dev":     req.Dev,
+	}
+
+	switch req.Action {
+	case agent.DiskActionAttach:
+		if req.FileID <= 0 {
+			return nil, api.InvalidParameter("请选择要挂载的磁盘文件")
+		}
+		file, err := s.loadAttachable(ctx, vm.NodeID, req.FileID, v)
+		if err != nil {
+			return nil, err
+		}
+		// 只给相对路径与大小：绝对路径由节点按该用户的存储根拼出来。
+		// 控制面拼路径的话，存储根一换（换盘、迁移）库里的记录就全指错了。
+		params["file_id"] = file.ID
+		params["rel_path"] = file.RelPath
+		params["size_bytes"] = file.SizeBytes
+		params["filename"] = file.Filename
+
+	case agent.DiskActionDetach:
+		if req.Dev == "" {
+			return nil, api.InvalidParameter("请指定要卸载的设备")
+		}
+		// 系统盘的判断**以节点为准**：控制面不持有磁盘记录，凭设备名猜
+		// （vda 一定是系统盘？）会在机型不同的机器上猜错，而猜错的结果是
+		// 一台开不了机的虚拟机。
+		disks, err := s.probeDisks(ctx, vm)
+		if err != nil {
+			return nil, err
+		}
+		for i := range disks {
+			if disks[i].Dev != req.Dev {
+				continue
+			}
+			if disks[i].IsSystem {
+				return nil, api.ValidationFailed("系统盘不可卸载")
+			}
+			if running && !disks[i].Hotpluggable {
+				return nil, api.Conflict(
+					"该设备在运行中不支持热插拔，请先关机再卸载")
+			}
+		}
+
+	case agent.DiskActionBus:
+		if req.Dev == "" {
+			return nil, api.InvalidParameter("请指定要调整的设备")
+		}
+		if !isBusAllowed(req.Bus) {
+			return nil, api.InvalidParameter("不支持的总线类型")
+		}
+		if running {
+			return nil, api.Conflict("换总线需要关机：来宾里的设备路径会变，运行中改会导致盘符漂移")
+		}
+		params["bus"] = req.Bus
+	}
+
+	t, err := s.queue.Enqueue(ctx, task.Spec{
+		Type:         model.TaskVMDiskChange,
+		NodeID:       vm.NodeID,
+		ResourceType: "vm",
+		ResourceID:   vm.ID,
+		ResourceName: vm.Name,
+		OwnerID:      derefOwner(vm.OwnerID),
+		CreatedBy:    v.UserID,
+		Params:       params,
+		// 幂等键带上动作与设备：同一次点击的重复提交只产生一个任务，而
+		// 「卸载 vdb 之后再挂载」不会被误判为重复。
+		IdempotencyKey: "vm.disk.change:" + strconv.Itoa(int(vm.ID)) + ":" + req.Action + ":" + req.Dev,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	s.record(ctx, audit.Entry{
+		OperatorID: v.UserID, OperatorName: operatorName,
+		NodeID: vm.NodeID, ResourceType: "vm",
+		ResourceID: vm.ID, ResourceName: vm.Name,
+		Action: "vm.disk.change",
+		Params: map[string]any{
+			"action": req.Action, "dev": req.Dev,
+			"bus": req.Bus, "file_id": req.FileID,
+		},
+		Success: true, ClientIP: clientIP,
+	})
+	return t, nil
+}
+
+// loadAttachable 取出并校验一个可挂载的磁盘文件。
+func (s *Service) loadAttachable(
+	ctx context.Context, nodeID, fileID int64, v authz.Viewer,
+) (*model.StorageFile, error) {
+	var file model.StorageFile
+	err := s.db.WithContext(ctx).Where("id = ?", fileID).First(&file).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return nil, api.NotFound("磁盘文件不存在")
+	case err != nil:
+		log.Printf("[vm] 查询磁盘文件失败 id=%d: %v", fileID, err)
+		return nil, api.Internal()
+	}
+	// 磁盘文件与虚拟机**必须在同一节点**：它是一份具体的文件，跨节点挂载
+	// 等于让节点去读一个不存在的路径。
+	if file.NodeID != nodeID {
+		return nil, api.ValidationFailed("该磁盘文件不在虚拟机所在的节点上")
+	}
+	if file.Category != model.FileCategoryDisk {
+		return nil, api.ValidationFailed("只能挂载「虚拟磁盘」类型的文件")
+	}
+	if !v.IsAdmin && file.UserID != nil && *file.UserID != v.UserID {
+		return nil, api.NotFound("磁盘文件不存在")
+	}
+	return &file, nil
+}
+
+func isBusAllowed(bus string) bool {
+	for _, o := range busOptions() {
+		if o.Value == bus {
+			return true
+		}
+	}
+	return false
+}
+
+// DiskChangeExecutor 执行磁盘变更。
+type DiskChangeExecutor struct {
+	db    *gorm.DB
+	agent agent.Client
+}
+
+// NewDiskChangeExecutor 构造执行器。
+func NewDiskChangeExecutor(db *gorm.DB, client agent.Client) *DiskChangeExecutor {
+	return &DiskChangeExecutor{db: db, agent: client}
+}
+
+// Type 返回处理的任务类型。
+func (e *DiskChangeExecutor) Type() string { return model.TaskVMDiskChange }
+
+// Run 下发磁盘变更。
+func (e *DiskChangeExecutor) Run(ctx context.Context, t *model.Task) error {
+	if t.Params == nil {
+		return api.Internal()
+	}
+	var p map[string]any
+	if err := json.Unmarshal([]byte(*t.Params), &p); err != nil {
+		log.Printf("[vm] 解析磁盘变更参数失败: %v", err)
+		return api.Internal()
+	}
+	nodeID := int64(0)
+	if t.NodeID != nil {
+		nodeID = *t.NodeID
+	}
+
+	result, err := e.agent.Execute(ctx, agent.Operation{
+		Kind:   agent.OpVMDiskChange,
+		NodeID: nodeID,
+		Target: strOf(p["vm_name"]),
+		Params: p,
+	})
+	if err != nil {
+		return api.Unavailable("节点不可达，磁盘未变更")
+	}
+	if !result.Success {
+		return api.ValidationFailed(result.Message)
+	}
+
+	// 换总线后同步控制面记录：vm.disk_bus 是「这台机器用哪种磁盘控制器」
+	// 的事实，不同步的话详情页显示的是旧值，而节点上已经是新的了。
+	if p["action"] == agent.DiskActionBus {
+		if bus, ok := p["bus"].(string); ok && bus != "" && t.ResourceID != nil {
+			if err := e.db.WithContext(ctx).Model(&model.VM{}).
+				Where("id = ?", *t.ResourceID).Update("disk_bus", bus).Error; err != nil {
+				// 只记日志：节点上已经改好了，控制面这一列只是展示用的投影，
+				// 因为写它失败而把整个任务判失败会让用户以为没生效。
+				log.Printf("[vm] 同步磁盘总线失败 vm=%d: %v", *t.ResourceID, err)
+			}
+		}
+	}
+	return nil
+}
