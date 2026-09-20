@@ -111,7 +111,10 @@ func bindTOTP(t *testing.T, h *server.Hertz, username string) (cookie, secret st
 	}
 
 	// 安全信息已变更，重新登录拿到有效会话。
-	return sessionCookie(t, h, username), secret
+	//
+	// 绑定完成后登录会停在 login_verify（2FA 已启用），因此要把刚绑好的
+	// 密钥交给登录辅助函数去完成这一步。
+	return sessionCookie(t, h, username, secret), secret
 }
 
 // issueRiskGrant 完成一次「触发 428 → 提交验证码 → 换取许可」的完整流程。
@@ -263,8 +266,29 @@ func jsonBody(v any) *ut.Body {
 }
 
 // sessionCookie 执行登录并返回可回传的 Cookie 头值。
-func sessionCookie(t *testing.T, h *server.Hertz, username string) string {
+//
+// 登录不再一定直接给出会话：绑定了验证器的账号停在 login_verify，未做安全
+// 初始化的管理员停在 bootstrap_security。这里把两段后续流程都走完，是因为
+// 对调用方而言"拿到一个能用的会话"才是目的——每个测试各自处理这两步，
+// 只会让真正被验证的内容淹没在样板代码里。
+//
+// totpSecret 可选：账号绑了验证器时必须给出，否则无法算出动态码。
+func sessionCookie(t *testing.T, h *server.Hertz, username string, totpSecret ...string) string {
 	t.Helper()
+
+	cookies := []string{""}
+	perform := func(path string, body any) {
+		w := ut.PerformRequest(h.Engine, "POST", path, jsonBody(body),
+			ut.Header{Key: "Content-Type", Value: "application/json"})
+		if w.Code != consts.StatusOK {
+			t.Fatalf("登录后续阶段 %s 失败: status=%d body=%s", path, w.Code, w.Body.String())
+		}
+		raw := w.Header().Get("Set-Cookie")
+		if raw == "" {
+			t.Fatalf("阶段 %s 未下发 Set-Cookie", path)
+		}
+		cookies[0] = raw
+	}
 
 	w := ut.PerformRequest(h.Engine, "POST", "/api/v1/auth/login", loginBody(username, testPassword),
 		ut.Header{Key: "Content-Type", Value: "application/json"})
@@ -272,11 +296,46 @@ func sessionCookie(t *testing.T, h *server.Hertz, username string) string {
 		t.Fatalf("登录失败: status=%d body=%s", w.Code, w.Body.String())
 	}
 
-	raw := w.Header().Get("Set-Cookie")
-	if raw == "" {
+	var stage struct {
+		Data struct {
+			Stage      string `json:"stage"`
+			LoginToken string `json:"login_token"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &stage); err != nil {
+		t.Fatalf("解析登录响应失败: %v", err)
+	}
+
+	switch stage.Data.Stage {
+	case "ok":
+		cookies[0] = w.Header().Get("Set-Cookie")
+
+	case "login_verify":
+		if len(totpSecret) == 0 || totpSecret[0] == "" {
+			t.Fatal("账号需要二次验证，但测试未提供 TOTP 密钥")
+		}
+		code, err := totp.GenerateCode(totpSecret[0], time.Now())
+		if err != nil {
+			t.Fatalf("计算动态码失败: %v", err)
+		}
+		perform("/api/v1/auth/login/verify", map[string]string{
+			"login_token": stage.Data.LoginToken,
+			"code":        code,
+		})
+
+	case "bootstrap_security":
+		perform("/api/v1/auth/bootstrap/skip", map[string]string{
+			"login_token": stage.Data.LoginToken,
+		})
+
+	default:
+		t.Fatalf("未知的登录阶段: %q", stage.Data.Stage)
+	}
+
+	if cookies[0] == "" {
 		t.Fatal("登录响应未下发 Set-Cookie")
 	}
-	token := tokenFromSetCookie(t, raw)
+	token := tokenFromSetCookie(t, cookies[0])
 	return auth.CookieName + "=" + token
 }
 
@@ -425,8 +484,10 @@ func TestSessionsListAndRevoke(t *testing.T) {
 	_, secret := bindTOTP(t, h, "alice")
 	clearSessions(t, db)
 
-	cookieA := sessionCookie(t, h, "alice")
-	cookieB := sessionCookie(t, h, "alice")
+	// 绑定验证器后登录会停在 login_verify，因此把密钥交给辅助函数去完成
+	// 这一步——本测试关注的是会话列表与撤销，不是二次验证本身。
+	cookieA := sessionCookie(t, h, "alice", secret)
+	cookieB := sessionCookie(t, h, "alice", secret)
 
 	// 撤销会话是高风险操作，必须先通过二次验证（f-10-01）。
 	grant := issueRiskGrant(t, h, cookieA, secret)
@@ -493,7 +554,7 @@ func TestRevokeUnknownSessionReturns404(t *testing.T) {
 	seedUser(t, db, "alice", model.RoleTenant)
 
 	_, secret := bindTOTP(t, h, "alice")
-	cookie := sessionCookie(t, h, "alice")
+	cookie := sessionCookie(t, h, "alice", secret)
 	grant := issueRiskGrant(t, h, cookie, secret)
 
 	w := ut.PerformRequest(h.Engine, "DELETE", "/api/v1/auth/sessions/99999", nil,

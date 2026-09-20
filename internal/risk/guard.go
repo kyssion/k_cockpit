@@ -303,6 +303,52 @@ func (g *Guard) Verify(
 	return grant, nil
 }
 
+// VerifyLoginCode 校验**登录阶段**的二次验证码（TOTP 或恢复码）。
+//
+// 与操作的二次验证（Verify）走同一套验证码校验：恢复码一次性、TOTP 容差
+// 与算法参数只有一处定义。登录环节若另写一份，就会出现「在安全中心能用、
+// 登录时却提示不正确」——而这类差异极难复现。
+//
+// 刻意**不签发许可**：登录阶段的结果是「换发访问会话」，不是一个可复用的
+// 授权；给它签许可等于让一次登录的验证码在之后十分钟内继续生效。
+func (g *Guard) VerifyLoginCode(ctx context.Context, user *model.User, code string) (bool, error) {
+	if user == nil {
+		return false, nil
+	}
+	if allowed, retryAfter := g.limiter.allow(user.ID); !allowed {
+		return false, api.RateLimited(
+			fmt.Sprintf("验证尝试过于频繁，请在 %d 秒后重试", int(retryAfter.Seconds())),
+		)
+	}
+
+	now := time.Now()
+	code = strings.TrimSpace(code)
+
+	if user.TotpEnabled && user.TotpSecretEnc != nil && *user.TotpSecretEnc != "" {
+		plain, err := openSecret(g.encKey, *user.TotpSecretEnc)
+		if err != nil {
+			log.Printf("[risk] 解密 TOTP 密钥失败 user=%d: %v", user.ID, err)
+			return false, api.Internal()
+		}
+		if Verify(user, plain, MethodTOTP, code, now).OK {
+			return true, nil
+		}
+	}
+
+	// 恢复码兜底：它存在的意义就是「验证器不可用时的最后一条路」，
+	// 因此即使 TOTP 已启用也要试——用户此刻可能正是丢了手机才用它。
+	if user.RecoveryCodesHash != nil && *user.RecoveryCodesHash != "" {
+		v := Verify(user, "", MethodRecoveryCode, code, now)
+		if v.OK {
+			if err := g.saveRecoveryCodes(ctx, user.ID, v.UpdatedRecoveryHash); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // RevokeSession 丢弃某会话下的未消费许可（R-013）。
 //
 // 在登出与会话撤销时调用：否则一个已经登出的会话仍可能在许可有效期内

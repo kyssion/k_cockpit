@@ -33,6 +33,7 @@ import (
 	"k_cockpit/internal/hosttuning"
 	"k_cockpit/internal/importer"
 	"k_cockpit/internal/logging"
+	"k_cockpit/internal/mailer"
 	"k_cockpit/internal/monitor"
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/networkbridge"
@@ -225,6 +226,14 @@ func main() {
 	queue.Start(context.Background())
 
 	settingsSvc := settings.NewService(db, recorder)
+	// 邮件（F-1-08）：配置来自系统设置，因此管理员保存 SMTP 后**立即**生效，
+	// 无需重启——"测试邮件"按钮是验证配置是否正确的唯一手段，重启才能生效
+	// 会让那个按钮看起来一直是坏的。
+	mailSvc := mailer.New(settingsSvc.MailConfig)
+	// 登录阶段的二次验证复用 risk 的校验逻辑（恢复码一次性、TOTP 容差），
+	// 接线在 router.Register 内完成——漏接的表现是"登录时永远提示服务
+	// 不可用"，而编译期看不出来。
+	authSvc.SetMailer(mailSvc)
 	// 存储配额（f-9-02）：按用户按节点。
 	quotaSvc := quota.NewService(db, recorder)
 	importerSvc := importer.NewService(db, queue, mockAgent, recorder, quotaSvc)
@@ -358,6 +367,7 @@ func main() {
 		Storage:       storageSvc,
 		Network:       networkSvc,
 		Settings:      settingsSvc,
+		Mailer:        mailSvc,
 		SecureCookie:  cfg.Session.SecureCookie,
 		SimulateAgent: cfg.Agent.Transport == config.AgentTransportMock,
 	})

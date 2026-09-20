@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"golang.org/x/crypto/argon2"
+
+	"k_cockpit/internal/api"
 )
 
 // Argon2id 参数。取值参考 OWASP 建议（19 MiB 内存、2 次迭代、单并行度），
@@ -45,6 +47,23 @@ func HashPassword(password string) (string, error) {
 		base64.RawStdEncoding.EncodeToString(salt),
 		base64.RawStdEncoding.EncodeToString(key),
 	), nil
+}
+
+// ValidateNewPassword 校验新密码是否可接受。
+//
+// 只检查**能被客观判定的**两条：长度下限与不得包含用户名。不做字符种类
+// 打分——那种规则的实际效果是让用户把首字母大写再加个 1，而它带来的摩擦
+// 是真实的。
+func ValidateNewPassword(username, password string) error {
+	if len([]rune(password)) < MinPasswordLength {
+		return api.InvalidParameter("密码长度不得少于 12 个字符")
+	}
+	if username != "" && strings.Contains(
+		strings.ToLower(password), strings.ToLower(username),
+	) {
+		return api.InvalidParameter("密码不能包含用户名")
+	}
+	return nil
 }
 
 // VerifyPassword 校验明文密码与存储的哈希是否匹配。

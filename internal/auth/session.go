@@ -70,17 +70,28 @@ const (
 )
 
 // LoginResult 是登录成功的结果。
+//
+// Stage 告诉前端"下一步做什么"。把它放在结果里而不是让前端自己判断：
+// 前端要同时拿到 totp_enabled、force_password_change、角色等信息才能推出
+// 同一个结论，而任何一个字段的口径变了（例如将来要求普通用户也绑邮箱），
+// 前端就会停在错误的那一步。
 type LoginResult struct {
 	Token     string
 	ExpiresAt time.Time
 	User      *model.User
+	Stage     Stage
 }
 
 // Service 提供认证领域操作。
 type Service struct {
-	db      *gorm.DB
-	tokens  *TokenIssuer
-	audit   *audit.Recorder
+	db     *gorm.DB
+	tokens *TokenIssuer
+	audit  *audit.Recorder
+	// verifier 校验登录阶段的二次验证码，见 LoginFactorVerifier。
+	verifier LoginFactorVerifier
+	// mailer 提供发信能力（邮箱绑定、找回密码）。未注入时相关接口降级为
+	// "尚未配置邮件服务"，而不是 500。
+	mailer  Mailer
 	limiter *Limiter
 	cfg     Config
 }
@@ -155,6 +166,22 @@ func (s *Service) Login(ctx context.Context, username, password string, ci Clien
 		return nil, errInvalidCredentials
 	}
 
+	s.limiter.Success(username)
+	s.recordLogin(ctx, &user, username, ci, true, "")
+
+	// 凭据通过不等于登录完成：还有强制改密、二次验证与安全初始化三个阶段
+	// 要走。见 startFlow。
+	return s.startFlow(ctx, &user, ci)
+}
+
+// issueSession 建立一条会话并签发对应级别的令牌。
+//
+// ttl 为正时用它作为过期时间（登录阶段用），否则沿用空闲/绝对超时规则。
+// 两个阶段共用这一段：它们的差别只在令牌级别与寿命，分开写两份迟早会
+// 在其中一份漏掉指纹或审计。
+func (s *Service) issueSession(
+	ctx context.Context, user *model.User, tokenType string, ttl time.Duration, ci ClientInfo, stage Stage,
+) (*LoginResult, error) {
 	now := time.Now()
 	sessionID, err := newSessionID()
 	if err != nil {
@@ -162,11 +189,14 @@ func (s *Service) Login(ctx context.Context, username, password string, ci Clien
 		return nil, api.Internal()
 	}
 	expiresAt := s.expiry(now, now)
+	if ttl > 0 {
+		expiresAt = now.Add(ttl)
+	}
 
 	session := model.Session{
 		SessionID:    sessionID,
 		UserID:       user.ID,
-		TokenType:    model.TokenTypeAccess,
+		TokenType:    tokenType,
 		Fingerprint:  strPtr(Fingerprint(ci.IP, ci.UserAgent)),
 		ClientIP:     strPtr(ci.IP),
 		UserAgent:    strPtr(truncate(ci.UserAgent, 255)),
@@ -179,16 +209,12 @@ func (s *Service) Login(ctx context.Context, username, password string, ci Clien
 		return nil, api.Internal()
 	}
 
-	token, err := s.tokens.Issue(sessionID, user.ID, model.TokenTypeAccess, expiresAt)
+	token, err := s.tokens.Issue(sessionID, user.ID, tokenType, expiresAt)
 	if err != nil {
 		log.Printf("[auth] 签发令牌失败: %v", err)
 		return nil, api.Internal()
 	}
-
-	s.limiter.Success(username)
-	s.recordLogin(ctx, &user, username, ci, true, "")
-
-	return &LoginResult{Token: token, ExpiresAt: expiresAt, User: &user}, nil
+	return &LoginResult{Token: token, ExpiresAt: expiresAt, User: user, Stage: stage}, nil
 }
 
 // Authenticate 校验令牌与会话状态，返回当前用户与会话。

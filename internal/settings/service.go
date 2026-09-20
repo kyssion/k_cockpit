@@ -13,6 +13,7 @@ import (
 
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/audit"
+	"k_cockpit/internal/mailer"
 	"k_cockpit/internal/model"
 )
 
@@ -194,6 +195,15 @@ func (s *Service) updateOne(
 		return UpdateResult{Key: key, Status: StatusFailed, Message: msg}
 	}
 
+	// 敏感项留空表示「保持原值」。
+	//
+	// 界面拿不到明文（R-009），因此整张表单回传时密码那一栏必然是空的。
+	// 若按普通字段处理，「改一个端口」就会顺手把密码清空，而用户要等下次
+	// 发信失败才发现——那已经是很久以后的事了。
+	if spec.Secret && value == "" {
+		return UpdateResult{Key: key, Status: StatusApplied, Message: "留空，保持原有值不变"}
+	}
+
 	before, err := s.writeValue(ctx, spec, value, operatorID)
 	if err != nil {
 		return UpdateResult{Key: key, Status: StatusFailed, Message: "保存失败"}
@@ -262,6 +272,47 @@ func (s *Service) Rollback(
 	s.record(ctx, operatorID, operatorName, clientIP, key, spec, "settings.rollback", before, restore, true, StatusApplied)
 
 	return s.Get(ctx, key)
+}
+
+// MailConfig 返回当前生效的 SMTP 配置。
+//
+// 放在这里而不是让发信方自己读环境变量，是为了让「环境变量 > 面板设置 >
+// 默认值」的判定只有一份（R-001）：否则界面显示的锁定状态与实际发信用的值
+// 可能来自不同来源，而两者不一致时没有任何提示——用户只会看到邮件发不出去。
+func (s *Service) MailConfig(ctx context.Context) (mailer.Config, error) {
+	stored, err := s.loadStored(ctx)
+	if err != nil {
+		return mailer.Config{}, err
+	}
+
+	// 这里取的是**明文**：敏感项的脱敏只发生在对外响应里（R-009），
+	// 服务端自己要用这个值去登录 SMTP 服务器。
+	get := func(key string) string {
+		spec, ok := SpecOf(key)
+		if !ok {
+			return ""
+		}
+		if v, ok := s.env(spec.EnvVar); ok && v != "" {
+			return v
+		}
+		if row, ok := stored[key]; ok && row.Value != nil {
+			return *row.Value
+		}
+		return spec.Default
+	}
+
+	port, _ := strconv.Atoi(get(KeySMTPPort))
+	timeout, _ := strconv.Atoi(get(KeySMTPTimeout))
+	return mailer.Config{
+		Host:     get(KeySMTPHost),
+		Port:     port,
+		Username: get(KeySMTPUsername),
+		Password: get(KeySMTPPassword),
+		Security: get(KeySMTPSecurity),
+		From:     get(KeySMTPFrom),
+		FromName: get(KeySMTPFromName),
+		Timeout:  time.Duration(timeout) * time.Second,
+	}, nil
 }
 
 // resolve 按优先级计算一个设置项的当前状态（R-001）。

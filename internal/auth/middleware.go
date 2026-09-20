@@ -101,12 +101,26 @@ func (m *Middleware) Require(activity Activity) app.HandlerFunc {
 			c.Abort()
 			return
 		}
+		// 业务接口只接受访问级会话。
+		//
+		// 少了这一句，登录中间态令牌（只差一步就能换到完整权限）就能直接
+		// 调用全部接口——那等于把二次验证变成了一个可以绕过的装饰。
+		if session.TokenType != model.TokenTypeAccess {
+			api.Fail(c, errUnauthenticated)
+			c.Abort()
+			return
+		}
 
 		c.Set(ctxKeyUser, user)
 		c.Set(ctxKeySession, session)
 		c.Next(ctx)
 	}
 }
+
+// 登录中间态的令牌**不放在 Cookie 里**：它只在一次登录流程内有效，
+// 放进 Cookie 会让"登录后还停在改密这一步"的状态在浏览器里长期驻留。
+// 各中间态接口从请求体的 login_token 字段取它，由服务层的
+// AuthenticateStage 校验。
 
 // Optional 返回「有则解析、无则放行」的中间件。
 //

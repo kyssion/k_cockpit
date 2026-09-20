@@ -7,6 +7,12 @@ const (
 	TokenTypeAccess    = "access"    // 可访问全部业务接口
 	TokenTypeLogin     = "login"     // 仅可访问登录后续阶段接口（2FA 等）
 	TokenTypeBootstrap = "bootstrap" // 仅可访问安全初始化接口
+	// TokenTypeReset 是找回密码的重置票据。
+	//
+	// 它**不对应任何会话行**：票据是无状态的（签名里带着用户与有效期），
+	// 用完即止。给它建会话会混进"登录记录"里，用户会在安全中心看到一条
+	// 自己从未发起的会话。
+	TokenTypeReset = "reset"
 )
 
 // Session 对应 user_session 表。

@@ -129,6 +129,16 @@ type SetupInfo struct {
 	// 只在环境变量里的开关，很容易在某次部署中被忘记，而界面上一直显示
 	// 「已绑定」会让所有人以为防护是完整的。
 	DevBypass bool `json:"dev_bypass"`
+
+	// Email 与 EmailVerified 供安全中心展示邮箱绑定状态。
+	//
+	// 邮箱不是二次验证的一种方式，但没有它就没有找回密码这条路——把它
+	// 列在这里，是因为用户判断「我能从事故里恢复吗」时，这两件事是连着
+	// 看的：验证器丢了、邮箱也没绑，就真的进不去了。
+	Email         string `json:"email,omitempty"`
+	EmailVerified bool   `json:"email_verified"`
+	// BootstrapSkipped 表示管理员曾跳过安全初始化引导。
+	BootstrapSkipped bool `json:"bootstrap_skipped"`
 }
 
 // SetupState 返回当前用户的绑定进度。
@@ -144,6 +154,11 @@ func SetupState(user *model.User, devBypass bool) SetupInfo {
 		state.RecoveryCodesOK = true
 		state.RecoveryCodes = len(splitHashes(*user.RecoveryCodesHash))
 	}
+	if user.Email != nil {
+		state.Email = *user.Email
+	}
+	state.EmailVerified = user.EmailVerifiedAt != nil
+	state.BootstrapSkipped = user.BootstrapSkipped
 	return state
 }
 

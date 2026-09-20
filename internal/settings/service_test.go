@@ -334,7 +334,7 @@ func TestApplySuccessKeepsValue(t *testing.T) {
 
 // --- 清单与 Provider ---
 
-func TestUndeliveredGroupIsHidden(t *testing.T) {
+func TestDeliveredGroupIsVisible(t *testing.T) {
 	svc, _ := newTestEnv(t)
 
 	items, groups, err := svc.List(context.Background())
@@ -342,24 +342,91 @@ func TestUndeliveredGroupIsHidden(t *testing.T) {
 		t.Fatalf("查询失败: %v", err)
 	}
 
-	// 未交付标签的设置项**不出现在界面**（R-005），而不是显示为不可用：
-	// 一个灰掉的开关只会让用户以为功能坏了。
+	// 通知分组已随邮件能力交付：它必须出现在界面上，否则管理员无从配置
+	// SMTP，找回密码与邮箱绑定会一起变成「点了没反应」。
+	found := false
 	for _, it := range items {
 		if it.Group == "notification" {
-			t.Errorf("未交付标签的设置项出现在清单中: %s", it.Key)
+			found = true
 		}
 	}
+	if !found {
+		t.Error("已交付的 notification 分组未出现在清单中")
+	}
+	foundGroup := false
 	for _, g := range groups {
 		if g.Key == "notification" {
-			t.Error("未交付的分组出现在 groupes 中")
+			foundGroup = true
 		}
 	}
+	if !foundGroup {
+		t.Error("已交付的 notification 分组未出现在 groups 中")
+	}
 
-	// 未交付的项也不能被更新：它不在清单里，服务端也不该接受。
 	results, _ := svc.Update(context.Background(),
 		map[string]string{"notification.smtp_host": "smtp.example.com"}, 1, "admin", "10.0.0.1")
-	if results[0].Status != settings.StatusFailed {
-		t.Errorf("未交付的设置项应不可更新: %+v", results[0])
+	if results[0].Status != settings.StatusApplied {
+		t.Errorf("已交付的设置项应可更新: %+v", results[0])
+	}
+}
+
+// TestSecretBlankKeepsValue 覆盖整张表单回传的场景。
+//
+// 界面拿不到敏感项的明文，回传时那一栏必然为空。若按普通字段处理，
+// 「改一下端口」就会顺手清空 SMTP 密码。
+func TestSecretBlankKeepsValue(t *testing.T) {
+	svc, _ := newTestEnv(t)
+	ctx := context.Background()
+
+	if _, err := svc.Update(ctx, map[string]string{
+		"notification.smtp_password": "s3cret",
+	}, 1, "admin", "10.0.0.1"); err != nil {
+		t.Fatalf("设置密码失败: %v", err)
+	}
+
+	// 模拟前端整表回传：密码一栏为空。
+	if _, err := svc.Update(ctx, map[string]string{
+		"notification.smtp_host":     "smtp.example.com",
+		"notification.smtp_password": "",
+	}, 1, "admin", "10.0.0.1"); err != nil {
+		t.Fatalf("回传失败: %v", err)
+	}
+
+	cfg, err := svc.MailConfig(ctx)
+	if err != nil {
+		t.Fatalf("读取邮件配置失败: %v", err)
+	}
+	if cfg.Password != "s3cret" {
+		t.Errorf("留空后密码 = %q, 期望保持 s3cret", cfg.Password)
+	}
+	if cfg.Host != "smtp.example.com" {
+		t.Errorf("主机 = %q", cfg.Host)
+	}
+}
+
+func TestMailConfigUsesEnvPriority(t *testing.T) {
+	svc, _ := newTestEnv(t)
+	ctx := context.Background()
+
+	if _, err := svc.Update(ctx, map[string]string{
+		"notification.smtp_host": "panel.example.com",
+		"notification.smtp_port": "2525",
+	}, 1, "admin", "10.0.0.1"); err != nil {
+		t.Fatalf("保存失败: %v", err)
+	}
+
+	// 环境变量优先（R-001）：面板里存的值仍在，但不生效。
+	t.Setenv("SMTP_HOST", "env.example.com")
+
+	cfg, err := svc.MailConfig(ctx)
+	if err != nil {
+		t.Fatalf("读取邮件配置失败: %v", err)
+	}
+	if cfg.Host != "env.example.com" {
+		t.Errorf("主机 = %q, 期望环境变量的 env.example.com", cfg.Host)
+	}
+	if cfg.Port != 2525 {
+		t.Errorf("端口 = %d, 期望面板设置的 2525", cfg.Port)
 	}
 }
 

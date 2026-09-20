@@ -23,8 +23,8 @@ const (
 	GroupVM       = "vm"
 	GroupStorage  = "storage"
 	GroupNetwork  = "network"
-	// GroupNotification 属未交付标签：它的设置项**不出现在界面**，
-	// 而不是显示为不可用——半成品显示出来只会让人以为功能坏了（R-005）。
+	// GroupNotification 是邮件与通知设置。它曾长期是「未交付标签」——
+	// 直到发信能力落地之前，把半成品显示出来只会让人以为功能坏了（R-005）。
 	GroupNotification = "notification"
 )
 
@@ -43,7 +43,10 @@ var groups = []GroupInfo{
 	{Key: GroupVM, Label: "虚拟机", Order: 4},
 	{Key: GroupStorage, Label: "存储", Order: 5},
 	{Key: GroupNetwork, Label: "网络", Order: 6},
-	// 通知标签尚未交付：它不出现在 groups 中，因此其设置项也不会被返回。
+	// 通知标签此前是「未交付标签」：它的设置项不出现在界面（R-005）。
+	// 现在邮件能力已交付，分组随之进入清单——留着那个占位项只会让
+	// 「SMTP 服务器」孤零零地出现，而密码、端口、加密方式都不见了。
+	{Key: GroupNotification, Label: "通知", Order: 7},
 }
 
 // Kind 是设置项的值类型。
@@ -79,6 +82,20 @@ const (
 const (
 	KeyVMStaleThreshold      = "vm.stale_threshold_seconds"
 	KeyStorageStaleThreshold = "storage.stale_threshold_minutes"
+)
+
+// SMTP 相关设置项的键：由 internal/settings 声明、internal/mailer 消费。
+// 跨模块的键必须是常量——写错一个字符不会报错，只会表现为「界面改了、
+// 发信没变」，而这类问题在测试环境里几乎不会暴露。
+const (
+	KeySMTPHost     = "notification.smtp_host"
+	KeySMTPPort     = "notification.smtp_port"
+	KeySMTPSecurity = "notification.smtp_security"
+	KeySMTPUsername = "notification.smtp_username"
+	KeySMTPPassword = "notification.smtp_password"
+	KeySMTPFrom     = "notification.smtp_from"
+	KeySMTPFromName = "notification.smtp_from_name"
+	KeySMTPTimeout  = "notification.smtp_timeout_seconds"
 )
 
 // Option 是枚举型的可选项。
@@ -238,19 +255,109 @@ var specs = []Spec{
 		},
 	},
 
-	// --- 未交付标签（不会出现在清单中）---
+	// --- 通知（邮件）---
 	//
-	// 保留它的意义在于：当通知能力交付时，只需把分组加入 groups 并补上
-	// 设置项，机制无需改动。
+	// 整组的生效方式都是「即时」：SMTP 配置只被发信代码读取，没有常驻连接
+	// 需要重建。标成「需重启」会让「测试邮件」按钮在保存后仍然发不出去，
+	// 而那正是用户验证配置是否正确的唯一手段。
 	{
 		Key:          "notification.smtp_host",
 		Group:        GroupNotification,
 		Label:        "SMTP 服务器",
+		Description:  "发信服务器主机名，例如 smtp.example.com。",
 		Kind:         KindString,
 		Default:      "",
 		EnvVar:       "SMTP_HOST",
-		Apply:        ApplyRestart,
-		Rollbackable: false,
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+	},
+	{
+		Key:          "notification.smtp_port",
+		Group:        GroupNotification,
+		Label:        "SMTP 端口",
+		Description:  "常用端口：25（明文）、587（STARTTLS）、465（隐式 TLS）。",
+		Kind:         KindInt,
+		Default:      "587",
+		EnvVar:       "SMTP_PORT",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+		MinValue:     intPtr(1),
+		MaxValue:     intPtr(65535),
+	},
+	{
+		Key:          "notification.smtp_security",
+		Group:        GroupNotification,
+		Label:        "加密方式",
+		Description:  "服务器不支持所选方式时发信会直接失败，不会退回明文。",
+		Kind:         KindSelect,
+		Default:      "starttls",
+		EnvVar:       "SMTP_SECURITY",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+		Options: []Option{
+			{Value: "starttls", Label: "STARTTLS（推荐）"},
+			{Value: "tls", Label: "隐式 TLS"},
+			{Value: "none", Label: "不加密（仅可信内网）"},
+		},
+	},
+	{
+		Key:          "notification.smtp_username",
+		Group:        GroupNotification,
+		Label:        "SMTP 用户名",
+		Description:  "留空表示服务器不需要认证。",
+		Kind:         KindString,
+		Default:      "",
+		EnvVar:       "SMTP_USERNAME",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+	},
+	{
+		Key:          "notification.smtp_password",
+		Group:        GroupNotification,
+		Label:        "SMTP 密码",
+		Description:  "保存后不再回传明文；留空表示保持当前密码不变。",
+		Kind:         KindString,
+		Default:      "",
+		EnvVar:       "SMTP_PASSWORD",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+		Secret:       true,
+	},
+	{
+		Key:          "notification.smtp_from",
+		Group:        GroupNotification,
+		Label:        "发件邮箱",
+		Description:  "收件人看到的发件地址。",
+		Kind:         KindString,
+		Default:      "",
+		EnvVar:       "SMTP_FROM",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+	},
+	{
+		Key:          "notification.smtp_from_name",
+		Group:        GroupNotification,
+		Label:        "发件人名称",
+		Description:  "留空则只显示发件邮箱。",
+		Kind:         KindString,
+		Default:      "K Cockpit",
+		EnvVar:       "SMTP_FROM_NAME",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+	},
+	{
+		Key:          "notification.smtp_timeout_seconds",
+		Group:        GroupNotification,
+		Label:        "连接超时",
+		Description:  "连接与读写的超时时间，网络较差时可适当调大。",
+		Kind:         KindInt,
+		Default:      "15",
+		EnvVar:       "SMTP_TIMEOUT_SECONDS",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+		MinValue:     intPtr(5),
+		MaxValue:     intPtr(120),
+		Unit:         "秒",
 	},
 }
 

@@ -15,12 +15,48 @@ import (
 // 权限：**仅管理员**可读写（R-014）。设置变更不得成为绕过权限的通道，
 // 因此 `tenant` 连可见性都没有——该要求在路由注册时声明。
 type Settings struct {
-	svc *settings.Service
+	svc  *settings.Service
+	mail Mailer
 }
 
-// NewSettings 构造设置接口。
-func NewSettings(svc *settings.Service) *Settings {
-	return &Settings{svc: svc}
+// Mailer 是发信能力的最小接口（由 internal/mailer 实现）。
+type Mailer interface {
+	SendTest(ctx context.Context, to string) error
+}
+
+// NewSettings 构造设置接口。mail 可为 nil，此时测试发信返回"未配置"。
+func NewSettings(svc *settings.Service, mail Mailer) *Settings {
+	return &Settings{svc: svc, mail: mail}
+}
+
+type testMailRequest struct {
+	To string `json:"to"`
+}
+
+// TestMail 发送一封测试邮件（F-1-08）。
+//
+// 用户验证 SMTP 配置**只有这一个手段**：配置写错时的表现是"什么都没发生"，
+// 直到哪天有人找回密码才发现——那时已经晚了。因此失败必须给出邮件服务器
+// 返回的真实原因，而不是一句"发送失败"。
+func (h *Settings) TestMail(ctx context.Context, c *app.RequestContext) {
+	var req testMailRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+	if req.To == "" {
+		api.Fail(c, api.InvalidParameter("请填写接收测试邮件的邮箱"))
+		return
+	}
+	if h.mail == nil {
+		api.Fail(c, api.Unavailable("邮件服务不可用"))
+		return
+	}
+	if err := h.mail.SendTest(ctx, req.To); err != nil {
+		api.Fail(c, api.Unavailable("测试邮件发送失败："+err.Error()))
+		return
+	}
+	api.OK(c, map[string]any{"sent": true})
 }
 
 // List 返回设置项清单（API-036）。

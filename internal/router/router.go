@@ -29,6 +29,7 @@ import (
 	"k_cockpit/internal/hosttuning"
 	"k_cockpit/internal/importer"
 	"k_cockpit/internal/logging"
+	"k_cockpit/internal/mailer"
 	"k_cockpit/internal/monitor"
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/networkbridge"
@@ -69,6 +70,8 @@ type Deps struct {
 	Network   *network.Service
 	Settings  *settings.Service
 	Task      *task.Queue
+	// Mailer 提供发信能力（F-1-08）。为 nil 时测试发信接口返回不可用。
+	Mailer *mailer.Service
 	// Risk 强制高风险操作的二次验证（f-10-01）。受保护的操作在 handler
 	// 入口调用它，清单本身集中在 internal/risk。
 	Risk *risk.Guard
@@ -153,6 +156,13 @@ func Register(h *server.Hertz, deps Deps) {
 
 	h.GET("/health", handler.Health(deps.DB))
 
+	// 登录阶段的二次验证复用 risk 的校验逻辑（恢复码一次性、TOTP 容差与
+	// 算法参数只有一处定义）。接线放在这里而不是启动脚本里：漏接的表现是
+	// 「登录时永远提示服务不可用」，而它不会在编译期暴露。
+	if deps.Auth != nil && deps.Risk != nil {
+		deps.Auth.SetLoginVerifier(deps.Risk)
+	}
+
 	authHandler := handler.NewAuth(deps.Auth, deps.SecureCookie, deps.Risk)
 	setupHandler := handler.NewSetup(deps.Bootstrap, deps.Auth, deps.SecureCookie)
 	nodeHandler := handler.NewNode(deps.Node, deps.SimulateAgent, deps.Risk)
@@ -163,7 +173,7 @@ func Register(h *server.Hertz, deps Deps) {
 	scheduleHandler := handler.NewSchedule(deps.Schedule, deps.Risk)
 	storageHandler := handler.NewStorage(deps.Storage, deps.Risk)
 	networkHandler := handler.NewNetwork(deps.Network)
-	settingsHandler := handler.NewSettings(deps.Settings)
+	settingsHandler := handler.NewSettings(deps.Settings, deps.Mailer)
 	consoleHandler := handler.NewConsole(deps.VM, deps.Risk)
 	templateHandler := handler.NewTemplate(deps.Template)
 	quotaHandler := handler.NewQuota(deps.Quota)
@@ -218,6 +228,25 @@ func Register(h *server.Hertz, deps Deps) {
 		// 公开接口：获取凭据的入口，必须在 API.md 中显式标记为公开。
 		v1.POST("/auth/login", authHandler.Login)
 
+		// 登录后续阶段（F-1-08）。
+		//
+		// **不挂 requireAuth**：它们用请求体里的 login_token 认证，而那个
+		// 令牌是中间态（五分钟、只差一步到完整权限），走 Cookie 会话中间
+		// 件会把它当成完整会话放过去。
+		v1.POST("/auth/login/verify", authHandler.VerifyLogin)
+		v1.POST("/auth/login/password", authHandler.ForceChangePassword)
+		v1.POST("/auth/bootstrap/skip", authHandler.SkipBootstrap)
+		v1.POST("/auth/bootstrap/totp/setup", authHandler.StagedBeginTOTP)
+		v1.POST("/auth/bootstrap/totp/confirm", authHandler.StagedConfirmTOTP)
+		v1.POST("/auth/bootstrap/email/code", authHandler.StagedSendEmailCode)
+		v1.POST("/auth/bootstrap/email/confirm", authHandler.StagedConfirmEmail)
+
+		// 找回密码（公开）。三步而不是一步：邮件里的码只用来换一张短命的
+		// 重置票据，能改密码的凭据因此不经过邮箱。
+		v1.POST("/auth/forgot/send", authHandler.RequestPasswordReset)
+		v1.POST("/auth/forgot/verify", authHandler.VerifyResetCode)
+		v1.POST("/auth/forgot/reset", authHandler.ResetPassword)
+
 		v1.POST("/auth/logout", requireAuth, authHandler.Logout)
 		v1.GET("/auth/session", requireAuth, authHandler.Session)
 		v1.GET("/auth/sessions", requireAuth, authHandler.Sessions)
@@ -237,9 +266,17 @@ func Register(h *server.Hertz, deps Deps) {
 		// **刻意不要求二次验证**：用户重新生成恢复码的常见原因恰恰是"手机
 		// 丢了、恢复码快用完了"，那时他刚用掉一个恢复码登进来。要求 TOTP
 		// 就是要求他拿出已经丢了的东西，那条路会彻底走不通。
+		// 邮箱绑定（F-1-08）。验证码发往待绑定地址，因此**不需要**该邮箱
+		// 当前属于自己——否则改绑就走不通了。
+		v1.POST("/auth/email/code", requireAuth, authHandler.SendEmailCode)
+		v1.PUT("/auth/email", requireAuth, authHandler.ConfirmEmail)
+
 		v1.PUT("/auth/password", requireAuth, accountHandler.ChangePassword)
 		v1.PUT("/auth/username", requireAuth, accountHandler.ChangeUsername)
 		v1.POST("/auth/recovery-codes", requireAuth, accountHandler.RegenerateRecoveryCodes)
+		// 补齐安全设置后清除"已跳过引导"标记（F-1-08）。走访问级会话：
+		// 邮箱与 2FA 都是在安全中心补齐的，那时登录早已完成。
+		v1.POST("/auth/bootstrap/complete", requireAuth, authHandler.CompleteBootstrap)
 
 		// 二次验证方式的绑定：没有绑定渠道，428 将永远无法通过。
 		v1.GET("/auth/security-setup", requireAuth, securityHandler.SetupStatus)
@@ -289,6 +326,8 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/settings", requireAuth, adminOnly, settingsHandler.List)
 		v1.PATCH("/settings", requireAuth, adminOnly, settingsHandler.Update)
 		v1.POST("/settings/rollback", requireAuth, adminOnly, settingsHandler.Rollback)
+		// 测试发信（F-1-08）：SMTP 配置是否正确，只有真的发一封才知道。
+		v1.POST("/settings/mail/test", requireAuth, adminOnly, settingsHandler.TestMail)
 
 		// 虚拟机：管理员可操作全部，tenant 仅自己名下（归属过滤在数据访问层注入，
 		// 因此这里不需要按角色分路由）。
