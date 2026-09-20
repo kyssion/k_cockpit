@@ -71,6 +71,14 @@ export const settingsApi = {
     patch<{ results: UpdateResult[]; applied: number; total: number }>('/api/v1/settings', { values }),
 
   rollback: (key: string) => post<SettingItem>('/api/v1/settings/rollback', { key }),
+
+  /**
+   * 发送测试邮件（F-1-08）。
+   *
+   * 这是验证 SMTP 配置是否正确的**唯一**手段：配置写错的表现是"什么都没
+   * 发生"，直到某天有人找回密码才发现——那时已经晚了。
+   */
+  testMail: (to: string) => post<{ sent: boolean }>('/api/v1/settings/mail/test', { to }),
 }
 
 export const SOURCE_LABEL: Record<SettingSource, string> = {

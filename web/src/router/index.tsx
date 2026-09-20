@@ -5,6 +5,7 @@ import { PageLoading, Placeholder } from '@/components/common/Feedback'
 import { AppLayout } from '@/layout/AppLayout'
 import { DashboardPage } from '@/views/dashboard/DashboardPage'
 import { LoginPage } from '@/views/auth/LoginPage'
+import { ForgotPasswordPage } from '@/views/auth/ForgotPasswordPage'
 import { SetupPage } from '@/views/auth/SetupPage'
 import { NetworkPage } from '@/views/network/NetworkPage'
 import { NetworkPage2 } from '@/views/network/NetworkPage2'
@@ -67,6 +68,9 @@ export const router = createBrowserRouter([
     children: [
       { path: '/setup', element: <SetupPage /> },
       { path: '/login', element: <LoginPage /> },
+      // 找回密码是**公开**路由：处于这个状态的人拿不出任何凭据，
+      // 要求登录才能找回等于没有这个功能。
+      { path: '/forgot', element: <ForgotPasswordPage /> },
       {
         path: '/',
         element: (

@@ -10,6 +10,7 @@ import { authApi } from '@/api/auth'
 import { ApiError, NetworkError } from '@/api/client'
 import { METHOD_LABEL, riskApi } from '@/api/risk'
 import { AccountSection } from './AccountSection'
+import { EmailSection } from './EmailSection'
 import { Button } from '@/components/common/Button'
 import { PageLoading } from '@/components/common/Feedback'
 import { Input } from '@/components/common/Input'
@@ -225,6 +226,13 @@ export function SecurityPage() {
           </div>
         </section>
       )}
+
+      <EmailSection
+        email={info?.email}
+        verified={info?.email_verified ?? false}
+        bootstrapSkipped={info?.bootstrap_skipped ?? false}
+        onChanged={() => void status.refetch()}
+      />
 
       <AccountSection username={session.data?.user.username ?? ''} />
     </div>

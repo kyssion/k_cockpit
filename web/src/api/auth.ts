@@ -25,9 +25,29 @@ export interface SessionView {
   current: boolean
 }
 
+/**
+ * 登录阶段。
+ *
+ * `ok` 之外的三种都还**没有**会话：后端只给一枚五分钟的中间态令牌，
+ * 前端拿它去走完剩下的步骤。令牌不下发 Cookie，因此刷新页面就得重新登录。
+ */
+export type LoginStage = 'ok' | 'login_verify' | 'force_password_change' | 'bootstrap_security'
+
 export interface LoginResult {
-  user: UserView
-  expires_at: string
+  stage: LoginStage
+  /** 中间态令牌，仅在 stage !== 'ok' 时出现。 */
+  login_token?: string
+  user?: UserView
+  expires_at?: string
+}
+
+/** 引导期两步验证绑定的返回。 */
+export interface TOTPSetupResult {
+  otpauth_uri: string
+}
+
+export interface TOTPConfirmResult {
+  recovery_codes: string[]
 }
 
 export interface CurrentSession {
@@ -51,4 +71,71 @@ export const authApi = {
 
   /** 撤销指定会话（撤销他人会话返回 404，与「不存在」不可区分）。 */
   revokeSession: (id: number) => del<void>(`/api/v1/auth/sessions/${id}`),
+
+  // --- 登录后续阶段（F-1-08）---
+
+  /** 二次验证：TOTP 动态码或恢复码均可。 */
+  verifyLogin: (loginToken: string, code: string) =>
+    post<LoginResult>('/api/v1/auth/login/verify', { login_token: loginToken, code }),
+
+  /** 强制改密：账号初始密码不属于使用者本人时必经的一步。 */
+  forceChangePassword: (loginToken: string, newPassword: string) =>
+    post<LoginResult>('/api/v1/auth/login/password', {
+      login_token: loginToken,
+      new_password: newPassword,
+    }),
+
+  /** 跳过安全初始化引导。 */
+  skipBootstrap: (loginToken: string) =>
+    post<LoginResult>('/api/v1/auth/bootstrap/skip', { login_token: loginToken }),
+
+  /** 补齐安全设置后清除「已跳过」标记（已登录状态）。 */
+  completeBootstrap: () => post<void>('/api/v1/auth/bootstrap/complete'),
+
+  /** 引导期：开始绑定验证器。 */
+  bootstrapBeginTOTP: (loginToken: string) =>
+    post<TOTPSetupResult>('/api/v1/auth/bootstrap/totp/setup', { login_token: loginToken }),
+
+  /** 引导期：确认绑定。 */
+  bootstrapConfirmTOTP: (loginToken: string, code: string) =>
+    post<TOTPConfirmResult>('/api/v1/auth/bootstrap/totp/confirm', {
+      login_token: loginToken,
+      code,
+    }),
+
+  /** 引导期：发送邮箱绑定验证码。 */
+  bootstrapSendEmailCode: (loginToken: string, email: string) =>
+    post<void>('/api/v1/auth/bootstrap/email/code', { login_token: loginToken, email }),
+
+  /** 引导期：确认绑定邮箱。 */
+  bootstrapConfirmEmail: (loginToken: string, email: string, code: string) =>
+    post<void>('/api/v1/auth/bootstrap/email/confirm', {
+      login_token: loginToken,
+      email,
+      code,
+    }),
+
+  // --- 邮箱与找回密码 ---
+
+  /** 已登录：向待绑定邮箱发送验证码。 */
+  sendEmailCode: (email: string) => post<void>('/api/v1/auth/email/code', { email }),
+
+  /** 已登录：确认绑定邮箱。 */
+  confirmEmail: (email: string, code: string) => post<void>('/api/v1/auth/email', { email, code }),
+
+  /**
+   * 发起找回密码。
+   *
+   * **邮箱不存在也返回成功**——否则这个接口就成了「谁注册了本面板」的
+   * 查询入口；输错邮箱的反馈只能由「收不到邮件」承担。
+   */
+  requestPasswordReset: (email: string) => post<void>('/api/v1/auth/forgot/send', { email }),
+
+  /** 校验邮件验证码，换回一次性重置票据。 */
+  verifyResetCode: (email: string, code: string) =>
+    post<{ reset_token: string }>('/api/v1/auth/forgot/verify', { email, code }),
+
+  /** 用重置票据设置新密码。 */
+  resetPassword: (resetToken: string, newPassword: string) =>
+    post<void>('/api/v1/auth/forgot/reset', { reset_token: resetToken, new_password: newPassword }),
 }

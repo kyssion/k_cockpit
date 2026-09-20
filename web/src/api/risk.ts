@@ -39,6 +39,12 @@ export interface SetupStatus {
    */
   dev_bypass: boolean
   session_id: number
+  /** 已绑定的邮箱（未绑定时为空串）。 */
+  email?: string
+  /** 邮箱是否通过验证：只有已验证的邮箱可用于找回密码。 */
+  email_verified: boolean
+  /** 管理员是否曾跳过安全初始化引导。 */
+  bootstrap_skipped: boolean
 }
 
 /** 验证成功后返回的一次性许可。 */

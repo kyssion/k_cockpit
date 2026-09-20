@@ -11,6 +11,7 @@ import {
 } from '@/api/settings'
 import { Button } from '@/components/common/Button'
 import { PageLoading } from '@/components/common/Feedback'
+import { Input } from '@/components/common/Input'
 import { Modal } from '@/components/common/Modal'
 import { StatusBadge } from '@/components/common/StatusBadge'
 
@@ -100,6 +101,12 @@ export function SettingsPage() {
                 />
               ))}
             </div>
+            {/*
+              邮件是唯一一个"改完必须验证"的分组：SMTP 配置写错时没有任何
+              可见后果，直到有人找回密码才发现发不出信。因此把验证入口直接
+              放在这一组下面，而不是塞进某个折叠区。
+            */}
+            {group.key === 'notification' && <MailTestPanel />}
           </section>
         )
       })}
@@ -162,6 +169,68 @@ export function SettingsPage() {
           <span className="kc-mono ml-1 text-ink">{rollbackTarget?.value || '（空）'}</span>
         </p>
       </Modal>
+    </div>
+  )
+}
+
+/**
+ * 测试发信。
+ *
+ * 失败时把**邮件服务器返回的真实原因**显示出来（后端已原样带出），而不是
+ * 一句"发送失败"：主机名写错、端口不通、加密方式不匹配、认证被拒，这四者
+ * 的处理方式完全不同，笼统报错等于让用户逐个试。
+ */
+function MailTestPanel() {
+  const [to, setTo] = useState('')
+  const [error, setError] = useState('')
+  const [ok, setOk] = useState(false)
+
+  const send = useMutation({
+    mutationFn: () => settingsApi.testMail(to.trim()),
+    onSuccess: () => {
+      setOk(true)
+      setError('')
+    },
+    onError: (err) => {
+      setError(describe(err))
+      setOk(false)
+    },
+  })
+
+  return (
+    <div className="flex flex-col gap-2.5 rounded-card border border-line bg-raised px-4 py-3">
+      <p className="text-base text-ink-3">
+        保存 SMTP 配置后发一封测试邮件，确认找回密码与邮箱绑定可用。
+      </p>
+      <div className="flex items-end gap-2">
+        <div className="flex-1">
+          <Input
+            label="接收测试邮件的邮箱"
+            type="email"
+            value={to}
+            onChange={(e) => {
+              setTo(e.target.value)
+              setOk(false)
+            }}
+            disabled={send.isPending}
+          />
+        </div>
+        <Button
+          size="sm"
+          variant="secondary"
+          loading={send.isPending}
+          disabled={!to.trim()}
+          onClick={() => send.mutate()}
+        >
+          发送测试邮件
+        </Button>
+      </div>
+      {ok && <p className="text-base text-success">已发送，请查收收件箱。</p>}
+      {error && (
+        <p role="alert" className="text-base text-danger">
+          {error}
+        </p>
+      )}
     </div>
   )
 }
