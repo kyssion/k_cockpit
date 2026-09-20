@@ -180,6 +180,28 @@ export interface VmDiskView {
   detach_reason?: string
   can_change_bus: boolean
   change_bus_reason?: string
+  /** 系统盘也可以迁移；能否迁移只取决于有没有别的目标池。 */
+  can_migrate: boolean
+  migrate_reason?: string
+}
+
+/** 可迁移过去的存储池。 */
+export interface DiskTarget {
+  id: number
+  name: string
+  path?: string
+  usable_gb: number
+}
+
+/** 磁盘限速：IOPS 与吞吐并存，它们限制的是不同性质的负载。 */
+export interface DiskLimits {
+  iops_total: number
+  iops_read: number
+  iops_write: number
+  /** 单位 MB/s。 */
+  bytes_total: number
+  bytes_read: number
+  bytes_write: number
 }
 
 export interface VmDiskList {
@@ -189,17 +211,29 @@ export interface VmDiskList {
   bus_options: { value: string; label: string }[]
   /** 可挂载的虚拟磁盘文件（我的存储里的 disk 类，同节点）。 */
   attachables: { id: number; filename: string; size_bytes: number }[]
+  /** 迁移目标。为空时界面不显示迁移入口。 */
+  migrate_targets: DiskTarget[]
+  limits: DiskLimits
 }
 
-export type DiskChangeAction = 'attach' | 'detach' | 'bus'
+export type DiskChangeAction = 'attach' | 'detach' | 'bus' | 'migrate'
 
-/** 磁盘的挂载 / 卸载 / 换总线。三者共用一个接口，由 action 区分。 */
+/** 磁盘的挂载 / 卸载 / 换总线 / 迁移。四者共用一个接口，由 action 区分。 */
 export interface DiskChangeInput {
   action: DiskChangeAction
-  /** 卸载与换总线时必填；挂载时由节点分配。 */
+  /** 卸载、换总线与迁移时必填；挂载时由节点分配。 */
   dev?: string
   bus?: string
   file_id?: number
+  /** 迁移目标存储池。 */
+  target_pool_id?: number
+  /**
+   * 运行中仍继续（热迁移）。
+   *
+   * 由用户确认而不是服务端默认：热迁移期间磁盘仍在使用，是否接受那段
+   * 抖动只有使用者知道。
+   */
+  allow_hot?: boolean
 }
 
 /** 创建向导的一个配置项（由后端下发，界面只负责渲染）。 */
@@ -291,8 +325,19 @@ export interface BatchResult {
  */
 export type PowerAction = 'start' | 'shutdown' | 'reboot' | 'poweroff' | 'reset'
 
-/** 磁盘处理方式。没有默认值——必须由用户显式选择（f-2-01 R-009）。 */
-export type DiskAction = 'delete' | 'keep'
+/**
+ * 磁盘处理方式。没有默认值——必须由用户显式选择（f-2-01 R-009）。
+ *
+ * transfer 把磁盘文件搬回「我的存储 - 虚拟磁盘」：keep 只是把文件留在原地
+ * 不删，那块盘会继续占着宿主机的空间，却不属于任何虚拟机，谁也看不见它。
+ */
+export type DiskAction = 'delete' | 'keep' | 'transfer'
+
+export const DISK_ACTION_LABEL: Record<DiskAction, string> = {
+  delete: '连同磁盘删除',
+  keep: '保留磁盘文件',
+  transfer: '转移到我的存储',
+}
 
 /** 回收站里的一台虚拟机。 */
 export interface TrashItem {

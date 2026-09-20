@@ -14,16 +14,20 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 
+import { editApi } from '@/api/edit'
 import { ApiError, NetworkError } from '@/api/client'
-import { vmApi, type VmDiskList, type VmDiskView } from '@/api/vm'
+import { vmApi, type DiskLimits, type DiskTarget, type VmDiskList, type VmDiskView } from '@/api/vm'
 import { Button } from '@/components/common/Button'
 import { EmptyState, PageLoading } from '@/components/common/Feedback'
+import { Input } from '@/components/common/Input'
 import { Modal } from '@/components/common/Modal'
 import { formatBytes } from '@/utils/format'
 
 export function DiskTab({ vmID }: { vmID: number }) {
   const queryClient = useQueryClient()
   const [attaching, setAttaching] = useState(false)
+  const [migrating, setMigrating] = useState<VmDiskView | null>(null)
+  const [limitsOpen, setLimitsOpen] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
@@ -39,8 +43,11 @@ export function DiskTab({ vmID }: { vmID: number }) {
   }
 
   const change = useMutation({
-    mutationFn: (input: { action: 'detach' | 'bus'; dev: string; bus?: string }) =>
-      vmApi.changeDisk(vmID, input),
+    mutationFn: (
+      input:
+        | { action: 'detach' | 'bus'; dev: string; bus?: string }
+        | { action: 'migrate'; dev: string; target_pool_id: number; allow_hot?: boolean },
+    ) => vmApi.changeDisk(vmID, input),
     onSuccess: () => {
       setNotice('已提交，可在任务中心查看进度')
       refresh()
@@ -122,7 +129,15 @@ export function DiskTab({ vmID }: { vmID: number }) {
                   </td>
                   <td className="whitespace-nowrap px-3 py-2">
                     <button
-                      className="text-danger hover:underline disabled:text-ink-3 disabled:no-underline"
+                      className="text-ink-2 hover:underline disabled:text-ink-3 disabled:no-underline"
+                      disabled={!d.can_migrate}
+                      title={d.can_migrate ? '迁移到其它存储池' : d.migrate_reason}
+                      onClick={() => setMigrating(d)}
+                    >
+                      迁移
+                    </button>
+                    <button
+                      className="ml-3 text-danger hover:underline disabled:text-ink-3 disabled:no-underline"
                       disabled={!d.can_detach}
                       title={d.can_detach ? undefined : d.detach_reason}
                       onClick={() => change.mutate({ action: 'detach', dev: d.dev })}
@@ -141,6 +156,80 @@ export function DiskTab({ vmID }: { vmID: number }) {
         换总线后需要重启虚拟机：来宾里的设备路径会变。卸载之后，若来宾里有对应
         的挂载点，请先在系统内卸载再操作。
       </p>
+
+      {/*
+        限速放在磁盘页而不是只留在「编辑」页：用户想限一台机器的磁盘 IO 时，
+        第一反应是来这里找。IOPS 与吞吐并存——小块随机读写先撞 IOPS，大块
+        顺序读写先撞吞吐，只有一种上限时连续的大文件拷贝不会被任何规则拦住。
+      */}
+      <section className="rounded-card border border-line">
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-2.5">
+          <div>
+            <h2 className="text-sm font-medium text-ink-2">磁盘限速</h2>
+            <p className="mt-0.5 text-sm text-ink-3">
+              IOPS 与吞吐可以同时设置；每组内部的「总量」与「读写分离」互斥。
+            </p>
+          </div>
+          <Button size="sm" variant="secondary" onClick={() => setLimitsOpen(true)}>
+            设置
+          </Button>
+        </header>
+        <div className="flex flex-wrap gap-x-8 gap-y-2 px-4 py-3 text-sm">
+          <LimitText
+            label="IOPS"
+            value={
+              list.data?.limits.iops_total
+                ? `总量 ${list.data.limits.iops_total}`
+                : list.data && (list.data.limits.iops_read || list.data.limits.iops_write)
+                  ? `读 ${list.data.limits.iops_read} / 写 ${list.data.limits.iops_write}`
+                  : '不限'
+            }
+          />
+          <LimitText
+            label="吞吐"
+            value={
+              list.data?.limits.bytes_total
+                ? `总量 ${list.data.limits.bytes_total} MB/s`
+                : list.data && (list.data.limits.bytes_read || list.data.limits.bytes_write)
+                  ? `读 ${list.data.limits.bytes_read} / 写 ${list.data.limits.bytes_write} MB/s`
+                  : '不限'
+            }
+          />
+        </div>
+      </section>
+
+      <MigrateModal
+        disk={migrating}
+        targets={list.data?.migrate_targets ?? []}
+        running={list.data?.status === 'running'}
+        onClose={() => setMigrating(null)}
+        onSubmit={(targetID, allowHot) => {
+          if (!migrating) return
+          change.mutate({
+            action: 'migrate',
+            dev: migrating.dev,
+            target_pool_id: targetID,
+            allow_hot: allowHot,
+          })
+          setMigrating(null)
+        }}
+      />
+
+      <LimitsModal
+        open={limitsOpen}
+        vmID={vmID}
+        limits={list.data?.limits}
+        onClose={() => setLimitsOpen(false)}
+        onDone={() => {
+          setLimitsOpen(false)
+          setNotice('限速已提交，可在任务中心查看进度')
+          refresh()
+        }}
+        onError={(m) => {
+          setLimitsOpen(false)
+          setError(m)
+        }}
+      />
 
       <AttachModal
         open={attaching}
@@ -194,6 +283,213 @@ function BusSelect({
         </option>
       ))}
     </select>
+  )
+}
+
+function LimitText({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="text-ink-3">
+      {label}
+      <span className="kc-nums ml-2 text-ink">{value}</span>
+    </span>
+  )
+}
+
+/**
+ * MigrateModal 把一块磁盘迁到别的存储池。
+ *
+ * 运行中默认不允许：热迁移期间磁盘仍在使用，业务会有抖动，是否接受只能由
+ * 使用者判断——服务端替他决定（无论默认允许还是默认拒绝）都不合适。
+ */
+function MigrateModal({
+  disk,
+  targets,
+  running,
+  onClose,
+  onSubmit,
+}: {
+  disk: VmDiskView | null
+  targets: DiskTarget[]
+  running: boolean
+  onClose: () => void
+  onSubmit: (targetID: number, allowHot: boolean) => void
+}) {
+  const [targetID, setTargetID] = useState(0)
+  const [allowHot, setAllowHot] = useState(false)
+  const [seeded, setSeeded] = useState<string | null>(null)
+
+  // 换目标盘时重置选择：保留上一次的选择会让用户误以为"还是迁到同一个池"。
+  if (seeded !== (disk?.dev ?? null)) {
+    setSeeded(disk?.dev ?? null)
+    setTargetID(0)
+    setAllowHot(false)
+  }
+
+  return (
+    <Modal
+      open={disk !== null}
+      title={`迁移 ${disk?.dev ?? ''}`}
+      description="把这块磁盘的镜像文件搬到另一个存储池。搬完之后源只剩一份。"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            取消
+          </Button>
+          <Button size="sm" disabled={targetID === 0} onClick={() => onSubmit(targetID, allowHot)}>
+            提交迁移
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3">
+        <label className="flex flex-col gap-1">
+          <span className="text-sm text-ink-2">目标存储池</span>
+          <select
+            value={targetID}
+            onChange={(e) => setTargetID(Number(e.target.value))}
+            className="h-8 rounded-control border border-line-strong bg-sunken px-2 text-base text-ink"
+          >
+            <option value={0}>请选择…</option>
+            {targets.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}（可用 {t.usable_gb.toFixed(1)} GB）
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {running && (
+          <label className="flex cursor-pointer items-start gap-2 text-sm text-ink-2">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={allowHot}
+              onChange={(e) => setAllowHot(e.target.checked)}
+            />
+            <span>
+              允许热迁移
+              <span className="block text-ink-3">
+                虚拟机正在运行。热迁移期间这块盘仍在使用，业务会有抖动；
+                不勾选请先关机。
+              </span>
+            </span>
+          </label>
+        )}
+      </div>
+    </Modal>
+  )
+}
+
+/**
+ * LimitsModal 设置磁盘限速。
+ *
+ * 走的是「配置变更」那一条路（与编辑页同一个矩阵），而不是另开一个接口：
+ * 限速本来就是这台机器的一组配置项，两套实现的校验迟早不一样。
+ */
+function LimitsModal({
+  open,
+  vmID,
+  limits,
+  onClose,
+  onDone,
+  onError,
+}: {
+  open: boolean
+  vmID: number
+  limits?: DiskLimits
+  onClose: () => void
+  onDone: () => void
+  onError: (m: string) => void
+}) {
+  const [iopsTotal, setIopsTotal] = useState('')
+  const [iopsRead, setIopsRead] = useState('')
+  const [iopsWrite, setIopsWrite] = useState('')
+  const [bytesTotal, setBytesTotal] = useState('')
+  const [bytesRead, setBytesRead] = useState('')
+  const [bytesWrite, setBytesWrite] = useState('')
+  const [seeded, setSeeded] = useState(false)
+
+  if (open && !seeded) {
+    setSeeded(true)
+    setIopsTotal(limits && limits.iops_total ? String(limits.iops_total) : '')
+    setIopsRead(limits && limits.iops_read ? String(limits.iops_read) : '')
+    setIopsWrite(limits && limits.iops_write ? String(limits.iops_write) : '')
+    setBytesTotal(limits && limits.bytes_total ? String(limits.bytes_total) : '')
+    setBytesRead(limits && limits.bytes_read ? String(limits.bytes_read) : '')
+    setBytesWrite(limits && limits.bytes_write ? String(limits.bytes_write) : '')
+  }
+  if (!open && seeded) setSeeded(false)
+
+  const num = (v: string) => Number(v) || 0
+  const conflict =
+    (num(iopsTotal) > 0 && (num(iopsRead) > 0 || num(iopsWrite) > 0)) ||
+    (num(bytesTotal) > 0 && (num(bytesRead) > 0 || num(bytesWrite) > 0))
+
+  const save = useMutation({
+    mutationFn: () =>
+      editApi.updateConfig(vmID, {
+        disk_iops_total: num(iopsTotal),
+        disk_iops_read: num(iopsRead),
+        disk_iops_write: num(iopsWrite),
+        disk_bytes_total: num(bytesTotal),
+        disk_bytes_read: num(bytesRead),
+        disk_bytes_write: num(bytesWrite),
+      }),
+    onSuccess: onDone,
+    onError: (e) => onError(describe(e)),
+  })
+
+  return (
+    <Modal
+      open={open}
+      title="磁盘限速"
+      description="IOPS 与吞吐可以同时设置；每组内部的「总量」与「读写分离」互斥。填 0 表示不限制。"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            取消
+          </Button>
+          <Button size="sm" disabled={conflict} loading={save.isPending} onClick={() => save.mutate()}>
+            保存
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3">
+        <div className="flex gap-2">
+          <Input label="IOPS 总量" value={iopsTotal} onChange={(e) => setIopsTotal(e.target.value)} placeholder="0" />
+          <Input label="IOPS 读" value={iopsRead} onChange={(e) => setIopsRead(e.target.value)} placeholder="0" />
+          <Input label="IOPS 写" value={iopsWrite} onChange={(e) => setIopsWrite(e.target.value)} placeholder="0" />
+        </div>
+        <div className="flex gap-2">
+          <Input
+            label="吞吐总量（MB/s）"
+            value={bytesTotal}
+            onChange={(e) => setBytesTotal(e.target.value)}
+            placeholder="0"
+          />
+          <Input
+            label="吞吐读（MB/s）"
+            value={bytesRead}
+            onChange={(e) => setBytesRead(e.target.value)}
+            placeholder="0"
+          />
+          <Input
+            label="吞吐写（MB/s）"
+            value={bytesWrite}
+            onChange={(e) => setBytesWrite(e.target.value)}
+            placeholder="0"
+          />
+        </div>
+        {conflict && (
+          <p role="alert" className="rounded-control bg-danger/10 px-3 py-2 text-sm text-danger">
+            「总量」与「读写分离」只能设一组。
+          </p>
+        )}
+      </div>
+    </Modal>
   )
 }
 

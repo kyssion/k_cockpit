@@ -3060,6 +3060,23 @@ function DeleteVmModal({
           </span>
         </label>
 
+        <label className="flex cursor-pointer items-start gap-2.5 rounded-control border border-line-strong px-3 py-2.5 hover:bg-raised">
+          <input
+            type="radio"
+            name="disk_action"
+            className="mt-0.5"
+            checked={diskAction === 'transfer'}
+            onChange={() => setDiskAction('transfer')}
+          />
+          <span>
+            <span className="block text-base text-ink">转移到我的存储</span>
+            <span className="block text-sm text-ink-3">
+              磁盘文件会被搬进「我的存储 - 虚拟磁盘」，之后可以挂到别的机器上，
+              或下载下来。虚拟机本身的记录仍移入回收站。
+            </span>
+          </span>
+        </label>
+
         {error && (
           <p role="alert" className="rounded-control bg-danger/10 px-3 py-2 text-sm text-danger">
             {error}

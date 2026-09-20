@@ -660,6 +660,21 @@ export function VmListPage() {
                   </span>
                 </span>
               </label>
+              <label className="flex cursor-pointer items-start gap-2.5">
+                <input
+                  type="radio"
+                  className="mt-1"
+                  name="disk-action"
+                  checked={diskAction === 'transfer'}
+                  onChange={() => setDiskAction('transfer')}
+                />
+                <span>
+                  <span className="block text-base text-ink">转移到我的存储</span>
+                  <span className="block text-sm text-ink-3">
+                    磁盘文件搬进「我的存储 - 虚拟磁盘」，可再挂到别的机器或下载。
+                  </span>
+                </span>
+              </label>
             </div>
           </div>
 
