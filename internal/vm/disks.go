@@ -39,6 +39,22 @@ type DiskView struct {
 	DetachReason    string `json:"detach_reason,omitempty"`
 	CanChangeBus    bool   `json:"can_change_bus"`
 	ChangeBusReason string `json:"change_bus_reason,omitempty"`
+
+	// CanMigrate 表示这块盘能否迁移到别的存储池。
+	//
+	// 系统盘**可以**迁移（它只是一块盘），运行中也能迁（热迁移由节点决定
+	// 能不能做）。控制面唯一能确定的障碍是"没有别的目标池"，而那是列表级
+	// 的事实，因此这里只在没有目标时给出理由。
+	CanMigrate    bool   `json:"can_migrate"`
+	MigrateReason string `json:"migrate_reason,omitempty"`
+}
+
+// DiskTarget 是一个可迁移到的目标存储池。
+type DiskTarget struct {
+	ID       int64   `json:"id"`
+	Name     string  `json:"name"`
+	Path     string  `json:"path,omitempty"`
+	UsableGB float64 `json:"usable_gb"`
 }
 
 // AttachableDisk 是一个可以挂给虚拟机的虚拟磁盘文件。
@@ -58,6 +74,26 @@ type DiskListView struct {
 	// 「创建时选的驱动」是同一个集合，不另写一份。
 	BusOptions  []EditOption     `json:"bus_options"`
 	Attachables []AttachableDisk `json:"attachables"`
+	// MigrateTargets 是可迁移过去的存储池。为空时界面不显示迁移入口：
+	// 一个点了必然失败的下拉框，比没有这个按钮更糟。
+	MigrateTargets []DiskTarget `json:"migrate_targets"`
+	// Limits 是当前生效的磁盘限速（IOPS 与吞吐），供磁盘标签页直接编辑——
+	// 它们此前只在「编辑」标签里，而用户找限速时不会去那里找。
+	Limits DiskLimits `json:"limits"`
+}
+
+// DiskLimits 是磁盘限速的当前值。
+//
+// IOPS 与吞吐**并存**而不是二选一：它们限制的是不同性质的负载（小块随机
+// 读写先撞 IOPS，大块顺序读写先撞吞吐）。每组内部的「总量」与「读写分离」
+// 互斥，由服务端校验。
+type DiskLimits struct {
+	IOPSTotal  int `json:"iops_total"`
+	IOPSRead   int `json:"iops_read"`
+	IOPSWrite  int `json:"iops_write"`
+	BytesTotal int `json:"bytes_total"`
+	BytesRead  int `json:"bytes_read"`
+	BytesWrite int `json:"bytes_write"`
 }
 
 // DiskChangeRequest 是一次磁盘变更。
@@ -70,6 +106,11 @@ type DiskChangeRequest struct {
 	Bus string
 	// FileID 仅在 action = attach 时有效，指向 storage_file（category=disk）。
 	FileID int64
+	// TargetPoolID 仅在 action = migrate 时有效，指向目标 storage_pool。
+	TargetPoolID int64
+	// AllowHot 表示运行中仍继续（热迁移）。它由用户在界面上确认，而不是
+	// 服务端默认——热迁移期间磁盘仍在使用，是否接受那段抖动只有使用者知道。
+	AllowHot bool
 }
 
 // Disks 读取虚拟机的磁盘列表。
@@ -100,13 +141,22 @@ func (s *Service) Disks(ctx context.Context, vmID int64, v authz.Viewer) (*DiskL
 	if err != nil {
 		return nil, err
 	}
+	targets, err := s.migrateTargets(ctx, vm.NodeID)
+	if err != nil {
+		return nil, err
+	}
 
 	running := status == model.VMStatusRunning
 	out := &DiskListView{
-		Status:      status,
-		Disks:       make([]DiskView, 0, len(disks)),
-		BusOptions:  busOptions(),
-		Attachables: attachables,
+		Status:         status,
+		Disks:          make([]DiskView, 0, len(disks)),
+		BusOptions:     busOptions(),
+		Attachables:    attachables,
+		MigrateTargets: targets,
+		Limits: DiskLimits{
+			IOPSTotal: vm.DiskIOPSTotal, IOPSRead: vm.DiskIOPSRead, IOPSWrite: vm.DiskIOPSWrite,
+			BytesTotal: vm.DiskBytesTotal, BytesRead: vm.DiskBytesRead, BytesWrite: vm.DiskBytesWrite,
+		},
 	}
 	for i := range disks {
 		d := &disks[i]
@@ -130,6 +180,12 @@ func (s *Service) Disks(ctx context.Context, vmID int64, v authz.Viewer) (*DiskL
 			view.ChangeBusReason = "换总线需要关机：来宾里的设备路径会变，运行中改会导致盘符漂移"
 		} else {
 			view.CanChangeBus = true
+		}
+		if len(targets) == 0 {
+			view.CanMigrate = false
+			view.MigrateReason = "该节点上还没有第二个存储池，无处可迁"
+		} else {
+			view.CanMigrate = true
 		}
 		out.Disks = append(out.Disks, view)
 	}
@@ -193,6 +249,51 @@ func (s *Service) attachableDisks(
 	return out, nil
 }
 
+// migrateTargets 列出可作为迁移目标的存储池（该节点上、状态就绪的）。
+//
+// 只给"就绪"的池：往一个正在初始化或已故障的池里搬家，失败发生在搬了一半
+// 的时候，而那时源可能已经被删了。
+func (s *Service) migrateTargets(ctx context.Context, nodeID int64) ([]DiskTarget, error) {
+	var pools []model.StoragePool
+	if err := s.db.WithContext(ctx).
+		Where("node_id = ? AND status = ?", nodeID, model.StoragePoolReady).
+		Order("is_default DESC, id").Find(&pools).Error; err != nil {
+		log.Printf("[vm] 查询存储池失败 node=%d: %v", nodeID, err)
+		return nil, api.Internal()
+	}
+	out := make([]DiskTarget, 0, len(pools))
+	for i := range pools {
+		p := &pools[i]
+		name := ""
+		if p.Remark != nil {
+			name = *p.Remark
+		}
+		if name == "" {
+			name = poolLabel(p)
+		}
+		t := DiskTarget{ID: p.ID, Name: name, UsableGB: float64(p.UsableBytes) / (1 << 30)}
+		if p.MountPath != nil {
+			t.Path = *p.MountPath
+		}
+		out = append(out, t)
+	}
+	return out, nil
+}
+
+// poolLabel 给存储池一个可读的名字。
+//
+// 池本身没有 name 列（它是"一块设备挂在哪"这一事实），因此用设备路径兜底。
+// 界面上显示 /dev/sdb 比显示"存储池 #3"有用得多——后者无法对上是哪块盘。
+func poolLabel(p *model.StoragePool) string {
+	if p.MountPath != nil && *p.MountPath != "" {
+		return *p.MountPath
+	}
+	if p.DevicePath != nil && *p.DevicePath != "" {
+		return *p.DevicePath
+	}
+	return "存储池 #" + strconv.FormatInt(p.ID, 10)
+}
+
 // busOptions 取磁盘驱动的可选值（与配置矩阵同源）。
 func busOptions() []EditOption {
 	for _, f := range editFields {
@@ -217,9 +318,9 @@ func (s *Service) ChangeDisk(
 	}
 
 	switch req.Action {
-	case agent.DiskActionAttach, agent.DiskActionDetach, agent.DiskActionBus:
+	case agent.DiskActionAttach, agent.DiskActionDetach, agent.DiskActionBus, agent.DiskActionMigrate:
 	default:
-		return nil, api.InvalidParameter("不支持的磁盘操作，可选 attach / detach / bus")
+		return nil, api.InvalidParameter("不支持的磁盘操作，可选 attach / detach / bus / migrate")
 	}
 
 	status, err := s.probeStatus(ctx, vm)
@@ -286,6 +387,26 @@ func (s *Service) ChangeDisk(
 			return nil, api.Conflict("换总线需要关机：来宾里的设备路径会变，运行中改会导致盘符漂移")
 		}
 		params["bus"] = req.Bus
+
+	case agent.DiskActionMigrate:
+		if req.Dev == "" {
+			return nil, api.InvalidParameter("请指定要迁移的设备")
+		}
+		pool, err := s.loadMigrateTarget(ctx, vm.NodeID, req.TargetPoolID)
+		if err != nil {
+			return nil, err
+		}
+		if running && !req.AllowHot {
+			return nil, api.Conflict(
+				"虚拟机正在运行。热迁移期间磁盘仍在使用，业务会有抖动；确认请勾选「允许热迁移」，否则请先关机")
+		}
+		// 目标路径交给节点按池拼：控制面拼路径的话，池的挂载点一变
+		// （换盘、迁移）这里算出来的路径就全错了。
+		params["target_pool_id"] = pool.ID
+		if pool.MountPath != nil {
+			params["target_path"] = *pool.MountPath
+		}
+		params["hot"] = running && req.AllowHot
 	}
 
 	t, err := s.queue.Enqueue(ctx, task.Spec{
@@ -317,6 +438,34 @@ func (s *Service) ChangeDisk(
 		Success: true, ClientIP: clientIP,
 	})
 	return t, nil
+}
+
+// loadMigrateTarget 取出并校验一个迁移目标存储池。
+//
+// 池必须与虚拟机在同一节点：磁盘是一份具体的文件，跨节点"迁移"等于让另一
+// 台机器去读一个不存在的路径。
+func (s *Service) loadMigrateTarget(
+	ctx context.Context, nodeID, poolID int64,
+) (*model.StoragePool, error) {
+	if poolID <= 0 {
+		return nil, api.InvalidParameter("请选择目标存储池")
+	}
+	var pool model.StoragePool
+	err := s.db.WithContext(ctx).Where("id = ?", poolID).First(&pool).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return nil, api.NotFound("存储池不存在")
+	case err != nil:
+		log.Printf("[vm] 查询存储池失败 id=%d: %v", poolID, err)
+		return nil, api.Internal()
+	}
+	if pool.NodeID != nodeID {
+		return nil, api.ValidationFailed("该存储池不在虚拟机所在的节点上")
+	}
+	if pool.Status != model.StoragePoolReady {
+		return nil, api.ValidationFailed("目标存储池不可用")
+	}
+	return &pool, nil
 }
 
 // loadAttachable 取出并校验一个可挂载的磁盘文件。

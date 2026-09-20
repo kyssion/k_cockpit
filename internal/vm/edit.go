@@ -176,6 +176,22 @@ var editFields = []EditField{
 		Hint: "与「总量」互斥。",
 	},
 
+	{
+		Key: "disk_bytes_total", Label: "吞吐上限（总量）", Kind: EditKindNumber, Group: EditGroupDisk,
+		RequiresNode: true, Min: 0, Max: 100000, InCreate: true, Default: "0",
+		Hint: "单位 MB/s，0 表示不限制。与读写分离的限值**互斥**。",
+	},
+	{
+		Key: "disk_bytes_read", Label: "吞吐上限（读）", Kind: EditKindNumber, Group: EditGroupDisk,
+		RequiresNode: true, Min: 0, Max: 100000, InCreate: true, Default: "0",
+		Hint: "单位 MB/s。与「总量」互斥。",
+	},
+	{
+		Key: "disk_bytes_write", Label: "吞吐上限（写）", Kind: EditKindNumber, Group: EditGroupDisk,
+		RequiresNode: true, Min: 0, Max: 100000, InCreate: true, Default: "0",
+		Hint: "单位 MB/s。与「总量」互斥。",
+	},
+
 	// --- 网络设置 ---
 	{
 		Key: "nic_model", Label: "网卡型号", Kind: EditKindSelect, Group: EditGroupNetwork,
@@ -421,6 +437,9 @@ var columnToField = map[string]string{
 	"disk_iops_total":   "DiskIOPSTotal",
 	"disk_iops_read":    "DiskIOPSRead",
 	"disk_iops_write":   "DiskIOPSWrite",
+	"disk_bytes_total":  "DiskBytesTotal",
+	"disk_bytes_read":   "DiskBytesRead",
+	"disk_bytes_write":  "DiskBytesWrite",
 	"os_type":           "OSType",
 	"machine_type":      "MachineType",
 	"firmware":          "Firmware",
@@ -800,7 +819,11 @@ func stringify(v any) string {
 	}
 }
 
-// checkIOPSExclusive 校验 IOPS 限制的互斥关系（f-2-06）。
+// checkIOPSExclusive 校验磁盘限速的互斥关系（f-2-06）。
+//
+// 两组规则各管一半：IOPS 与吞吐**可以并存**（它们限制的是不同性质的负载），
+// 但每组内部的「总量」与「读写分离」互斥——同时给总量和读、写两套上限的
+// 话，生效的是哪一套取决于节点的实现，而用户无法从界面上判断。
 func checkIOPSExclusive(existing map[string]any, changes map[string]any) error {
 	after := func(key string) int {
 		if v, ok := changes[key]; ok {
@@ -817,10 +840,17 @@ func checkIOPSExclusive(existing map[string]any, changes map[string]any) error {
 	total := after("disk_iops_total")
 	read := after("disk_iops_read")
 	write := after("disk_iops_write")
-
 	if total > 0 && (read > 0 || write > 0) {
 		return api.ValidationFailed(
 			"IOPS 限制的「总量」与「读写分离」互斥，请只设置其中一组")
+	}
+
+	bytesTotal := after("disk_bytes_total")
+	bytesRead := after("disk_bytes_read")
+	bytesWrite := after("disk_bytes_write")
+	if bytesTotal > 0 && (bytesRead > 0 || bytesWrite > 0) {
+		return api.ValidationFailed(
+			"吞吐限制的「总量」与「读写分离」互斥，请只设置其中一组")
 	}
 	return nil
 }

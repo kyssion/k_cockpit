@@ -179,6 +179,18 @@ type VM struct {
 	DiskIOPSRead  int `gorm:"column:disk_iops_read;not null;default:0"`
 	DiskIOPSWrite int `gorm:"column:disk_iops_write;not null;default:0"`
 
+	// 吞吐限制（MB/s）：总量与读写分离同样互斥（f-2-06）。
+	//
+	// 与 IOPS 并存而不是二选一：它们限制的是不同性质的负载——小块随机
+	// 读写先撞 IOPS，大块顺序读写先撞吞吐。只留一种的话，一次连续的大
+	// 文件拷贝不会被任何规则拦住，而那正是最容易把共享存储打满的操作。
+	//
+	// 单位 MB/s 是**人填的单位**；换算到 libvirt 的 bytes/s 由节点完成，
+	// 控制面不替节点决定换算口径。
+	DiskBytesTotal int `gorm:"column:disk_bytes_total;not null;default:0"`
+	DiskBytesRead  int `gorm:"column:disk_bytes_read;not null;default:0"`
+	DiskBytesWrite int `gorm:"column:disk_bytes_write;not null;default:0"`
+
 	// --- 救援系统（F-2-12）---
 
 	// RescueActive 表示该虚拟机当前处于救援模式。

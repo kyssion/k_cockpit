@@ -29,7 +29,42 @@ const (
 	DiskActionAttach = "attach"
 	DiskActionDetach = "detach"
 	DiskActionBus    = "bus"
+	// DiskActionMigrate 把一块磁盘**搬到其他存储池**。
+	//
+	// 它与"复制一份再挂上"的区别是目的：迁移是为了腾空间或换介质，源只有
+	// 一份，搬完旧的就没了。因此参数里带的是**目标池**，而不是一个文件
+	// 路径——池在哪、还剩多少空间，只有节点知道。
+	DiskActionMigrate = "migrate"
 )
+
+// 删除虚拟机时的磁盘处理方式。取值与 OpVMDelete 的 `disk_action` 参数一致。
+const (
+	// DiskActionKeep 保留磁盘文件（默认之外的显式选择）。
+	DiskActionKeep = "keep"
+	// DiskActionDelete 连同磁盘文件一起删除。
+	DiskActionDelete = "delete"
+	// DiskActionTransfer 把磁盘文件搬回「我的存储 - 虚拟磁盘」。
+	//
+	// 它存在的理由很具体：用户删机器时常常是想留着数据的，而"保留"只是
+	// 把文件留在原地不删——那块盘会一直在宿主机上占着空间，却不属于任何
+	// 虚拟机，谁也看不见它。转移让这份数据回到用户自己的文件列表里。
+	DiskActionTransfer = "transfer"
+)
+
+// VMDiskTransferDataKey 是删除时「转移到我的存储」的回传数据键。
+const VMDiskTransferDataKey = "transferred_disks"
+
+// TransferredDisk 描述一个被转移回「我的存储」的磁盘文件。
+//
+// 由节点回传而不是控制面自己算：文件搬到了哪个目录、叫什么名字、实际多大，
+// 这三件事只有做搬运动作的一方知道。控制面凭设备名猜出来的路径，与真实
+// 文件差一个字符就会变成"我的存储里有一个点不开的文件"。
+type TransferredDisk struct {
+	Dev       string
+	Filename  string
+	RelPath   string
+	SizeBytes int64
+}
 
 // VMDisk 是虚拟机上的一块磁盘。
 type VMDisk struct {

@@ -697,9 +697,14 @@ func validateCreateConfig(req CreateRequest) error {
 }
 
 // 磁盘处理方式（f-2-01 R-009）。
+//
+// 取值与 agent.DiskActionTransfer 等常量一致，这里重新声明是为了让 vm 包
+// 不依赖 agent 包的常量名——它们分属控制面与节点两侧，各自演进时不必同步。
 const (
 	DiskActionDelete = "delete"
 	DiskActionKeep   = "keep"
+	// DiskActionTransfer 把磁盘文件搬回「我的存储 - 虚拟磁盘」。
+	DiskActionTransfer = "transfer"
 )
 
 // Power 受理一次电源操作。
@@ -783,7 +788,11 @@ func (s *Service) Power(
 
 // DeleteRequest 是一次删除请求。
 type DeleteRequest struct {
-	// DiskAction 必填，取值 delete / keep。
+	// DiskAction 必填，取值 delete / keep / transfer。
+	//
+	// transfer 把磁盘文件搬回「我的存储 - 虚拟磁盘」：它是 keep 之外的一个
+	// 真实选择——keep 只是把文件留在原地不删，那块盘会继续占着宿主机的
+	// 空间，却不属于任何虚拟机，谁也看不见它。
 	DiskAction string
 }
 
@@ -796,15 +805,22 @@ func (s *Service) Delete(
 	ctx context.Context, id int64, req DeleteRequest, v authz.Viewer, operatorName, clientIP string,
 ) (*model.Task, error) {
 	switch req.DiskAction {
-	case DiskActionDelete, DiskActionKeep:
+	case DiskActionDelete, DiskActionKeep, DiskActionTransfer:
 	default:
-		return nil, api.InvalidParameter("必须选择磁盘处理方式：delete（连同磁盘删除）或 keep（保留磁盘）")
+		return nil, api.InvalidParameter(
+			"必须选择磁盘处理方式：delete（连同磁盘删除）、keep（保留磁盘）或 transfer（转移到我的存储）")
 	}
 
 	vm, err := s.load(ctx, id, v)
 	if err != nil {
 		return nil, err
 	}
+	// 转移到「我的存储」需要一个归属：无主的机器没有"我的存储"可转，
+	// 而默默地按保留处理会让用户以为磁盘已经进了自己的文件列表。
+	if req.DiskAction == DiskActionTransfer && vm.OwnerID == nil {
+		return nil, api.ValidationFailed("该虚拟机没有归属用户，无法把磁盘转移到「我的存储」，请选择保留或删除")
+	}
+
 	if err := s.ensureNodeUsable(ctx, vm.NodeID); err != nil {
 		return nil, err
 	}

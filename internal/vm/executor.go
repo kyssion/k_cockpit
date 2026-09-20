@@ -500,6 +500,16 @@ func (e *DeleteExecutor) Run(ctx context.Context, t *model.Task) error {
 		return api.ValidationFailed(result.Message)
 	}
 
+	// 磁盘转移到「我的存储」：节点搬完之后回传文件清单，控制面据此建
+	// storage_file 行。
+	//
+	// 由节点回传而不是控制面自己算：文件落在哪个目录、叫什么名字、实际
+	// 多大，只有做搬运动作的一方知道。凭设备名猜出来的路径差一个字符，
+	// 结果就是"我的存储里有一个点不开的文件"。
+	if p.DiskAction == agent.DiskActionTransfer {
+		e.recordTransferred(ctx, t, result)
+	}
+
 	// purge 表示这是回收站里的**彻底删除**：节点上已经删干净了，记录也不
 	// 必再留。它与下面的标记是互斥的两条路。
 	if p.Purge {
@@ -544,6 +554,52 @@ func (e *DeleteExecutor) Run(ctx context.Context, t *model.Task) error {
 	log.Printf("[vm] 已删除虚拟机 id=%d name=%s disk_action=%s task=%d",
 		p.VMID, p.VMName, p.DiskAction, t.ID)
 	return nil
+}
+
+// recordTransferred 把转移回来的磁盘登记成「我的存储」里的文件。
+//
+// 登记失败**不判任务失败**：虚拟机已经删掉了，节点上的文件也搬完了，此时
+// 报失败会让用户去重试一个已经生效且不可重来的操作。文件没进列表是可以
+// 事后补的，而"重试删除"是灾难。
+func (e *DeleteExecutor) recordTransferred(ctx context.Context, t *model.Task, result *agent.Result) {
+	if result == nil || result.Data == nil {
+		return
+	}
+	raw, ok := result.Data[agent.VMDiskTransferDataKey]
+	if !ok {
+		return
+	}
+	// 走一遍 JSON：同进程拿到的是结构体，跨进程是 map。
+	blob, err := json.Marshal(raw)
+	if err != nil {
+		log.Printf("[vm] 序列化转移结果失败: %v", err)
+		return
+	}
+	var files []agent.TransferredDisk
+	if err := json.Unmarshal(blob, &files); err != nil {
+		log.Printf("[vm] 解析转移结果失败: %v", err)
+		return
+	}
+	if len(files) == 0 || t.NodeID == nil {
+		return
+	}
+	now := time.Now()
+	for i := range files {
+		f := &files[i]
+		if f.RelPath == "" || f.Filename == "" {
+			continue
+		}
+		row := model.StorageFile{
+			NodeID: *t.NodeID, UserID: t.OwnerID, RelPath: f.RelPath,
+			Category: model.FileCategoryDisk, Filename: f.Filename,
+			SizeBytes: f.SizeBytes, UploadedAt: &now,
+		}
+		if err := e.db.WithContext(ctx).Create(&row).Error; err != nil {
+			// 唯一约束冲突是这里唯一常见的失败：同一台机器被删两次（第二
+			// 次的转移目标同名）。它说明文件已经在列表里了，不需要报错。
+			log.Printf("[vm] 登记转移的磁盘失败 task=%d dev=%s: %v", t.ID, f.Dev, err)
+		}
+	}
 }
 
 // isDuplicateKey 判断错误是否为唯一约束冲突。

@@ -779,6 +779,18 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 			Message: "磁盘已合并为独立镜像",
 		}
 
+	case OpVMDelete:
+		// 只有 disk_action=transfer 时才有可回传的东西：其余两种情况
+		// （保留 / 连盘删除）节点上不会留下任何"文件"，返回空是准确的。
+		if strParam(op.Params, "disk_action") == DiskActionTransfer {
+			data[VMDiskTransferDataKey] = []TransferredDisk{{
+				Dev:       "vdb",
+				Filename:  op.Target + "-data.img",
+				RelPath:   "disks/" + op.Target + "-data.img",
+				SizeBytes: 22 << 30,
+			}}
+		}
+
 	case OpVMDiskResize:
 		oldGB, _ := op.Params["old_gb"].(int)
 		newGB, _ := op.Params["new_gb"].(int)
@@ -830,6 +842,11 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 		case DiskActionDetach:
 			info.GuestRefreshNeeded = true
 			info.Message = "磁盘已卸载；来宾内若有对应挂载点，请先卸载再操作"
+		case DiskActionMigrate:
+			// 热迁移不需要重启，但来宾里可能要重新扫描——与挂载同理，
+			// 这两条提示由动作本身决定，界面据此给出不同的后续指引。
+			info.GuestRefreshNeeded = true
+			info.Message = "磁盘已迁移到目标存储，来宾内可能需要重新扫描"
 		default:
 			info.Message = "磁盘配置已更新"
 		}

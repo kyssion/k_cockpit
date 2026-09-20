@@ -29,7 +29,7 @@ type BatchRequest struct {
 	VMIDs []int64
 	// Action 取值 start / shutdown / poweroff / reset / delete。
 	Action string
-	// DiskAction 仅 delete 需要，取值 delete / keep。
+	// DiskAction 仅 delete 需要，取值 delete / keep / transfer。
 	//
 	// **不给默认值**（R-009）：连盘删除不可逆、保留磁盘会留下孤儿数据，
 	// 两者代价完全不同，由服务端替用户选一个等于把这个决定藏起来。
@@ -87,10 +87,10 @@ func (s *Service) Batch(
 	isDelete := req.Action == BatchActionDelete
 	if isDelete {
 		switch req.DiskAction {
-		case DiskActionDelete, DiskActionKeep:
+		case DiskActionDelete, DiskActionKeep, DiskActionTransfer:
 		default:
 			return nil, api.InvalidParameter(
-				"必须选择磁盘处理方式：delete（连同磁盘删除）或 keep（保留磁盘）")
+				"必须选择磁盘处理方式：delete（连同磁盘删除）、keep（保留磁盘）或 transfer（转移到我的存储）")
 		}
 	} else if _, err := ParsePowerAction(req.Action); err != nil {
 		return nil, err
