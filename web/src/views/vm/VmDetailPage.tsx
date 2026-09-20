@@ -143,8 +143,9 @@ export function VmDetailPage() {
     queryKey: ['tasks', { resource_id: vmID }],
     queryFn: () => taskApi.list({ resource_id: vmID, page_size: 5 }),
     enabled: Number.isFinite(vmID),
+    // 实时通道（任务流）会在任务变化时让这个查询失效，这里是断线时的兜底。
     refetchInterval: (q) =>
-      (q.state.data?.items ?? []).some((t) => isActive(t.status)) ? 2500 : false,
+      (q.state.data?.items ?? []).some((t) => isActive(t.status)) ? 10000 : false,
   })
 
   // 电源操作是异步的。详情页停留期间，只要还有在途任务就持续刷新，
@@ -155,7 +156,7 @@ export function VmDetailPage() {
     queryKey: ['vm', vmID],
     queryFn: () => vmApi.get(vmID),
     enabled: Number.isFinite(vmID),
-    refetchInterval: hasActiveTask ? 2500 : false,
+    refetchInterval: hasActiveTask ? 10000 : false,
   })
 
   const nodes = useQuery({ queryKey: ['nodes'], queryFn: nodeApi.list })

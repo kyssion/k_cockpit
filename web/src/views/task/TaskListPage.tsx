@@ -37,11 +37,15 @@ export function TaskListPage() {
   const tasks = useQuery({
     queryKey: ['tasks', page, status],
     queryFn: () => taskApi.list({ page, page_size: PAGE_SIZE, status }),
-    // 有进行中的任务时轮询刷新。实时通道（SSE）尚未实现，先以轮询替代；
-    // 全部任务处于终态时停止轮询，避免空转。
+    // 有进行中的任务时保留一条**兜底**轮询。
+    //
+    // 主路径已经是实时通道（/tasks/stream，在布局里挂着），它会在任务
+    // 变化的那一刻让这个查询失效。这里保留 10 秒一次而不是删掉：SSE 断开
+    // （代理掐断长连接、服务端重启）时，界面不该安静地停在旧状态上——那
+    // 比多几次请求糟糕得多。全部任务终态时停止，避免空转。
     refetchInterval: (query) => {
       const items = query.state.data?.items ?? []
-      return items.some((t) => isActive(t.status)) ? 2000 : false
+      return items.some((t) => isActive(t.status)) ? 10000 : false
     },
   })
 
@@ -309,9 +313,8 @@ function TaskDetailDrawer({
     queryKey: ['task', taskID],
     queryFn: () => taskApi.get(taskID as number),
     enabled: open,
-    // 进行中的任务会持续变化（进度、阶段、终态），2 秒刷新一次；
-    // 终态时停止——没必要为一个不会再变的东西持续请求。
-    refetchInterval: (q) => (q.state.data && isActive(q.state.data.status) ? 2000 : false),
+    // 有实时通道时它由事件驱动刷新；这里保留较慢的兜底（见列表处的说明）。
+    refetchInterval: (q) => (q.state.data && isActive(q.state.data.status) ? 10000 : false),
   })
 
   // ESC 关闭：抽屉遮住了部分内容，键盘用户需要一个不依赖鼠标的退路。

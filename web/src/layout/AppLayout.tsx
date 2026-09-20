@@ -7,6 +7,8 @@ import { Button } from '@/components/common/Button'
 import { CommandPalette } from '@/components/common/CommandPalette'
 import { RiskVerificationGate } from '@/components/risk/RiskVerificationGate'
 import { TabBar } from '@/components/common/TabBar'
+import { TaskTray } from '@/components/common/TaskTray'
+import { useTaskStream } from '@/hooks/useTaskStream'
 import { LANGS, t } from '@/locales'
 import { useLocaleStore } from '@/stores/locale'
 import { useTabStore } from '@/stores/tabs'
@@ -122,6 +124,10 @@ export function AppLayout() {
     },
   })
 
+  // 全局只挂一条实时通道（任务状态流）。它替代任务中心与底部任务栏的轮询，
+  // 并在任务变化时让相关列表重新取数。
+  const streamState = useTaskStream()
+
   const visibleItems = NAV_ITEMS.filter(
     (item) => !item.roles || (user && item.roles.includes(user.role)),
   )
@@ -172,6 +178,9 @@ export function AppLayout() {
         <main className="min-h-0 flex-1 overflow-y-auto bg-base p-6">
           <Outlet />
         </main>
+
+        {/* 常驻任务栏：只在有进行中任务时出现。 */}
+        <TaskTray connected={streamState === 'open'} />
       </div>
 
       {/* 高风险操作的验证弹窗。挂在布局里而非请求层：它需要 Router 上下文

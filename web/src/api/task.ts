@@ -105,3 +105,54 @@ export const taskApi = {
 export function isActive(status: TaskStatus): boolean {
   return status === 'pending' || status === 'running' || status === 'unknown'
 }
+
+/** 实时通道推来的一条变化。它只说明"什么变了"，内容由前端重新查询。 */
+export interface TaskEvent {
+  kind: 'task' | 'vm'
+  status: string
+  resource_type?: string
+  resource_id?: number
+  resource_name?: string
+  owner_id?: number
+  task_id?: number
+  at: string
+}
+
+/**
+ * 打开任务状态流（SSE）。返回关闭函数。
+ *
+ * 鉴权靠 Cookie：EventSource 对同源请求会自动带上它，因此**不需要把令牌
+ * 放进查询串**——放进查询串会让它出现在日志、Referer 与浏览器历史里。
+ *
+ * 断开不需要重试退避：浏览器会自己重连，服务端只需在重连时立刻补一条
+ * connected。真正要处理的是"长时间连不上"，而那由界面上的状态显示负责。
+ */
+export function openTaskStream(handlers: {
+  onConnected?: () => void
+  onEvent?: (e: TaskEvent) => void
+  onGap?: (dropped: number) => void
+  /** 连接错误或断开。浏览器会自己重连，这里只负责把它显示出来。 */
+  onError?: () => void
+}): () => void {
+  const source = new EventSource('/api/v1/tasks/stream')
+
+  source.onerror = () => handlers.onError?.()
+  source.addEventListener('connected', () => handlers.onConnected?.())
+  source.addEventListener('task', (ev) => {
+    try {
+      handlers.onEvent?.(JSON.parse((ev as MessageEvent<string>).data) as TaskEvent)
+    } catch {
+      // 一条解析不了的事件不该让整条流失效；跳过它，其余照常处理。
+    }
+  })
+  source.addEventListener('gap', (ev) => {
+    try {
+      const data = JSON.parse((ev as MessageEvent<string>).data) as { dropped: number }
+      handlers.onGap?.(data.dropped)
+    } catch {
+      // 同上。
+    }
+  })
+
+  return () => source.close()
+}
