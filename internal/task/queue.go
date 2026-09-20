@@ -22,6 +22,7 @@ import (
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/audit"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/realtime"
 )
 
 // Executor 是一种任务类型的执行逻辑。
@@ -54,6 +55,9 @@ type Queue struct {
 	audit     *audit.Recorder
 	opts      Options
 	executors map[string]Executor
+	// bus 广播任务状态变化（实时通道）。可为 nil：不装配就不推送，
+	// 大量单测与不启用实时通道的部署都不需要它。
+	bus *realtime.Bus
 
 	wake chan struct{}
 	wg   sync.WaitGroup
@@ -80,6 +84,31 @@ func NewQueue(db *gorm.DB, recorder *audit.Recorder, opts Options) *Queue {
 // Register 注册任务执行器。
 func (q *Queue) Register(e Executor) {
 	q.executors[e.Type()] = e
+}
+
+// WithBus 装配实时事件总线。
+//
+// 用链式方法而不是构造参数：现有的调用点（包括大批测试）构造队列时并不
+// 关心推送，为一个可选能力改动全部签名不值得。
+func (q *Queue) WithBus(b *realtime.Bus) *Queue {
+	q.bus = b
+	return q
+}
+
+// publish 广播一次任务状态变化。bus 为 nil 时是空操作。
+func (q *Queue) publish(t *model.Task, status string) {
+	if q.bus == nil || t == nil {
+		return
+	}
+	q.bus.Publish(realtime.Event{
+		Kind:         realtime.KindTask,
+		Status:       status,
+		ResourceType: deref(t.ResourceType),
+		ResourceID:   deref(t.ResourceID),
+		ResourceName: deref(t.ResourceName),
+		OwnerID:      deref(t.OwnerID),
+		TaskID:       t.ID,
+	})
 }
 
 // Start 启动调度循环。
@@ -173,6 +202,7 @@ func (q *Queue) Enqueue(ctx context.Context, spec Spec) (*model.Task, error) {
 		Success:      true,
 	})
 
+	q.publish(&t, model.TaskPending)
 	q.signal()
 	return &t, nil
 }
@@ -261,6 +291,10 @@ func (q *Queue) run(ctx context.Context, t *model.Task) {
 	reporter := NewReporter(q.db, t.ID)
 	ctx = WithReporter(ctx, reporter)
 
+	// 派发即"开始执行"，而不是等到有第一条阶段上报：短暂的任务可能一条
+	// 阶段都没有，而界面上的"执行中"应当与队列里的状态同时发生。
+	q.publish(t, model.TaskRunning)
+
 	err := exec.Run(ctx, t)
 	if err != nil {
 		// 失败原因同时落到阶段上：任务是整体结果，阶段才回答「卡在哪」。
@@ -303,6 +337,9 @@ func (q *Queue) finish(ctx context.Context, t *model.Task, status, message strin
 		Where("id = ?", t.ID).Updates(updates).Error; err != nil {
 		log.Printf("[task] 更新任务 %d 状态失败: %v", t.ID, err)
 	}
+	// 终态同样推送：任务栏要能在任务**结束**的那一刻收起它，而不是等下一次
+	// 轮询——用户盯着的那几秒正是它最该消失的时候。
+	q.publish(t, status)
 
 	q.record(ctx, audit.Entry{
 		OperatorID:   deref(t.CreatedBy),

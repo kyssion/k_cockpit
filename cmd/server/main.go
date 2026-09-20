@@ -45,6 +45,7 @@ import (
 	"k_cockpit/internal/publicip"
 	"k_cockpit/internal/quota"
 	"k_cockpit/internal/quotaenforce"
+	"k_cockpit/internal/realtime"
 	"k_cockpit/internal/risk"
 	"k_cockpit/internal/router"
 	"k_cockpit/internal/schedule"
@@ -157,7 +158,12 @@ func main() {
 
 	// 任务队列：所有异步操作的载体。注册各能力的 Executor，队列本身
 	// 不关心任务具体做什么——新增能力时只需在这里多注册一个。
-	queue := task.NewQueue(db, recorder, task.Options{})
+	// 实时事件总线：任务状态变化由队列在关键节点广播，SSE 端点订阅它。
+	//
+	// 先建总线再建队列，是因为队列要在入队、派发与落定三处发布事件——
+	// 顺序反了就只能事后补一次装配，而那种"可选装配"最容易被忘记。
+	bus := realtime.NewBus()
+	queue := task.NewQueue(db, recorder, task.Options{}).WithBus(bus)
 	queue.Register(vm.NewCreateExecutor(db, mockAgent))
 	queue.Register(vm.NewPowerExecutor(db, mockAgent))
 	queue.Register(vm.NewDeleteExecutor(db, mockAgent))
@@ -371,6 +377,7 @@ func main() {
 		Network:       networkSvc,
 		Settings:      settingsSvc,
 		Mailer:        mailSvc,
+		Bus:           bus,
 		SecureCookie:  cfg.Session.SecureCookie,
 		SimulateAgent: cfg.Agent.Transport == config.AgentTransportMock,
 	})

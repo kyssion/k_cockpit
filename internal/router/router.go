@@ -41,6 +41,7 @@ import (
 	"k_cockpit/internal/publicip"
 	"k_cockpit/internal/quota"
 	"k_cockpit/internal/quotaenforce"
+	"k_cockpit/internal/realtime"
 	"k_cockpit/internal/risk"
 	"k_cockpit/internal/schedule"
 	"k_cockpit/internal/scheduler"
@@ -72,6 +73,8 @@ type Deps struct {
 	Task      *task.Queue
 	// Mailer 提供发信能力（F-1-08）。为 nil 时测试发信接口返回不可用。
 	Mailer *mailer.Service
+	// Bus 是实时事件总线（F-7-02 的任务流）。为 nil 时实时通道返回"未启用"。
+	Bus *realtime.Bus
 	// Risk 强制高风险操作的二次验证（f-10-01）。受保护的操作在 handler
 	// 入口调用它，清单本身集中在 internal/risk。
 	Risk *risk.Guard
@@ -167,7 +170,7 @@ func Register(h *server.Hertz, deps Deps) {
 	setupHandler := handler.NewSetup(deps.Bootstrap, deps.Auth, deps.SecureCookie)
 	nodeHandler := handler.NewNode(deps.Node, deps.SimulateAgent, deps.Risk)
 	vmHandler := handler.NewVM(deps.VM, deps.Risk)
-	taskHandler := handler.NewTask(deps.Task)
+	taskHandler := handler.NewTask(deps.Task, deps.Bus)
 	securityHandler := handler.NewSecurity(deps.Risk, deps.Auth)
 	accountHandler := handler.NewAccount(deps.Auth, deps.Risk, deps.AuditRecorder)
 	scheduleHandler := handler.NewSchedule(deps.Schedule, deps.Risk)
@@ -920,6 +923,8 @@ func Register(h *server.Hertz, deps Deps) {
 
 		// 任务中心：tenant 只能看到自己发起的（同样由归属过滤保证）。
 		v1.GET("/tasks", requireAuth, taskHandler.List)
+		// 任务状态流（SSE）。它替代任务中心与底部任务栏的轮询。
+		v1.GET("/tasks/stream", requireAuth, taskHandler.Stream)
 		v1.GET("/tasks/:id", requireAuth, taskHandler.Get)
 		v1.POST("/tasks/:id/cancel", requireAuth, taskHandler.Cancel)
 		// 清理已完成的旧任务。**只清终态**，且**被引用的不删**——

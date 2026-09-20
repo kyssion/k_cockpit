@@ -11,17 +11,20 @@ import (
 	"k_cockpit/internal/auth"
 	"k_cockpit/internal/authz"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/realtime"
 	"k_cockpit/internal/task"
 )
 
 // Task 提供任务接口（F-7-02）。
 type Task struct {
 	queue *task.Queue
+	// bus 提供实时通道；为 nil 时 Stream 返回"未启用"而不是假装成流。
+	bus *realtime.Bus
 }
 
-// NewTask 构造任务接口。
-func NewTask(queue *task.Queue) *Task {
-	return &Task{queue: queue}
+// NewTask 构造任务接口。bus 可为 nil。
+func NewTask(queue *task.Queue, bus *realtime.Bus) *Task {
+	return &Task{queue: queue, bus: bus}
 }
 
 // taskView 是任务的对外视图。
