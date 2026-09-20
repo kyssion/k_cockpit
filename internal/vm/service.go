@@ -22,6 +22,7 @@ import (
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/audit"
 	"k_cockpit/internal/authz"
+	"k_cockpit/internal/computequota"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/settings"
 	"k_cockpit/internal/task"
@@ -66,14 +67,18 @@ func (s *Service) SetEncryptionKey(key []byte) {
 	s.encKey = key
 }
 
-// ComputeQuotaChecker 校验计算资源配额（vCPU / 内存 / 实例数）。
+// ComputeQuotaChecker 校验计算资源配额（vCPU / 内存 / 实例数 / 快照 /
+// 端口转发 / 公网 IP）。
 //
 // 用接口而不是直接依赖 computequota 包：配额是**可选能力**（未启用时不应
 // 有任何行为变化），而把它做成必填的构造参数会让所有不关心配额的调用方
 // （包括大批单测）都被迫构造一个空实现。
 type ComputeQuotaChecker interface {
 	// Check 校验能否再新增这些资源；超限返回可定位到维度的错误。
-	Check(ctx context.Context, userID, nodeID int64, addVMs, addVCPU, addMemoryMB int) error
+	Check(ctx context.Context, userID, nodeID int64, add computequota.Additions) error
+	// SnapshotLimit 返回该用户在该节点上的快照上限；0 表示未配置，
+	// 调用方退回自己的默认值。
+	SnapshotLimit(ctx context.Context, userID, nodeID int64) (int, error)
 }
 
 // SetComputeQuota 装配计算配额校验器；不调用即不校验。
@@ -490,8 +495,11 @@ func (s *Service) CreateBatch(
 	// 计算资源配额：磁盘之外还要看核、内存与台数。它们与存储配额是**两类
 	// 约束**（一个按周期累计、一个是存量），因此分开校验、分开报错。
 	if s.computeQuota != nil {
-		if err := s.computeQuota.Check(ctx, owner.UserID, req.NodeID,
-			req.Count, req.VCPU*req.Count, req.MemoryMB*req.Count); err != nil {
+		if err := s.computeQuota.Check(ctx, owner.UserID, req.NodeID, computequota.Additions{
+			VMs:      req.Count,
+			VCPU:     req.VCPU * req.Count,
+			MemoryMB: req.MemoryMB * req.Count,
+		}); err != nil {
 			return nil, err
 		}
 	}

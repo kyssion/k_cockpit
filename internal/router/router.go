@@ -584,6 +584,9 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/resource-quotas", requireAuth, adminOnly, quotaEnforceHandler.List)
 		v1.PUT("/resource-quotas", requireAuth, adminOnly, quotaEnforceHandler.Set)
 		v1.DELETE("/resource-quotas/:id", requireAuth, adminOnly, quotaEnforceHandler.Delete)
+		// 重置用量（F-1-09）：清的是**本周期的累计**，而不只是把状态改回正常。
+		// 只清状态的话，下一次评估（五分钟内）会立刻重新判定为超限。
+		v1.POST("/resource-quotas/:id/reset-usage", requireAuth, adminOnly, quotaEnforceHandler.ResetUsage)
 
 		// 日志管理（F-9-02）。
 		//

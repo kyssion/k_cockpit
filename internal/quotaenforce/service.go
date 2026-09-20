@@ -259,6 +259,95 @@ func (s *Service) Delete(
 	return nil
 }
 
+// ResetUsage 清空某条配额**当前周期**的累计用量，并撤销已生效的处置。
+//
+// 与"改上限"清状态的区别是本质的：改上限时累计确实该从那一刻重新算起，
+// 而这里**累计本身**被清零。只清状态不清累计的话，下一次评估（五分钟内）
+// 会立刻把它再次判为超限，用户看到的将是"点了重置，五分钟后又被限速"——
+// 比没有这个功能更让人困惑。
+//
+// 清的是当前周期：历史周期的行留着，它们是"上个月用了多少"的唯一证据，
+// 而删除历史会让"这个用户一直超量"这件事无从追溯。
+func (s *Service) ResetUsage(
+	ctx context.Context, id int64, v authz.Viewer, operatorName, clientIP string,
+) (*View, error) {
+	var row model.ResourceQuota
+	if err := s.db.WithContext(ctx).First(&row, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, api.NotFound("配额不存在")
+		}
+		log.Printf("[quotaenforce] 查询配额失败 id=%d: %v", id, err)
+		return nil, api.Internal()
+	}
+
+	period := s.currentPeriod()
+	start, end := periodRange(period)
+
+	// 两个维度共用一张累计表，因此按维度清：清流量不该顺手把运行时长也
+	// 抹掉——那是另一个承诺。
+	switch row.Dimension {
+	case model.QuotaDimTrafficIn, model.QuotaDimTrafficOut:
+		if err := s.db.WithContext(ctx).
+			Where("owner_id = ? AND date >= ? AND date < ?", row.UserID, start, end).
+			Delete(&model.TrafficStatDaily{}).Error; err != nil {
+			log.Printf("[quotaenforce] 清理流量累计失败 user=%d: %v", row.UserID, err)
+			return nil, api.Internal()
+		}
+	case model.QuotaDimRuntime:
+		if err := s.db.WithContext(ctx).
+			Where("owner_id = ? AND date >= ? AND date < ?", row.UserID, start, end).
+			Delete(&model.VMRuntimeDaily{}).Error; err != nil {
+			log.Printf("[quotaenforce] 清理运行时长累计失败 user=%d: %v", row.UserID, err)
+			return nil, api.Internal()
+		}
+	}
+
+	wasLimited := row.Limited()
+	if err := s.reset(ctx, &row); err != nil {
+		return nil, err
+	}
+
+	if s.audit != nil {
+		s.audit.Record(ctx, audit.Entry{
+			OperatorID: v.UserID, OperatorName: operatorName,
+			NodeID: row.NodeID, ResourceType: "resource_quota",
+			ResourceID: row.ID, Action: "quota.reset_usage",
+			Params: map[string]any{
+				"dimension": row.Dimension, "period": period, "was_limited": wasLimited,
+			},
+			Success: true, ClientIP: clientIP,
+		})
+	}
+	return s.View(ctx, row.ID)
+}
+
+// View 返回单条配额的当前状态（含用量与百分比）。
+func (s *Service) View(ctx context.Context, id int64) (*View, error) {
+	var row model.ResourceQuota
+	if err := s.db.WithContext(ctx).First(&row, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, api.NotFound("配额不存在")
+		}
+		return nil, api.Internal()
+	}
+	used := s.usageOfQuiet(ctx, &row)[row.Dimension]
+	view := toView(&row, used, s.currentPeriod())
+	view.Username = s.usernames(ctx, []model.ResourceQuota{row})[row.UserID]
+	return &view, nil
+}
+
+// usageOfQuiet 取用量但**不因失败中断**：展示路径不该因为一次统计失败
+// 就把整个页面变成错误页，用量那一列写成 0 即可（界面上会标注"。
+func (s *Service) usageOfQuiet(ctx context.Context, q *model.ResourceQuota) map[string]int64 {
+	period := s.currentPeriod()
+	used, err := s.usageOf(ctx, q.NodeID, q.UserID, period)
+	if err != nil {
+		log.Printf("[quotaenforce] 读取用量失败 id=%d: %v", q.ID, err)
+		return map[string]int64{}
+	}
+	return used
+}
+
 // Evaluate 对节点上的全部配额做一次判定并按需处置。
 //
 // 它由采样器周期调用（与其他周期工作一样登记在调度器注册表里），因此

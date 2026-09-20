@@ -8,6 +8,7 @@ import (
 
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/authz"
+	"k_cockpit/internal/computequota"
 	"k_cockpit/internal/model"
 )
 
@@ -43,10 +44,11 @@ var createGroups = []EditGroupInfo{
 
 // 前置条件的标识。
 const (
-	PreNode    = "node"
-	PreStorage = "storage_pool"
-	PreNetwork = "network"
-	PreQuota   = "quota"
+	PreNode         = "node"
+	PreStorage      = "storage_pool"
+	PreNetwork      = "network"
+	PreQuota        = "quota"
+	PreComputeQuota = "compute_quota"
 )
 
 // Prerequisite 是一项创建前置条件及其检查结果。
@@ -185,7 +187,10 @@ func (s *Service) CreateFormOf(ctx context.Context, nodeID int64, v authz.Viewer
 	}
 	form.Prerequisites = append(form.Prerequisites, pre)
 
-	// --- 配额：按默认系统盘试算，而不是等用户填完再拒 ---
+	// --- 配额：按默认规格试算，而不是等用户填完再拒 ---
+	//
+	// 让用户在向导第一步就看到"额度不够"，比让他填完八个步骤再在最后一步
+	// 被拒好得多——那时他已经选好了模板与网络，只能放弃整份表单。
 	pre = Prerequisite{Key: PreQuota, Label: "存储配额充足"}
 	if s.quota == nil {
 		pre.OK = true
@@ -194,6 +199,24 @@ func (s *Service) CreateFormOf(ctx context.Context, nodeID int64, v authz.Viewer
 		if err := s.quota.Check(ctx, v.UserID, nodeID, est); err != nil {
 			pre.Message = describeErr(err)
 			pre.Link = "/quota"
+		} else {
+			pre.OK = true
+		}
+	}
+	form.Prerequisites = append(form.Prerequisites, pre)
+
+	// 计算配额用**默认规格**试算（2 核 / 2 GB / 1 台）：真实规格由用户在
+	// 后面的步骤里改，那时 Create 会再校验一次。这里要回答的是"我现在
+	// 进去填表单有没有意义"，不是"这个配置能不能过"。
+	pre = Prerequisite{Key: PreComputeQuota, Label: "计算资源配额充足"}
+	if s.computeQuota == nil {
+		pre.OK = true
+	} else {
+		if err := s.computeQuota.Check(ctx, v.UserID, nodeID, computequota.Additions{
+			VMs: 1, VCPU: defaultCreateVCPU, MemoryMB: defaultCreateMemoryMB,
+		}); err != nil {
+			pre.Message = describeErr(err)
+			pre.Link = "/resource-quota"
 		} else {
 			pre.OK = true
 		}
@@ -254,6 +277,13 @@ func (s *Service) CreateFormOf(ctx context.Context, nodeID int64, v authz.Viewer
 // 与矩阵里 disk_gb 的 Default 保持一致：两处不一致的话，界面上写着
 // 「默认 40 GB」，而配额提示却说「按 20 GB 试算」，用户无法判断哪个真。
 const defaultCreateDiskGB = 40
+
+// defaultCreateVCPU / defaultCreateMemoryMB 是前置条件试算**计算配额**时
+// 用的默认规格，同样与矩阵里的 Default 保持一致（见上一条注释）。
+const (
+	defaultCreateVCPU     = 2
+	defaultCreateMemoryMB = 2048
+)
 
 // createFields 返回创建向导可见的字段。
 //

@@ -300,6 +300,9 @@ func main() {
 	// 告警中心（F-8-07）。
 	alertSvc := alert.NewService(db)
 	vmSvc.SetComputeQuota(computeQuotaSvc)
+	// 公网地址与端口转发的数量同样受计算配额约束：它们都是稀缺资源，
+	// 而"先到先得"通常不是管理员想要的分配策略。
+	publicIPSvc.SetComputeQuota(computeQuotaSvc)
 	storageSvc := storage.NewService(db, queue, recorder, mockAgent, settingsSvc)
 
 	// 定时任务（F-7-05）：调度器到点把**已有的任务类型**入队，自己不做任何

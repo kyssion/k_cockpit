@@ -24,10 +24,23 @@ func newEnv(t *testing.T) (*gorm.DB, *computequota.Service) {
 	if err != nil {
 		t.Fatalf("打开测试库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.ComputeQuota{}, &model.VM{}, &model.User{}, &model.AuditLog{}); err != nil {
+	// 数量型维度要连 vm_snapshot / port_forward / public_ip_binding，
+	// 因此这几张表也要建出来——配额统计现在依赖它们。
+	if err := db.AutoMigrate(&model.ComputeQuota{}, &model.VM{}, &model.User{}, &model.AuditLog{},
+		&model.VMSnapshot{}, &model.PortForward{}, &model.PublicIPBinding{}); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
 	return db, computequota.NewService(db, nil)
+}
+
+// limits 构造三个计算维度上限，数量型维度留 0（不限）。
+func limits(vcpu, memMB, vms int) computequota.Limits {
+	return computequota.Limits{VCPU: vcpu, MemoryMB: memMB, VMCount: vms}
+}
+
+// add 构造"本次新增"，数量型维度留 0。
+func add(vms, vcpu, memMB int) computequota.Additions {
+	return computequota.Additions{VMs: vms, VCPU: vcpu, MemoryMB: memMB}
 }
 
 func seedVM(t *testing.T, db *gorm.DB, name string, owner int64, vcpu, memoryMB int) {
@@ -49,13 +62,13 @@ func TestCheckRejectsWhenOverLimit(t *testing.T) {
 	db, svc := newEnv(t)
 	ctx := context.Background()
 
-	if err := svc.Set(ctx, 1, 7, 4, 4096, 2, 1, "root", "10.0.0.1"); err != nil {
+	if err := svc.Set(ctx, 1, 7, limits(4, 4096, 2), 1, "root", "10.0.0.1"); err != nil {
 		t.Fatalf("设置配额失败: %v", err)
 	}
 	seedVM(t, db, "vm-1", 7, 2, 2048)
 
 	// 再建一台 4 核：vCPU 会到 6，超过上限 4。
-	err := svc.Check(ctx, 7, 1, 1, 4, 4096)
+	err := svc.Check(ctx, 7, 1, add(1, 4, 4096))
 	if err == nil {
 		t.Fatal("超出 vCPU 上限未被拒绝")
 	}
@@ -64,14 +77,14 @@ func TestCheckRejectsWhenOverLimit(t *testing.T) {
 	}
 
 	// 台数超限：已有 1 台 + 再建 2 台 = 3 > 2。
-	if err := svc.Check(ctx, 7, 1, 2, 1, 512); err == nil {
+	if err := svc.Check(ctx, 7, 1, add(2, 1, 512)); err == nil {
 		t.Fatal("超出实例数上限未被拒绝")
 	} else if !strings.Contains(err.Error(), "虚拟机数量") {
 		t.Errorf("错误未指出是实例数超限: %v", err)
 	}
 
 	// 在余量之内应当放行。
-	if err := svc.Check(ctx, 7, 1, 1, 2, 2048); err != nil {
+	if err := svc.Check(ctx, 7, 1, add(1, 2, 2048)); err != nil {
 		t.Errorf("余量之内的创建被拒绝: %v", err)
 	}
 }
@@ -81,7 +94,7 @@ func TestNoQuotaMeansUnlimited(t *testing.T) {
 	_, svc := newEnv(t)
 	ctx := context.Background()
 
-	if err := svc.Check(ctx, 7, 1, 10, 64, 131072); err != nil {
+	if err := svc.Check(ctx, 7, 1, add(10, 64, 131072)); err != nil {
 		t.Errorf("未设置配额时不应拦截: %v", err)
 	}
 }
@@ -94,10 +107,10 @@ func TestZeroClearsQuota(t *testing.T) {
 	db, svc := newEnv(t)
 	ctx := context.Background()
 
-	if err := svc.Set(ctx, 1, 7, 4, 4096, 2, 1, "root", "10.0.0.1"); err != nil {
+	if err := svc.Set(ctx, 1, 7, limits(4, 4096, 2), 1, "root", "10.0.0.1"); err != nil {
 		t.Fatalf("设置配额失败: %v", err)
 	}
-	if err := svc.Set(ctx, 1, 7, 0, 0, 0, 1, "root", "10.0.0.1"); err != nil {
+	if err := svc.Set(ctx, 1, 7, limits(0, 0, 0), 1, "root", "10.0.0.1"); err != nil {
 		t.Fatalf("清空配额失败: %v", err)
 	}
 	var n int64
@@ -105,7 +118,7 @@ func TestZeroClearsQuota(t *testing.T) {
 	if n != 0 {
 		t.Errorf("清空后配额记录 = %d, 期望 0", n)
 	}
-	if err := svc.Check(ctx, 7, 1, 10, 64, 131072); err != nil {
+	if err := svc.Check(ctx, 7, 1, add(10, 64, 131072)); err != nil {
 		t.Errorf("清空后应视为不限: %v", err)
 	}
 }
@@ -121,7 +134,7 @@ func TestListIncludesUsersWithoutQuota(t *testing.T) {
 		t.Fatalf("创建用户失败: %v", err)
 	}
 	seedVM(t, db, "vm-1", 7, 2, 2048)
-	if err := svc.Set(ctx, 1, 8, 8, 8192, 4, 1, "root", "10.0.0.1"); err != nil {
+	if err := svc.Set(ctx, 1, 8, limits(8, 8192, 4), 1, "root", "10.0.0.1"); err != nil {
 		t.Fatalf("设置配额失败: %v", err)
 	}
 
@@ -165,11 +178,11 @@ func TestUsageIgnoresMissingVMs(t *testing.T) {
 		Update("present", false).Error; err != nil {
 		t.Fatalf("置失效失败: %v", err)
 	}
-	if err := svc.Set(ctx, 1, 7, 2, 2048, 1, 1, "root", "10.0.0.1"); err != nil {
+	if err := svc.Set(ctx, 1, 7, limits(2, 2048, 1), 1, "root", "10.0.0.1"); err != nil {
 		t.Fatalf("设置配额失败: %v", err)
 	}
 	// 上限正好等于现存那台；若把失效的那台也算进来，这里会被拒。
-	if err := svc.Check(ctx, 7, 1, 0, 0, 0); err != nil {
+	if err := svc.Check(ctx, 7, 1, add(0, 0, 0)); err != nil {
 		t.Errorf("失效机器不应占额度: %v", err)
 	}
 }

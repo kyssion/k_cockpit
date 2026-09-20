@@ -13,6 +13,7 @@ import (
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/audit"
 	"k_cockpit/internal/authz"
+	"k_cockpit/internal/computequota"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/task"
 )
@@ -524,6 +525,16 @@ func (s *Service) AddPortForward(
 	if count > 0 {
 		return nil, api.Conflict(
 			"该节点上的 " + protocol + " 端口 " + strconv.Itoa(req.HostPort) + " 已被其它转发占用")
+	}
+
+	// 数量配额按**用户 × 节点**计，而不是按这台机器：端口转发消耗的是
+	// 宿主机的端口，用户换一台机器来建并不会让消耗变少。
+	if s.computeQuota != nil && vm.OwnerID != nil {
+		if err := s.computeQuota.Check(ctx, *vm.OwnerID, vm.NodeID, computequota.Additions{
+			PortForwards: 1,
+		}); err != nil {
+			return nil, err
+		}
 	}
 
 	row := model.PortForward{

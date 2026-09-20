@@ -17,6 +17,24 @@ import (
 	"k_cockpit/internal/task"
 )
 
+// snapshotLimit 取这台虚拟机可用的快照上限。
+//
+// 两个来源按优先级取：用户 × 节点的计算配额 > 编译期默认值。配额没配时
+// 退回默认值，是为了让"没配配额"的部署行为与从前完全一致——新增的维度
+// 不该在一次升级里悄悄改变既有系统的边界。
+func (s *Service) snapshotLimit(ctx context.Context, vm *model.VM) (int, error) {
+	if s.computeQuota != nil && vm.OwnerID != nil {
+		n, err := s.computeQuota.SnapshotLimit(ctx, *vm.OwnerID, vm.NodeID)
+		if err != nil {
+			return 0, err
+		}
+		if n > 0 {
+			return n, nil
+		}
+	}
+	return defaultSnapshotQuota, nil
+}
+
 // defaultSnapshotQuota 是虚拟机未指定模板配额时的快照上限。
 //
 // 刻意**不**做成设置项：配额最终应来自模板（`template.max_snapshots`），
@@ -62,12 +80,19 @@ type SnapshotList struct {
 func (s *Service) Snapshots(
 	ctx context.Context, vmID int64, v authz.Viewer,
 ) (*SnapshotList, error) {
-	if _, err := s.load(ctx, vmID, v); err != nil {
+	vm, err := s.load(ctx, vmID, v)
+	if err != nil {
+		return nil, err
+	}
+	// 上限与创建时同源：否则界面显示「10 个」而创建时按配额拒在 5 个，
+	// 用户会认为是两个功能各写错了一半。
+	limit, err := s.snapshotLimit(ctx, vm)
+	if err != nil {
 		return nil, err
 	}
 
 	var rows []model.VMSnapshot
-	err := s.db.WithContext(ctx).
+	err = s.db.WithContext(ctx).
 		Where("vm_id = ?", vmID).
 		Order("created_at DESC, id DESC").
 		Find(&rows).Error
@@ -92,7 +117,7 @@ func (s *Service) Snapshots(
 		})
 	}
 
-	return &SnapshotList{Items: items, Quota: defaultSnapshotQuota, Used: len(items)}, nil
+	return &SnapshotList{Items: items, Quota: limit, Used: len(items)}, nil
 }
 
 // CreateSnapshotRequest 是一次创建快照的请求。
@@ -135,9 +160,13 @@ func (s *Service) CreateSnapshot(
 		log.Printf("[vm] 统计快照数量失败 vm=%d: %v", vmID, err)
 		return nil, api.Internal()
 	}
-	if int(used) >= defaultSnapshotQuota {
+	limit, err := s.snapshotLimit(ctx, vm)
+	if err != nil {
+		return nil, err
+	}
+	if int(used) >= limit {
 		return nil, api.Conflict(
-			"快照数量已达上限（" + strconv.Itoa(defaultSnapshotQuota) + "），请先删除不再需要的快照")
+			"快照数量已达上限（" + strconv.Itoa(limit) + "），请先删除不再需要的快照")
 	}
 
 	// 实时探测运行态：投影不参与业务判定（f-2-01 R-002），而这里需要它来

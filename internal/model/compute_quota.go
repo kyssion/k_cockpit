@@ -28,6 +28,16 @@ type ComputeQuota struct {
 	MemoryMB int `gorm:"column:memory_mb;not null;default:0"`
 	VMCount  int `gorm:"column:vm_count;not null;default:0"`
 
+	// 数量型上限：一个用户在一个节点上总共能有多少个快照 / 端口转发 /
+	// 公网 IP 绑定。**0 表示不限**。
+	//
+	// 这三个维度此前根本没有上限（快照只有一个"每台机器 10 个"的编译期
+	// 常量，端口转发与公网 IP 完全没有），于是"配额"这个词在界面上只覆盖
+	// 了一半的资源——用户照着配额规划，撞上的却是另一套规则。
+	Snapshots    int `gorm:"column:snapshots;not null;default:0"`
+	PortForwards int `gorm:"column:port_forwards;not null;default:0"`
+	PublicIPs    int `gorm:"column:public_ips;not null;default:0"`
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

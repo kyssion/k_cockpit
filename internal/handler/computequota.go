@@ -36,14 +36,17 @@ func (h *ComputeQuota) List(ctx context.Context, c *app.RequestContext) {
 }
 
 type computeQuotaRequest struct {
-	NodeID   int64 `json:"node_id"`
-	UserID   int64 `json:"user_id"`
-	VCPU     int   `json:"vcpu"`
-	MemoryMB int   `json:"memory_mb"`
-	VMCount  int   `json:"vm_count"`
+	NodeID       int64 `json:"node_id"`
+	UserID       int64 `json:"user_id"`
+	VCPU         int   `json:"vcpu"`
+	MemoryMB     int   `json:"memory_mb"`
+	VMCount      int   `json:"vm_count"`
+	Snapshots    int   `json:"snapshots"`
+	PortForwards int   `json:"port_forwards"`
+	PublicIPs    int   `json:"public_ips"`
 }
 
-// Set 设置配额。三个上限全为 0 表示删除（回到不限）。
+// Set 设置配额。六个上限全为 0 表示删除（回到不限）。
 func (h *ComputeQuota) Set(ctx context.Context, c *app.RequestContext) {
 	var req computeQuotaRequest
 	if err := c.Bind(&req); err != nil {
@@ -53,8 +56,10 @@ func (h *ComputeQuota) Set(ctx context.Context, c *app.RequestContext) {
 	user := auth.CurrentUser(c)
 	info := auth.ClientInfoOf(c)
 
-	err := h.svc.Set(ctx, req.NodeID, req.UserID, req.VCPU, req.MemoryMB, req.VMCount,
-		user.ID, user.Username, info.IP)
+	err := h.svc.Set(ctx, req.NodeID, req.UserID, computequota.Limits{
+		VCPU: req.VCPU, MemoryMB: req.MemoryMB, VMCount: req.VMCount,
+		Snapshots: req.Snapshots, PortForwards: req.PortForwards, PublicIPs: req.PublicIPs,
+	}, user.ID, user.Username, info.IP)
 	if err != nil {
 		api.Fail(c, err)
 		return

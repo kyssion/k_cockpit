@@ -26,6 +26,7 @@ import (
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/audit"
 	"k_cockpit/internal/authz"
+	"k_cockpit/internal/computequota"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/task"
 )
@@ -36,6 +37,17 @@ type Service struct {
 	queue *task.Queue
 	agent agent.Client
 	audit *audit.Recorder
+	// computeQuota 校验"这个用户还能再占几个公网地址"。可选：未装配即
+	// 不校验，与虚拟机侧的做法一致。
+	computeQuota Checker
+}
+
+// Checker 是计算配额校验的最小接口。
+//
+// 在本包声明而不是直接依赖 computequota：本包只需要"能不能再加一个"这一
+// 件事，让接口跟着调用方定义，可以避免把配额包的所有方法都牵进来。
+type Checker interface {
+	Check(ctx context.Context, userID, nodeID int64, add computequota.Additions) error
 }
 
 // NewService 构造公网 IP 服务。
@@ -44,6 +56,12 @@ func NewService(
 ) *Service {
 	return &Service{db: db, queue: queue, agent: client, audit: recorder}
 }
+
+// SetComputeQuota 装配计算配额校验器；不调用即不校验。
+//
+// 用 setter 而不是构造参数：现有的调用点（含大量测试）并不关心配额，
+// 为一个可选能力改动全部签名不值得。
+func (s *Service) SetComputeQuota(c Checker) { s.computeQuota = c }
 
 // View 是一个公网地址的对外视图（含当前的绑定情况）。
 type View struct {
@@ -262,6 +280,16 @@ func (s *Service) Bind(
 		return nil, err
 	} else if existing != nil {
 		return nil, api.Conflict("该地址已绑定，如需换绑请使用「浮动迁移」")
+	}
+
+	// 数量配额：公网地址是最稀缺的一种资源，没有上限时"先到先得"会把
+	// 后来的人彻底挡在门外，而这通常不是管理员想要的结果。
+	if s.computeQuota != nil && vm.OwnerID != nil {
+		if err := s.computeQuota.Check(ctx, *vm.OwnerID, vm.NodeID, computequota.Additions{
+			PublicIPs: 1,
+		}); err != nil {
+			return nil, err
+		}
 	}
 
 	return s.dispatch(ctx, ip, vm, model.PublicIPModeLabel(req.Mode), req.Mode, "bind", v, operatorName, clientIP)

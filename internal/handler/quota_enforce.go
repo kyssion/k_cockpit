@@ -71,6 +71,28 @@ func (h *QuotaEnforce) Set(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, view)
 }
 
+// ResetUsage 清空配额在本周期的累计用量（F-1-09）。
+//
+// 与"改上限"不同：那是把上限调高（累计仍然算数），这是把累计清零。界面上
+// 必须把它标成"重置用量"，否则管理员点完发现五分钟后又被限速，会以为
+// 功能坏了。
+func (h *QuotaEnforce) ResetUsage(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "配额 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	view, err := h.svc.ResetUsage(ctx, id, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, view)
+}
+
 // Delete 删除配额（API-302）。
 func (h *QuotaEnforce) Delete(ctx context.Context, c *app.RequestContext) {
 	id, err := namedPathID(c, "id", "配额 ID")
