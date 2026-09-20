@@ -5,7 +5,7 @@
  * `used_value` 就是算出来的结果——它与处置依据同源，因此用户看到的数字与
  * "为什么被限速"是同一个东西。
  */
-import { del, get, put } from './client'
+import { del, get, post, put } from './client'
 
 export type QuotaDim = 'traffic_in' | 'traffic_out' | 'runtime'
 export type QuotaStatus = 'ok' | 'warned' | 'limited'
@@ -57,4 +57,13 @@ export const quotaEnforceApi = {
   ) => put<QuotaView>(`/api/v1/resource-quotas?node_id=${nodeID}`, req),
 
   remove: (id: number) => del<{ ok: boolean }>(`/api/v1/resource-quotas/${id}`),
+
+  /**
+   * 重置用量：清空该配额**当前周期**的累计，并撤销已生效的处置。
+   *
+   * 与"提高上限"不同——那是把上限调高（累计仍然算数），这是把累计清零。
+   * 只清状态不清累计的话，下一次评估（五分钟内）会立刻重新判定为超限，
+   * 用户看到的是"点了重置，五分钟后又被限速"。
+   */
+  resetUsage: (id: number) => post<QuotaView>(`/api/v1/resource-quotas/${id}/reset-usage`),
 }

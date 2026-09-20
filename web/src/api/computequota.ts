@@ -12,16 +12,22 @@ export interface ComputeQuotaView {
   node_id: number
   username?: string
 
-  /** 当前占用。 */
+  /** 当前占用。数量型维度按该用户在这台节点上的**全部**虚拟机汇总。 */
   vcpu: number
   memory_mb: number
   vm_count: number
+  snapshots: number
+  port_forwards: number
+  public_ips: number
 
   /** 上限。0 表示不限。 */
   has_quota: boolean
   quota_vcpu: number
   quota_memory_mb: number
   quota_vm_count: number
+  quota_snapshots: number
+  quota_port_forwards: number
+  quota_public_ips: number
 }
 
 export interface ComputeQuotaInput {
@@ -30,12 +36,15 @@ export interface ComputeQuotaInput {
   vcpu: number
   memory_mb: number
   vm_count: number
+  snapshots: number
+  port_forwards: number
+  public_ips: number
 }
 
 export const computeQuotaApi = {
   list: (nodeID: number) =>
     get<{ items: ComputeQuotaView[] }>('/api/v1/compute-quotas', { node_id: nodeID }),
 
-  /** 三个上限全为 0 表示删除这条配额（回到不限）。 */
+  /** 六个上限全为 0 表示删除这条配额（回到不限）。 */
   set: (input: ComputeQuotaInput) => put<{ ok: boolean }>('/api/v1/compute-quotas', input),
 }

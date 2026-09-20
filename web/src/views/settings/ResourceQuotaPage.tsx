@@ -60,6 +60,15 @@ export function ResourceQuotaPage() {
     onError: (e) => setError(describe(e)),
   })
 
+  const resetUsage = useMutation({
+    mutationFn: (id: number) => quotaEnforceApi.resetUsage(id),
+    onSuccess: () => {
+      setError('')
+      void queryClient.invalidateQueries({ queryKey: ['resource-quotas'] })
+    },
+    onError: (e) => setError(describe(e)),
+  })
+
   if (nodes.isPending || users.isPending) return <PageLoading />
   const items = list.data?.items ?? []
   const userList = users.data?.items ?? []
@@ -129,6 +138,7 @@ export function ResourceQuotaPage() {
                       q={q}
                       onEdit={() => setEditing({ userID: uid, name: g.name, dim: q.dimension })}
                       onRemove={() => remove.mutate(q.id)}
+                      onReset={() => resetUsage.mutate(q.id)}
                     />
                   ))}
                 </tbody>
@@ -181,10 +191,12 @@ function QuotaRow({
   q,
   onEdit,
   onRemove,
+  onReset,
 }: {
   q: QuotaView
   onEdit: () => void
   onRemove: () => void
+  onReset: () => void
 }) {
   const unlimited = q.limit_value <= 0
   const tone = q.status === 'limited' ? 'danger' : q.status === 'warned' ? 'warning' : 'success'
@@ -219,6 +231,13 @@ function QuotaRow({
         <button className="text-primary hover:underline" onClick={onEdit}>
           修改
         </button>
+        {/* 重置用量只在**设了上限**时才有意义：不限的时候没有"用超了"
+            这回事，按钮只会让人以为是"清空记录"。 */}
+        {!unlimited && (
+          <button className="ml-3 text-ink-2 hover:underline" onClick={onReset}>
+            重置用量
+          </button>
+        )}
         <button className="ml-3 text-danger hover:underline" onClick={onRemove}>
           删除
         </button>
@@ -383,9 +402,11 @@ function ComputeQuotaSection({
       <header className="border-b border-line px-4 py-2.5">
         <h2 className="text-base font-medium text-ink-2">计算资源配额</h2>
         <p className="mt-1 text-sm text-ink-3">
-          限制 vCPU、内存与虚拟机数量。这是**存量约束**：超限不处置已有机器，
-          而是拒绝新建——把一台正在跑的机器限速掉，比不让它再建一台严重得多。
-          上限填 0 表示不限，三项全为 0 即取消该用户的配额。
+          限制 vCPU、内存、虚拟机数量，以及快照、端口转发与公网 IP 的个数。
+          这是存量约束：超限不处置已有机器，而是拒绝新建——把一台正在跑的
+          机器限速掉，比不让它再建一台严重得多。上限填 0 表示不限，六项全为
+          0 即取消该用户的配额。数量型维度按该用户在这台节点上的**全部**
+          虚拟机汇总，换一台机器建快照不会绕过去。
         </p>
       </header>
 
@@ -402,6 +423,9 @@ function ComputeQuotaSection({
               <th className="px-4 py-2 font-normal">vCPU</th>
               <th className="px-4 py-2 font-normal">内存</th>
               <th className="px-4 py-2 font-normal">实例数</th>
+              <th className="px-4 py-2 font-normal">快照</th>
+              <th className="px-4 py-2 font-normal">端口转发</th>
+              <th className="px-4 py-2 font-normal">公网 IP</th>
               <th className="px-4 py-2 text-right font-normal">操作</th>
             </tr>
           </thead>
@@ -415,6 +439,9 @@ function ComputeQuotaSection({
                 <LimitCell used={q.vcpu} limit={q.quota_vcpu} unit="核" />
                 <LimitCell used={q.memory_mb} limit={q.quota_memory_mb} unit="MB" memory />
                 <LimitCell used={q.vm_count} limit={q.quota_vm_count} unit="台" />
+                <LimitCell used={q.snapshots} limit={q.quota_snapshots} unit="个" />
+                <LimitCell used={q.port_forwards} limit={q.quota_port_forwards} unit="条" />
+                <LimitCell used={q.public_ips} limit={q.quota_public_ips} unit="个" />
                 <td className="whitespace-nowrap px-4 py-2 text-right">
                   <button
                     className="text-primary hover:underline"
@@ -518,6 +545,9 @@ function ComputeQuotaModal({
   const [vcpu, setVcpu] = useState('')
   const [memoryMB, setMemoryMB] = useState('')
   const [vmCount, setVMCount] = useState('')
+  const [snapshots, setSnapshots] = useState('')
+  const [portForwards, setPortForwards] = useState('')
+  const [publicIPs, setPublicIPs] = useState('')
   const [seeded, setSeeded] = useState<number | null>(null)
 
   // 换目标时用已有值初始化，避免用户以为"打开就是空的 = 没配过"。
@@ -527,6 +557,9 @@ function ComputeQuotaModal({
     setVcpu(cur && cur.quota_vcpu > 0 ? String(cur.quota_vcpu) : '')
     setMemoryMB(cur && cur.quota_memory_mb > 0 ? String(cur.quota_memory_mb) : '')
     setVMCount(cur && cur.quota_vm_count > 0 ? String(cur.quota_vm_count) : '')
+    setSnapshots(cur && cur.quota_snapshots > 0 ? String(cur.quota_snapshots) : '')
+    setPortForwards(cur && cur.quota_port_forwards > 0 ? String(cur.quota_port_forwards) : '')
+    setPublicIPs(cur && cur.quota_public_ips > 0 ? String(cur.quota_public_ips) : '')
   }
 
   const save = useMutation({
@@ -537,6 +570,9 @@ function ComputeQuotaModal({
         vcpu: Number(vcpu) || 0,
         memory_mb: Number(memoryMB) || 0,
         vm_count: Number(vmCount) || 0,
+        snapshots: Number(snapshots) || 0,
+        port_forwards: Number(portForwards) || 0,
+        public_ips: Number(publicIPs) || 0,
       }),
     onSuccess: onDone,
     onError: (e) => onError(describe(e)),
@@ -546,7 +582,7 @@ function ComputeQuotaModal({
     <Modal
       open={target !== null}
       title={`为 ${target?.name ?? ''} 设置计算资源配额`}
-      description="留空或填 0 表示该维度不限。三项全为 0 即取消这个用户的配额。"
+      description="留空或填 0 表示该维度不限。六项全为 0 即取消这个用户的配额。"
       onClose={onClose}
       footer={
         <>
@@ -578,9 +614,28 @@ function ComputeQuotaModal({
           onChange={(e) => setVMCount(e.target.value)}
           placeholder="留空表示不限"
         />
+        <Input
+          label="快照数量上限（个）"
+          value={snapshots}
+          onChange={(e) => setSnapshots(e.target.value)}
+          placeholder="留空表示不限（默认每台机器 10 个）"
+        />
+        <Input
+          label="端口转发上限（条）"
+          value={portForwards}
+          onChange={(e) => setPortForwards(e.target.value)}
+          placeholder="留空表示不限"
+        />
+        <Input
+          label="公网 IP 上限（个）"
+          value={publicIPs}
+          onChange={(e) => setPublicIPs(e.target.value)}
+          placeholder="留空表示不限"
+        />
         <p className="rounded-control bg-sunken px-3 py-2 text-xs text-ink-3">
-          统计的是**当下**的占用：关机但没删的机器仍然占着额度（它的资源是
-          预留出去的）；在虚拟化层已不存在的机器不计入。
+          统计的是当下的占用：关机但没删的机器仍然占着额度（它的资源是
+          预留出去的）；在虚拟化层已不存在的机器不计入。快照、端口转发与
+          公网 IP 按该用户在这台节点上的全部虚拟机汇总。
         </p>
       </div>
     </Modal>
