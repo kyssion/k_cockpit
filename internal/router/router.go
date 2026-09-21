@@ -315,6 +315,17 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/storage-pools", requireAuth, adminOnly, storageHandler.CreatePool)
 		v1.PATCH("/storage-pools/:id", requireAuth, adminOnly, storageHandler.UpdatePool)
 		v1.DELETE("/storage-pools/:id", requireAuth, adminOnly, storageHandler.DeletePool)
+		// 分区、池配置、卸载、trim（F-5-01 的后续迭代）。
+		//
+		// 池配置单独一个接口而不是扩展 PATCH：PATCH 是"只改控制面一列、
+		// 同步返回"，而配置要下发到节点改挂载与 fstab——两者放在一起会让
+		// "保存"在不同字段上有完全不同的耗时与失败语义。
+		v1.GET("/storage-partitions", requireAuth, adminOnly, storageHandler.Partitions)
+		v1.POST("/storage-partitions", requireAuth, adminOnly, storageHandler.CreatePartition)
+		v1.DELETE("/storage-partitions", requireAuth, adminOnly, storageHandler.DeletePartitions)
+		v1.POST("/storage-pools/:id/config", requireAuth, adminOnly, storageHandler.UpdatePoolConfig)
+		v1.POST("/storage-pools/:id/unmount", requireAuth, adminOnly, storageHandler.UnmountPool)
+		v1.POST("/storage/trim", requireAuth, adminOnly, storageHandler.TrimStorage)
 
 		// 网络（F-4-01）：M2 只有只读接口——能力探测与降级说明。
 		// 网络变更（建网桥、物理口入桥）属 M3 范围。

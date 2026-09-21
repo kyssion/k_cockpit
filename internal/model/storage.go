@@ -54,6 +54,12 @@ type StoragePool struct {
 	// 而且会在第二个池创建时以一个看不懂的冲突暴露出来。
 	IsDefault bool `gorm:"not null;default:false;uniqueIndex:uniq_storage_pool_default,where:is_default"`
 
+	// AutoMount 表示宿主机重启后是否自动挂载这个池。
+	//
+	// 默认 true：默认 false 的表现是"重启之后所有虚拟机找不到磁盘"——那是
+	// 一个要重启才会暴露的默认值，代价太贵。
+	AutoMount bool `gorm:"column:auto_mount;not null;default:true"`
+
 	Status string  `gorm:"size:16;not null;default:ready"`
 	Remark *string `gorm:"size:255"`
 

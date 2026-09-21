@@ -65,6 +65,15 @@ const (
 	// TaskVpcACLApply 应用 VPC 网络的 ACL 规则集（F-4-05）。
 	TaskVpcACLApply = "vpc.acl.apply"
 
+	// 存储池的补充动作（F-5-01 后续迭代）。分区、池配置、卸载都要读写
+	// 宿主机上的挂载与分区表，因此走队列而不是同步接口。
+	TaskStoragePartitionCreate = "storage.partition.create"
+	TaskStoragePartitionDelete = "storage.partition.delete"
+	TaskStoragePoolConfig      = "storage.pool.config"
+	TaskStoragePoolUnmount     = "storage.pool.unmount"
+	// TaskStorageTrim 对块设备下发 trim / discard。
+	TaskStorageTrim = "storage.trim"
+
 	// 模板导出与导入（F-3-05）。两者都要读写几十 GB 的镜像文件，
 	// 因此与模板制备一样走队列。
 	TaskTemplateExport       = "template.export"

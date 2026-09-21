@@ -67,6 +67,18 @@ const (
 	// 默认生成的连接文件不含密码，用户手输即可。
 	ActionConsoleConnectionFile Action = "vm.console.connection_file"
 
+	// 分区操作（F-5-01 的后续迭代）。
+	//
+	// 改分区表会影响**整块磁盘**，而且失败往往要到下次读写才发现——那正是
+	// 需要一次明确确认的场景。
+	ActionStoragePartitionCreate Action = "storage.partition.create"
+	ActionStoragePartitionDelete Action = "storage.partition.delete"
+	// ActionStoragePartitionDeleteAll 与删单个分区分开登记：理由完全不同——
+	// 一个是"少一个分区"，一个是"整张分区表没了"。
+	ActionStoragePartitionDeleteAll Action = "storage.partition.delete_all"
+	// ActionStoragePoolUnmount 卸载存储池。
+	ActionStoragePoolUnmount Action = "storage.pool.unmount"
+
 	// 重装系统（F-2-11）。
 	//
 	// 它会**替换整块系统盘**——原系统上的所有配置、安装的软件、没放在数据盘
@@ -143,6 +155,26 @@ var policy = []Entry{
 		Action: ActionConsoleConnectionFile,
 		Label:  "下载含密码的控制台连接文件",
 		Reason: "文件里会带上控制台密码的明文",
+	},
+	{
+		Action: ActionStoragePartitionCreate,
+		Label:  "创建分区",
+		Reason: "磁盘的分区表会被改写，失败往往要到下次读写才暴露",
+	},
+	{
+		Action: ActionStoragePartitionDelete,
+		Label:  "删除分区",
+		Reason: "该分区上的数据会被清除，且无法撤销",
+	},
+	{
+		Action: ActionStoragePartitionDeleteAll,
+		Label:  "删除全部分区",
+		Reason: "整块磁盘的分区表会被清空，其上所有数据都会丢失",
+	},
+	{
+		Action: ActionStoragePoolUnmount,
+		Label:  "卸载存储池",
+		Reason: "该池上的虚拟机将无法读写磁盘，直到重新挂载（数据保留）",
 	},
 	{
 		Action: ActionVMReinstall,

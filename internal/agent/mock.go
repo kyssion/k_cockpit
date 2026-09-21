@@ -202,6 +202,36 @@ func stagePlan(op Operation) [][2]string {
 			{"policy_apply", "下发 IPv6 保护"},
 		}
 
+	case OpStoragePartitionCreate:
+		return [][2]string{
+			{"table_read", "读取分区表"},
+			{"partition_create", "创建分区"},
+			{"table_sync", "同步分区表"},
+		}
+	case OpStoragePartitionDelete:
+		return [][2]string{
+			{"table_read", "读取分区表"},
+			{"partition_remove", "删除分区"},
+			{"table_sync", "同步分区表"},
+		}
+	case OpStoragePoolConfig:
+		return [][2]string{
+			{"dir_prepare", "准备目录"},
+			{"mount_update", "更新挂载"},
+			{"fstab_update", "更新开机自动挂载"},
+		}
+	case OpStoragePoolUnmount:
+		return [][2]string{
+			{"mount_check", "检查占用"},
+			{"pool_unmount", "卸载"},
+			{"fstab_cleanup", "清除开机挂载项"},
+		}
+	case OpStorageTrim:
+		return [][2]string{
+			{"device_scan", "扫描块设备"},
+			{"trim_discard", "下发 discard"},
+		}
+
 	case OpVpcACLPreview:
 		return [][2]string{
 			{"rules_normalize", "归一化规则"},
@@ -1413,6 +1443,50 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 			Applied: true,
 			Message: "IPv6 保护策略已下发",
 			Trusted: []string{"2001:db8::/32"},
+		}
+
+	case OpStoragePartitions:
+		// 给一个系统分区 + 两个可扩展的空闲区间示例：全空会被当成"读不到"，
+		// 而全满又看不出还能做什么。
+		data[PartitionListDataKey] = []PartitionInfo{
+			{Index: 1, Path: "/dev/sda1", SizeBytes: 512 << 20, FSType: "vfat", Mounted: true, System: true},
+			{Index: 2, Path: "/dev/sda2", SizeBytes: 500 << 30, FSType: "ext4", Mounted: true, System: true},
+		}
+
+	case OpStoragePartitionCreate:
+		data[PartitionDataKey] = PartitionResult{
+			Index:     1,
+			Path:      op.Target + "1",
+			SizeBytes: int64(intParam(op.Params, "size_gb")) << 30,
+			Message:   "分区已创建",
+		}
+
+	case OpStoragePartitionDelete:
+		data[PartitionDataKey] = PartitionResult{
+			Deleted: 1,
+			Message: "分区已删除",
+		}
+
+	case OpStoragePoolConfig:
+		data[PoolConfigDataKey] = PoolConfigResult{
+			MountPath: strParam(op.Params, "mount_path"),
+			AutoMount: true,
+			Message:   "池配置已下发",
+		}
+
+	case OpStoragePoolUnmount:
+		data[PoolUnmountDataKey] = PoolUnmountResult{
+			Unmounted: true,
+			// 卸载**保留数据**是它与"删除"唯一的差别，因此这里必须给出。
+			DataKept: true,
+			Message:  "已卸载，数据保留",
+		}
+
+	case OpStorageTrim:
+		data[TrimDataKey] = TrimResult{
+			Devices:        2,
+			ReclaimedBytes: 8 << 30,
+			Message:        "trim 已完成",
 		}
 
 	case OpVpcACLPreview:

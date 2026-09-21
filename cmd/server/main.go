@@ -238,6 +238,11 @@ func main() {
 	queue.Register(vm.NewPortForwardChangeExecutor(db, mockAgent))
 	queue.Register(storage.NewCreateExecutor(db, mockAgent))
 	queue.Register(storage.NewDeleteExecutor(db, mockAgent))
+	// 分区、池配置与卸载（F-5-01 后续迭代）。
+	queue.Register(storage.NewPartitionExecutor(mockAgent))
+	queue.Register(storage.NewPartitionDeleteExecutor(mockAgent))
+	queue.Register(storage.NewPoolConfigExecutor(db, mockAgent))
+	queue.Register(storage.NewPoolUnmountExecutor(db, mockAgent))
 	// 交换机变更要建网桥，因此与存储池一样走队列。
 	queue.Register(network.NewSwitchChangeExecutor(db, mockAgent))
 	queue.Start(context.Background())
