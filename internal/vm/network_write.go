@@ -70,6 +70,9 @@ func (s *Service) AddInterface(
 	if err := validateRateLimit(req.RateLimitMbps); err != nil {
 		return nil, err
 	}
+	if err := s.checkBandwidthQuota(ctx, vm, req.RateLimitMbps, 0); err != nil {
+		return nil, err
+	}
 
 	var existing []model.VMInterface
 	if err := s.db.WithContext(ctx).
@@ -147,6 +150,10 @@ func (s *Service) UpdateInterface(
 		return nil, err
 	}
 	if err := validateRateLimit(req.RateLimitMbps); err != nil {
+		return nil, err
+	}
+	// 排除这块网卡自己：否则"把 100 改成 120"会算出 100 + 120 而永远超限。
+	if err := s.checkBandwidthQuota(ctx, vm, req.RateLimitMbps, nicID); err != nil {
 		return nil, err
 	}
 

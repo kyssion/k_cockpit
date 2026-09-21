@@ -274,6 +274,8 @@ func main() {
 	netSvc := networkbridge.NewService(db, mockAgent, recorder)
 	auditLogSvc := auditlog.NewService(db)
 	userAdminSvc := useradmin.NewService(db, recorder, quotaAdapter{svc: quotaSvc})
+	// SSH 访问要下发到宿主机，因此接上 agent（不接时只改控制面记录）。
+	userAdminSvc.SetAgent(mockAgent)
 	tagSvc := vmtag.NewService(db, recorder)
 	// 调度器注册表（F-7-04）：先登记身份与说明，再把记录器交给各组件。
 	//

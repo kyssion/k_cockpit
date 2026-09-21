@@ -46,8 +46,23 @@ type User struct {
 	// 恢复码重置）。更新它会让该用户**全部既有会话立即失效**（f-1-01 R-010）。
 	SecurityUpdatedAt *time.Time
 	Remark            *string `gorm:"size:255"`
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+
+	// MaxBandwidthMbps 是该用户**全部网卡合计**的带宽上限（Mbps）；0 = 不限。
+	//
+	// 它是**速率型**而不是累计型——没有"用满"这个状态，因此不放进按月累计
+	// 的 resource_quota。消费点在网口限速上：新增或修改网卡限速时，该用户在
+	// 这台节点上的各网卡限速之和不得超过它。
+	MaxBandwidthMbps int `gorm:"column:max_bandwidth_mbps;not null;default:0"`
+
+	// SSHAccessEnabled 表示是否允许该用户用 SSH 登录宿主机。
+	//
+	// 它与防火墙保护 SSH 端口（host_firewall 的 sshPorts）是两件事：后者决定
+	// "端口能不能被访问"，这一列决定"这个人能不能用"。因此关闭它时要把已在
+	// 线的会话一并结束，否则改了配置而人还在里面。
+	SSHAccessEnabled bool `gorm:"column:ssh_access_enabled;not null;default:false"`
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
 	// 用 gorm.DeletedAt 而非 *time.Time：前者让 GORM **自动**为所有查询
 	// 追加 `deleted_at IS NULL`，避免某处漏写条件导致已删除的账号仍可登录。
 	DeletedAt gorm.DeletedAt

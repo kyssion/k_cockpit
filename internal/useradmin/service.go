@@ -29,6 +29,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"k_cockpit/internal/agent"
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/audit"
 	"k_cockpit/internal/auth"
@@ -45,6 +46,9 @@ type Service struct {
 	// 两处各写一套的话迟早会分叉，而分叉的表现是「管理员建的账号自己登
 	// 不上」——那是最难查的一类问题：两边看起来都对，只是不匹配。
 	hasher func(string) (string, error)
+	// agent 用于下发宿主机上的账号设置（SSH 访问权限）。为 nil 时只改控制面
+	// 记录，并在结果里注明宿主机上尚未生效——**不假装生效**。
+	agent agent.Client
 	// quota 用于同时设置配额；为 nil 时跳过。
 	quota quotaSetter
 }
@@ -65,6 +69,13 @@ type QuotaRequest struct {
 	QuotaBytes int64
 	Enabled    bool
 }
+
+// SetAgent 装配 agent 客户端。
+//
+// 不调用时 SSH 权限只改控制面记录，并在结果里注明宿主机上尚未生效——
+// **不假装在宿主机上生效了**：那样"明明禁用了却还能登"会成为无法解释的
+// 问题。
+func (s *Service) SetAgent(c agent.Client) { s.agent = c }
 
 // NewService 构造服务。
 func NewService(db *gorm.DB, recorder *audit.Recorder, q quotaSetter) *Service {
@@ -87,6 +98,14 @@ type View struct {
 	// 它有一个实际用途：一个建了很久却从没登录过的账号，通常说明它已经
 	// 不需要了——而"从没用过"这件事在列表里看不出来，只能靠这一列。
 	LastLoginAt string `json:"last_login_at,omitempty"`
+
+	// MaxBandwidthMbps 是带宽上限（Mbps），0 表示不限。
+	//
+	// 它是**速率型**：没有"用满"的时刻，因此不放进按月累计的 resource_quota。
+	// 消费点在网口限速上——该用户在这台节点上的各网卡限速之和不得超过它。
+	MaxBandwidthMbps int `json:"max_bandwidth_mbps"`
+	// SSHAccessEnabled 表示是否允许该用户 SSH 登录宿主机。
+	SSHAccessEnabled bool `json:"ssh_access_enabled"`
 }
 
 // ListFilter 是用户列表的筛选。
@@ -254,6 +273,11 @@ type UpdateRequest struct {
 	Remark *string
 	// Role 为空表示不改。
 	Role string
+	// MaxBandwidthMbps 为 nil 表示不改；为 0 表示不限。
+	//
+	// 用指针而不是 int：0 本身是一个合法取值（不限），用 int 的零值去表达
+	// "不改"会让"取消上限"这个操作永远做不了。
+	MaxBandwidthMbps *int
 }
 
 // Update 编辑用户资料（API-211）。
@@ -292,6 +316,12 @@ func (s *Service) Update(
 			}
 		}
 		updates["role"] = req.Role
+	}
+	if req.MaxBandwidthMbps != nil {
+		if *req.MaxBandwidthMbps < 0 {
+			return nil, api.InvalidParameter("带宽上限不能为负数")
+		}
+		updates["max_bandwidth_mbps"] = *req.MaxBandwidthMbps
 	}
 
 	if len(updates) == 0 {
@@ -556,6 +586,9 @@ func toView(u *model.User, last *model.AuditLog) View {
 		ID: u.ID, Username: u.Username, Role: u.Role, Status: u.Status,
 		TotpEnabled: u.TotpEnabled,
 		CreatedAt:   u.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+
+		MaxBandwidthMbps: u.MaxBandwidthMbps,
+		SSHAccessEnabled: u.SSHAccessEnabled,
 	}
 	if u.Email != nil {
 		view.Email = *u.Email

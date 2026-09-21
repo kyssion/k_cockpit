@@ -484,6 +484,9 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.PATCH("/users/:id", requireAuth, adminOnly, userAdminHandler.Update)
 		v1.PUT("/users/:id/status", requireAuth, adminOnly, userAdminHandler.SetStatus)
 		v1.DELETE("/users/:id", requireAuth, adminOnly, userAdminHandler.Delete)
+		// SSH 访问（F-1-10）。单独一个接口而不是塞进 PATCH：它会**结束在线会话**，
+		// 与"改资料"不是一个量级的动作。
+		v1.PUT("/users/:id/ssh", requireAuth, adminOnly, userAdminHandler.SetSSHAccess)
 
 		// 审计流水（F-1-12）。
 		//
@@ -884,6 +887,8 @@ func Register(h *server.Hertz, deps Deps) {
 		// 任务队列按资源锁串行（f-2-01 R-005）。
 		v1.POST("/vms/:id/power-actions", requireAuth, vmHandler.Power)
 		v1.DELETE("/vms/:id", requireAuth, vmHandler.Delete)
+		// 分配归属（F-1-07）：把已有虚拟机指派给某个用户。仅管理员。
+		v1.PUT("/vms/:id/owner", requireAuth, vmHandler.AssignOwner)
 
 		// 详情页「网络管理」标签页（F-2-03）。读接口直接返回投影；
 		// 写接口全部入队——它们都要下发到节点，且资源锁与电源操作共用

@@ -65,6 +65,36 @@ type updateUserRequest struct {
 	Email  *string `json:"email"`
 	Remark *string `json:"remark"`
 	Role   string  `json:"role"`
+	// MaxBandwidthMbps 为 nil 表示不改；0 表示不限（因此不能用 int 的零值
+	// 表达"不改"）。
+	MaxBandwidthMbps *int `json:"max_bandwidth_mbps"`
+}
+
+type sshAccessRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+// SetSSHAccess 启用 / 禁用某用户的 SSH 访问（F-1-10）。
+func (h *UserAdmin) SetSSHAccess(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "用户 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	var req sshAccessRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	view, err := h.svc.SetSSHAccess(ctx, id, req.Enabled, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, view)
 }
 
 // Update 编辑用户（API-212）。**不含密码**——改密是一个独立且更敏感的动作：
@@ -86,6 +116,7 @@ func (h *UserAdmin) Update(ctx context.Context, c *app.RequestContext) {
 
 	view, err := h.svc.Update(ctx, id, useradmin.UpdateRequest{
 		Email: req.Email, Remark: req.Remark, Role: req.Role,
+		MaxBandwidthMbps: req.MaxBandwidthMbps,
 	}, authz.ViewerOf(c), user.Username, info.IP)
 	if err != nil {
 		api.Fail(c, err)

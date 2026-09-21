@@ -1267,6 +1267,40 @@ func (h *VM) Neighbors(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, view)
 }
 
+type assignOwnerRequest struct {
+	UserID int64 `json:"user_id"`
+}
+
+// AssignOwner 把一台虚拟机指派给某个用户。
+//
+// 它补的是一个已知欠账：管理员删除用户时若该用户名下还有虚拟机，只能拒绝
+// 并提示"请先转移"——而"转移"此前没有实现。
+func (h *VM) AssignOwner(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	var req assignOwnerRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+	if req.UserID <= 0 {
+		api.Fail(c, api.InvalidParameter("必须指定目标用户"))
+		return
+	}
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	view, err := h.svc.AssignOwner(ctx, id, req.UserID, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, view)
+}
+
 // DownloadExport 下载导出产物（API-086）。
 //
 // 直接返回**产物字节**而不是一个节点上的直链：直链意味着要把节点的访问凭据

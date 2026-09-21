@@ -202,6 +202,13 @@ func stagePlan(op Operation) [][2]string {
 			{"policy_apply", "下发 IPv6 保护"},
 		}
 
+	case OpUserSSHAccess:
+		return [][2]string{
+			{"shell_update", "更新登录 shell"},
+			{"sshd_deny", "更新 sshd 拒绝名单"},
+			{"session_kill", "结束在线会话"},
+		}
+
 	case OpStoragePartitionCreate:
 		return [][2]string{
 			{"table_read", "读取分区表"},
@@ -1443,6 +1450,23 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 			Applied: true,
 			Message: "IPv6 保护策略已下发",
 			Trusted: []string{"2001:db8::/32"},
+		}
+
+	case OpUserSSHAccess:
+		enabled := false
+		if v, ok := op.Params["enabled"].(bool); ok {
+			enabled = v
+		}
+		data[UserSSHAccessDataKey] = UserSSHAccessInfo{
+			Applied: true,
+			// 关闭时才可能有"被请出去"的会话：开启时没有可结束的对象。
+			KilledSessions: func() int {
+				if enabled {
+					return 0
+				}
+				return 2
+			}(),
+			Message: "SSH 访问设置已生效",
 		}
 
 	case OpStoragePartitions:
