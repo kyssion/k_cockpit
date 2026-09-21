@@ -10,6 +10,7 @@ import {
   type BatchResult,
   type DiskAction,
   type PowerAction,
+  type VmUsage,
   type VmView,
 } from '@/api/vm'
 import { Button } from '@/components/common/Button'
@@ -18,6 +19,7 @@ import { Input } from '@/components/common/Input'
 import { Modal } from '@/components/common/Modal'
 import { CreateVmWizard } from './CreateVmWizard'
 import { StatusBadge } from '@/components/common/StatusBadge'
+import { vmTagApi } from '@/api/vmtag'
 import { formatDateTime, relativeTime } from '@/utils/format'
 import { VM_STATUS_LABEL, VM_STATUS_TONE } from '@/utils/labels'
 
@@ -110,6 +112,7 @@ export function VmListPage() {
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [batchResult, setBatchResult] = useState<BatchResult | null>(null)
   const [batchError, setBatchError] = useState('')
+  const [tagVM, setTagVM] = useState<VmView | null>(null)
   // 批量删除的确认框。它承载两件事：让用户选磁盘处理方式（R-009 不给默认
   // 值），以及提前列出被锁定、将被跳过的那些（R-010 不静默跳过）。
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -360,6 +363,9 @@ export function VmListPage() {
                             onSort={toggleSort}
                           />
                           <th className="px-4 py-2.5 font-medium">状态</th>
+                          {/* 占用来自**采样**而不是实时探测：一页 20 台逐台探测
+                              就是 20 次跨节点往返。真要看此刻的数字进详情页。 */}
+                          <th className="px-4 py-2.5 font-medium">占用</th>
                           <SortableTh
                             label="配置"
                             sortKey="vcpu"
@@ -374,6 +380,7 @@ export function VmListPage() {
                             desc={sort.desc}
                             onSort={toggleSort}
                           />
+                          <th className="px-4 py-2.5 font-medium">标签</th>
                           <th className="px-4 py-2.5 font-medium">节点</th>
                           <SortableTh
                             label="创建时间"
@@ -400,6 +407,7 @@ export function VmListPage() {
                               setBatchResult(null)
                             }}
                             onMenu={() => setMenuVM(vm)}
+                            onTags={() => setTagVM(vm)}
                           />
                         ))}
                       </tbody>
@@ -421,6 +429,7 @@ export function VmListPage() {
                           setBatchResult(null)
                         }}
                         onMenu={() => setMenuVM(vm)}
+                        onTags={() => setTagVM(vm)}
                       />
                     ))}
                   </div>
@@ -686,8 +695,14 @@ export function VmListPage() {
 
       <CreateVmWizard open={createOpen} onClose={() => setCreateOpen(false)} />
 
-      <RowMenu vm={menuVM} onClose={() => setMenuVM(null)} onRemark={(v) => setRemarkVM(v)} />
+      <RowMenu
+        vm={menuVM}
+        onClose={() => setMenuVM(null)}
+        onRemark={(v) => setRemarkVM(v)}
+        onTags={(v) => setTagVM(v)}
+      />
       <RemarkModal vm={remarkVM} onClose={() => setRemarkVM(null)} />
+      <TagModal vm={tagVM} onClose={() => setTagVM(null)} />
     </div>
   )
 }
@@ -698,12 +713,14 @@ function VmRow({
   selected,
   onToggle,
   onMenu,
+  onTags,
 }: {
   vm: VmView
   nodeName?: string
   selected: boolean
   onToggle: () => void
   onMenu: () => void
+  onTags: () => void
 }) {
   return (
     <tr className={selected ? 'border-t border-line bg-brand/5' : 'border-t border-line hover:bg-raised'}>
@@ -745,7 +762,11 @@ function VmRow({
       <td className="kc-nums px-4 py-2.5 text-ink-2">
         {vm.vcpu} 核 · {formatMemory(vm.memory_mb)} · {vm.disk_gb} GB
       </td>
+      <UsageCell usage={vm.usage} />
       <td className="kc-mono px-4 py-2.5 text-ink-2">{vm.ip_summary || '—'}</td>
+      <td className="px-4 py-2.5">
+        <TagCell tags={vm.tags} onEdit={onTags} />
+      </td>
       <td className="px-4 py-2.5 text-ink-2">{nodeName ?? `#${vm.node_id}`}</td>
       <td className="px-4 py-2.5 text-ink-2">{relativeTime(vm.created_at)}</td>
       <td className="px-4 py-2.5 text-right">
@@ -766,12 +787,14 @@ function VmCard({
   selected,
   onToggle,
   onMenu,
+  onTags,
 }: {
   vm: VmView
   nodeName?: string
   selected: boolean
   onToggle: () => void
   onMenu: () => void
+  onTags: () => void
 }) {
   return (
     <div
@@ -812,6 +835,14 @@ function VmCard({
         <dd className="kc-mono truncate text-ink-2" title={vm.ip_summary}>
           {vm.ip_summary || '—'}
         </dd>
+        <dt className="text-ink-3">占用</dt>
+        <dd>
+          <UsageCell usage={vm.usage} />
+        </dd>
+        <dt className="text-ink-3">标签</dt>
+        <dd>
+          <TagCell tags={vm.tags} onEdit={onTags} />
+        </dd>
       </dl>
 
       <div className="mt-3 flex items-center justify-between gap-2">
@@ -842,10 +873,12 @@ function RowMenu({
   vm,
   onClose,
   onRemark,
+  onTags,
 }: {
   vm: VmView | null
   onClose: () => void
   onRemark: (vm: VmView) => void
+  onTags: (vm: VmView) => void
 }) {
   const queryClient = useQueryClient()
   const [error, setError] = useState('')
@@ -888,6 +921,15 @@ function RowMenu({
           }}
         >
           编辑备注
+        </button>
+        <button
+          className="rounded-control px-2 py-1.5 text-left text-base text-ink-2 hover:bg-raised"
+          onClick={() => {
+            if (vm) onTags(vm)
+            onClose()
+          }}
+        >
+          编辑标签
         </button>
         {/* 解锁需要二次验证：请求层会自动弹验证框并重放（f-10-01），
             这里不需要额外处理。 */}
@@ -1048,6 +1090,139 @@ function Segmented<T extends string>({
 function formatMemory(mb: number): string {
   if (mb >= 1024) return `${(mb / 1024).toFixed(mb % 1024 === 0 ? 0 : 1)} GB`
   return `${mb} MB`
+}
+
+/**
+ * UsageCell 最近一次采样的占用。
+ *
+ * 没有采样时显示"—"：0 会被读成"这台机器很闲"，而实际可能是还没采到，
+ * 或机器已关机（采集器只采运行中的）。这两种情况都**不是 0**。
+ */
+function UsageCell({ usage }: { usage?: VmUsage }) {
+  if (!usage) return <span className="text-ink-3">—</span>
+  return (
+    <span className="kc-nums" title={`采样于 ${formatDateTime(usage.at)}`}>
+      <span className="text-ink-2">{usage.cpu_percent.toFixed(0)}%</span>
+      <span className="ml-1.5 text-xs text-ink-3">CPU</span>
+      <span className="ml-2 text-ink-2">{usage.mem_percent.toFixed(0)}%</span>
+      <span className="ml-1.5 text-xs text-ink-3">内存</span>
+    </span>
+  )
+}
+
+/** TagCell 行内标签。点一下直接编辑——标签是"这台机器是干什么的"的主要表达。 */
+function TagCell({ tags, onEdit }: { tags?: string[]; onEdit: () => void }) {
+  if (!tags || tags.length === 0) {
+    return (
+      <button className="text-sm text-ink-3 hover:text-brand hover:underline" onClick={onEdit}>
+        + 标签
+      </button>
+    )
+  }
+  return (
+    <span className="flex flex-wrap items-center gap-1">
+      {tags.map((t) => (
+        <span key={t} className="rounded-pill bg-sunken px-1.5 py-0.5 text-xs text-ink-2">
+          {t}
+        </span>
+      ))}
+      <button className="text-xs text-ink-3 hover:text-brand hover:underline" onClick={onEdit}>
+        编辑
+      </button>
+    </span>
+  )
+}
+
+/**
+ * TagModal 编辑标签。
+ *
+ * 与备注一样是**纯控制面元数据**：改它不下发节点，因此不需要关机，也不
+ * 必走任务队列。写接口复用详情页那一个（PUT /vms/:id/tags），因此这里
+ * 不需要新的后端能力。
+ */
+function TagModal({ vm, onClose }: { vm: VmView | null; onClose: () => void }) {
+  const queryClient = useQueryClient()
+  const [value, setValue] = useState('')
+  const [seeded, setSeeded] = useState<number | null>(null)
+
+  if (seeded !== (vm?.id ?? null)) {
+    setSeeded(vm?.id ?? null)
+    setValue((vm?.tags ?? []).join(', '))
+  }
+
+  const all = useQuery({
+    queryKey: ['tags'],
+    queryFn: vmTagApi.all,
+    enabled: vm !== null,
+  })
+
+  const save = useMutation({
+    mutationFn: () =>
+      vmTagApi.set(
+        vm?.id ?? 0,
+        value
+          .split(/[,，]/)
+          .map((t) => t.trim())
+          .filter(Boolean),
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['vms'] })
+      void queryClient.invalidateQueries({ queryKey: ['tags'] })
+      onClose()
+    },
+  })
+
+  return (
+    <Modal
+      open={vm !== null}
+      title={`${vm?.name ?? ''} 的标签`}
+      description="逗号分隔。留空表示清空。"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            取消
+          </Button>
+          <Button size="sm" loading={save.isPending} onClick={() => save.mutate()}>
+            保存
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3">
+        <Input
+          label="标签"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="例如 prod, mysql"
+        />
+        {/* 已有标签列出来可选：让人从里面挑，比凭记忆打出同一个词的变体
+            （prod / Prod / 生产）更能保持标签可用。 */}
+        {(all.data?.items ?? []).length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {(all.data?.items ?? []).map((t) => (
+              <button
+                key={t.tag}
+                className="rounded-pill border border-line px-2 py-0.5 text-xs text-ink-2 hover:border-brand/40"
+                onClick={() => {
+                  const cur = value
+                    .split(/[,，]/)
+                    .map((x) => x.trim())
+                    .filter(Boolean)
+                  if (cur.includes(t.tag)) return
+                  setValue([...cur, t.tag].join(', '))
+                }}
+              >
+                {t.tag}
+                <span className="ml-1 text-ink-3">{t.count}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        {save.isError && <p className="text-sm text-danger">{describe(save.error)}</p>}
+      </div>
+    </Modal>
+  )
 }
 
 function describe(error: unknown): string {

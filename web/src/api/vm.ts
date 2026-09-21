@@ -54,6 +54,22 @@ export interface VmView {
   firmware?: string
 
   /**
+   * 标签。**只在列表接口填充**——详情只有一台，由它的标签组件按需取。
+   *
+   * 列表带它是因为标签是"这台机器是干什么的"的主要表达（分组之外唯一的
+   * 自由度）；后端用一次批量查询填充，不是逐台关联。
+   */
+  tags?: string[]
+
+  /**
+   * 最近一次采样的资源占用；没有采样时为 undefined。
+   *
+   * undefined 与 0 必须分开：0 看起来像"这台机器很闲"，而实际可能是还没
+   * 采到或机器已关机（采集器只采运行中的）。
+   */
+  usage?: VmUsage
+
+  /**
    * 是否被业务软锁保护（F-2-12）。锁定时禁止删除。
    *
    * 由**后端下发**，界面不自行判断：批量操作要提前提示「其中 N 台已锁定」
@@ -95,6 +111,15 @@ export interface VmView {
    */
   has_reinstall_backup: boolean
   reinstall_at?: string
+}
+
+/** 最近一次采样的资源占用。 */
+export interface VmUsage {
+  cpu_percent: number
+  mem_percent: number
+  mem_used_mb: number
+  /** 采样时刻——列表上必须能看出这不是"此刻"的数字。 */
+  at: string
 }
 
 export interface VmListParams {
