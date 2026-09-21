@@ -269,6 +269,25 @@ var specs = []Spec{
 		Unit:         "天",
 	},
 	{
+		// 自动轮换会话签名密钥的间隔。
+		//
+		// 0 表示不自动轮换：轮换等于全员登出，是否让它自动发生取决于部署
+		// 形态——一个自建自用的面板不该因为"到日子了"把所有人都踢出去，而
+		// 一个托管多个租户的环境应当定期换。
+		Key:          "security.auth_key_rotate_days",
+		Group:        GroupSecurity,
+		Label:        "会话密钥自动轮换间隔",
+		Description:  "超过这个天数后自动更换会话签名密钥。轮换会让**所有人立即登出**（包括正在操作的自己）。0 表示不自动轮换。",
+		Kind:         KindInt,
+		Default:      "0",
+		EnvVar:       "SECURITY_AUTH_KEY_ROTATE_DAYS",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+		MinValue:     intPtr(0),
+		MaxValue:     intPtr(365),
+		Unit:         "天",
+	},
+	{
 		// 定时弱口令检查。
 		//
 		// 真正的"泄露"判定（比对泄露库）需要外部数据，控制面不联网也不持有

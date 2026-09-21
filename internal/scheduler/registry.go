@@ -46,6 +46,7 @@ const (
 	KeyQuotaEvaluate = "quota.evaluate"
 	KeyAlertEvaluate = "alert.evaluate"
 	KeyPasswordAudit = "security.password_audit"
+	KeyAuthKeyRotate = "security.auth_key_rotate"
 )
 
 // Info 描述一个已注册的调度器。

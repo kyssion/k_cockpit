@@ -21,6 +21,7 @@ import (
 	"k_cockpit/internal/audit"
 	"k_cockpit/internal/auditlog"
 	"k_cockpit/internal/auth"
+	"k_cockpit/internal/authkey"
 	"k_cockpit/internal/capture"
 	"k_cockpit/internal/computequota"
 	"k_cockpit/internal/config"
@@ -106,6 +107,16 @@ func main() {
 		log.Fatalf("初始化令牌签发器失败: %v", err)
 	}
 	recorder := audit.NewRecorder(db)
+
+	// 会话签名密钥（F-1-09）：库里没有时用配置里的初始密钥建一条，之后轮换
+	// 直接换库里的记录——换一次环境变量再重启的做法，在"怀疑泄漏"的场景下
+	// 没有可用的时间窗。
+	authKeySvc := authkey.NewService(db, cryptoutil.DeriveKey(
+		[]byte(cfg.Session.Secret), "k_cockpit/auth_key/v1"), cfg.Session.Secret, recorder)
+	issuer.SetKeyProvider(func() (string, []byte, error) {
+		return authKeySvc.Load(context.Background())
+	})
+
 	authSvc := auth.NewService(db, issuer, recorder, auth.Config{
 		IdleTimeout:     cfg.Session.IdleTimeout,
 		AbsoluteTimeout: cfg.Session.AbsoluteTimeout,
@@ -376,6 +387,13 @@ func main() {
 	passAuditLoop.Observe(schedRecorder)
 	go passAuditLoop.Start(context.Background())
 
+	// 会话密钥自动轮换（F-1-09）：间隔为 0 时这个循环什么都不做。
+	authKeyLoop := authkey.NewLoop(authKeySvc, func() int {
+		return settingsSvc.Int("security.auth_key_rotate_days", 0)
+	}, authkey.DefaultOptions())
+	authKeyLoop.Observe(schedRecorder)
+	go authKeyLoop.Start(context.Background())
+
 	// 控制台密码需要可逆加密（f-2-08 R-005）：它要交给 agent 参与 VNC 认证，
 	// 因此不能用单向哈希。用途标签与会话签名分开派生。
 	// 控制台密码与初始登录密码共用同一把派生密钥：它们都是"交给节点或展示
@@ -420,6 +438,7 @@ func main() {
 		Logging:       logger,
 		ReqLog:        reqLogSvc,
 		PassAudit:     passAuditSvc,
+		AuthKey:       authKeySvc,
 		UserAdmin:     userAdminSvc,
 		VMTag:         tagSvc,
 		Monitor:       monitorSvc,

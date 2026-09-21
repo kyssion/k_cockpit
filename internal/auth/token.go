@@ -29,12 +29,20 @@ type Claims struct {
 	SessionID string `json:"sid"`
 	UserID    int64  `json:"uid"`
 	TokenType string `json:"typ"`
+	// KeyID 记录这枚令牌是用哪把密钥签的（轮换后可用于定位"它属于哪一代"）。
+	//
+	// 它进的是标准 kid 头而不是自定义字段：JWT 对此有既定位置，放在载荷里
+	// 会成为第二个事实来源。
 	jwt.RegisteredClaims
 }
 
 // TokenIssuer 负责签发与校验令牌。
 type TokenIssuer struct {
 	secret []byte
+	// keyProvider 返回当前在用的密钥。装配后**每次签发/校验都重新取一次**
+	// ——轮换是"改一个地方就立刻全员失效"的操作，缓存一把旧密钥会让轮换
+	// 看起来没生效，而那是最危险的一种错觉。
+	keyProvider func() (keyID string, secret []byte, err error)
 }
 
 // NewTokenIssuer 构造签发器。
@@ -46,6 +54,23 @@ func NewTokenIssuer(secret string) (*TokenIssuer, error) {
 		return nil, errors.New("签名密钥长度不得少于 32 字节")
 	}
 	return &TokenIssuer{secret: []byte(secret)}, nil
+}
+
+// SetKeyProvider 装配可轮换的密钥来源。
+//
+// 装配后 secret 字段不再使用；未装配时沿用构造时的静态密钥（单测与不启用
+// 轮换的部署走这条路）。
+func (t *TokenIssuer) SetKeyProvider(fn func() (string, []byte, error)) { t.keyProvider = fn }
+
+// currentKey 取当前密钥。
+func (t *TokenIssuer) currentKey() (string, []byte, error) {
+	if t.keyProvider != nil {
+		return t.keyProvider()
+	}
+	if len(t.secret) == 0 {
+		return "", nil, errors.New("未配置签名密钥")
+	}
+	return "", t.secret, nil
 }
 
 // minSecretLen 是签名密钥的最小长度（字节）。
@@ -61,7 +86,15 @@ func (t *TokenIssuer) Issue(sessionID string, userID int64, tokenType string, ex
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 		},
 	}
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(t.secret)
+	keyID, secret, err := t.currentKey()
+	if err != nil {
+		return "", err
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	if keyID != "" {
+		token.Header["kid"] = keyID
+	}
+	return token.SignedString(secret)
 }
 
 // Parse 校验签名与有效期并解析令牌。
@@ -72,9 +105,13 @@ func (t *TokenIssuer) Issue(sessionID string, userID int64, tokenType string, ex
 // 注意：本方法**只做令牌自身校验**，不检查会话状态——调用方必须再用
 // SessionID 查一次会话（f-1-01 R-005）。
 func (t *TokenIssuer) Parse(token string) (*Claims, error) {
+	_, secret, err := t.currentKey()
+	if err != nil {
+		return nil, ErrInvalidToken
+	}
 	var claims Claims
-	_, err := jwt.ParseWithClaims(token, &claims,
-		func(*jwt.Token) (any, error) { return t.secret, nil },
+	_, err = jwt.ParseWithClaims(token, &claims,
+		func(*jwt.Token) (any, error) { return secret, nil },
 		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
 	)
 	if err != nil {

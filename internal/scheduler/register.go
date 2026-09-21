@@ -42,6 +42,11 @@ func RegisterBuiltins(r *Registry, opts BuiltinOptions) {
 		IntervalSeconds: int(opts.PasswordAuditInterval.Seconds()),
 	})
 	r.Register(Info{
+		Key: KeyAuthKeyRotate, Name: "会话密钥自动轮换", Group: GroupSecurity,
+		Description:     "超过设定天数时更换会话签名密钥；轮换会让全部旧令牌立即失效，因此间隔为 0 时什么都不做。",
+		IntervalSeconds: int(opts.AuthKeyRotateInterval.Seconds()),
+	})
+	r.Register(Info{
 		Key: KeyTaskQueue, Name: "任务队列派发", Group: GroupTasks,
 		Description:     "把待执行任务派发给执行器，受并发上限与资源锁约束。**它不产生调度事件**——它执行的每个动作本身都已经是一条任务记录，在这里再记一遍只是把同一件事说两次。",
 		IntervalSeconds: int(opts.QueuePollInterval.Seconds()),
@@ -50,6 +55,7 @@ func RegisterBuiltins(r *Registry, opts BuiltinOptions) {
 
 // BuiltinOptions 是登记时需要的各组件周期。
 type BuiltinOptions struct {
+	AuthKeyRotateInterval  time.Duration
 	PasswordAuditInterval  time.Duration
 	MetricsInterval        time.Duration
 	MetricsCleanupInterval time.Duration

@@ -18,6 +18,7 @@ import (
 	"k_cockpit/internal/audit"
 	"k_cockpit/internal/auditlog"
 	"k_cockpit/internal/auth"
+	"k_cockpit/internal/authkey"
 	"k_cockpit/internal/authz"
 	"k_cockpit/internal/capture"
 	"k_cockpit/internal/computequota"
@@ -84,6 +85,8 @@ type Deps struct {
 	ReqLog *reqlog.Service
 	// PassAudit 提供弱口令 / 泄露口令检查（F-10-06）。为 nil 时接口不可用。
 	PassAudit *passaudit.Service
+	// AuthKey 提供会话签名密钥轮换（F-1-09）。为 nil 时接口不可用。
+	AuthKey *authkey.Service
 	// Risk 强制高风险操作的二次验证（f-10-01）。受保护的操作在 handler
 	// 入口调用它，清单本身集中在 internal/risk。
 	Risk *risk.Guard
@@ -194,6 +197,7 @@ func Register(h *server.Hertz, deps Deps) {
 	vpcACLHandler := handler.NewVpcACL(deps.VpcACL)
 	reqLogHandler := handler.NewReqLog(deps.ReqLog)
 	passAuditHandler := handler.NewPassAudit(deps.PassAudit)
+	authKeyHandler := handler.NewAuthKey(deps.AuthKey, deps.Risk)
 	settingsHandler := handler.NewSettings(deps.Settings, deps.Mailer)
 	consoleHandler := handler.NewConsole(deps.VM, deps.Risk)
 	templateHandler := handler.NewTemplate(deps.Template)
@@ -674,6 +678,9 @@ func Register(h *server.Hertz, deps Deps) {
 		// argon2 哈希，无从比对。
 		v1.POST("/security/password-audit", requireAuth, adminOnly, passAuditHandler.RunNow)
 		v1.GET("/security/password-audit", requireAuth, adminOnly, passAuditHandler.Status)
+		// 会话签名密钥轮换（F-1-09）：轮换即全员登出，因此要二次验证。
+		v1.GET("/settings/auth-key", requireAuth, adminOnly, authKeyHandler.Status)
+		v1.POST("/settings/auth-key/rotate", requireAuth, adminOnly, authKeyHandler.Rotate)
 		v1.GET("/settings/log/read", requireAuth, adminOnly, loggingHandler.Read)
 		v1.PUT("/settings/log/level", requireAuth, adminOnly, loggingHandler.SetLevel)
 		v1.GET("/settings/log/export", requireAuth, adminOnly, loggingHandler.Export)

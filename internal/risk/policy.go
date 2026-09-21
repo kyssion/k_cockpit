@@ -78,6 +78,11 @@ const (
 	ActionStoragePartitionDeleteAll Action = "storage.partition.delete_all"
 	// ActionStoragePoolUnmount 卸载存储池。
 	ActionStoragePoolUnmount Action = "storage.pool.unmount"
+	// ActionAuthKeyRotate 轮换会话签名密钥。
+	//
+	// 它等价于一次**全员登出**：轮换之后所有旧令牌立即失效，包括正在操作
+	// 的那个人自己。
+	ActionAuthKeyRotate Action = "auth_key.rotate"
 
 	// 重装系统（F-2-11）。
 	//
@@ -175,6 +180,11 @@ var policy = []Entry{
 		Action: ActionStoragePoolUnmount,
 		Label:  "卸载存储池",
 		Reason: "该池上的虚拟机将无法读写磁盘，直到重新挂载（数据保留）",
+	},
+	{
+		Action: ActionAuthKeyRotate,
+		Label:  "轮换会话签名密钥",
+		Reason: "轮换后全部旧令牌立即失效，所有人（包括你自己）都会被登出",
 	},
 	{
 		Action: ActionVMReinstall,
