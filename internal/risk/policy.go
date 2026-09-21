@@ -60,6 +60,13 @@ const (
 	// 里面有没有还要用的。因此它与恢复快照同级，需要一次明确的验证。
 	ActionVMSnapshotDeleteAll Action = "vm.snapshot.delete_all"
 
+	// 下载包含明文密码的控制台连接文件（F-2-09）。
+	//
+	// 控制台密码平时是「只写不读」的（R-005）。把它写进 .vv 文件等于让
+	// 明文离开服务端，因此这一条路必须明确经过一次验证，并且是可选项——
+	// 默认生成的连接文件不含密码，用户手输即可。
+	ActionConsoleConnectionFile Action = "vm.console.connection_file"
+
 	// 重装系统（F-2-11）。
 	//
 	// 它会**替换整块系统盘**——原系统上的所有配置、安装的软件、没放在数据盘
@@ -131,6 +138,11 @@ var policy = []Entry{
 		Action: ActionVMSnapshotDeleteAll,
 		Label:  "删除全部快照",
 		Reason: "这台虚拟机的所有还原点会被一次性删除，无法撤销",
+	},
+	{
+		Action: ActionConsoleConnectionFile,
+		Label:  "下载含密码的控制台连接文件",
+		Reason: "文件里会带上控制台密码的明文",
 	},
 	{
 		Action: ActionVMReinstall,

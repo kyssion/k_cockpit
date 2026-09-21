@@ -389,6 +389,67 @@ func (s *Service) SetMaintenance(
 	return s.Get(ctx, id)
 }
 
+// SetConsoleHost 设置节点控制台的对外地址。
+//
+// 空串表示清除（不再提供连接文件）。它只影响"能不能下载 SPICE 连接文件"，
+// 不改变控制台本身的开关与监听地址——两件事分开，是为了让"网页里能看"
+// 与"本地客户端能连"各自独立可控。
+func (s *Service) SetConsoleHost(
+	ctx context.Context, id int64, host string,
+	operatorID int64, operatorName, clientIP string,
+) (*View, error) {
+	host = strings.TrimSpace(host)
+	if host != "" && !consoleHostPattern.MatchString(host) {
+		return nil, api.InvalidParameter("控制台地址需为主机名或 IP（可带端口），例如 kvm-node-1.example.com:5901")
+	}
+
+	var node model.Node
+	err := s.db.WithContext(ctx).Where("id = ?", id).First(&node).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return nil, api.NotFound("节点不存在")
+	case err != nil:
+		log.Printf("[node] 查询节点失败: %v", err)
+		return nil, api.Internal()
+	}
+
+	updates := map[string]any{"console_host": nil}
+	if host != "" {
+		updates["console_host"] = host
+	}
+	if err := s.db.WithContext(ctx).Model(&model.Node{}).
+		Where("id = ?", id).Updates(updates).Error; err != nil {
+		log.Printf("[node] 更新控制台地址失败: %v", err)
+		return nil, api.Internal()
+	}
+
+	s.record(ctx, audit.Entry{
+		OperatorID: operatorID, OperatorName: operatorName,
+		NodeID: node.ID, ResourceType: "node", ResourceID: node.ID, ResourceName: node.Name,
+		Action:      "node.console_host.set",
+		Params:      map[string]any{"host": host},
+		BeforeState: map[string]any{"console_host": derefString(node.ConsoleHost)},
+		AfterState:  map[string]any{"console_host": host},
+		Success:     true, ClientIP: clientIP,
+	})
+	return s.Get(ctx, id)
+}
+
+// derefString 取字符串指针的值；nil 时返回空串。
+func derefString(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+// consoleHostPattern 限定控制台地址的形态：主机名或 IP，可带端口。
+//
+// 不接受路径与协议前缀：它会原样写进 SPICE 连接文件，而那是一个由外部
+// 程序解析的 INI 文件——让用户输入 `http://` 或带路径的内容，等于给他们
+// 一个往文件里注入任意字段的入口。
+var consoleHostPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+(:\d{1,5})?$`)
+
 // toView 组装节点视图：元数据取自数据库，运行态取自 agent。
 func (s *Service) toView(ctx context.Context, node *model.Node) View {
 	snap, err := s.runtime.Snapshot(ctx, node.ID)

@@ -72,8 +72,15 @@ type Node struct {
 	LastHeartbeatAt *time.Time
 	LastSeenAt      *time.Time
 	Capabilities    *string `gorm:"type:text"`
-	CapabilitiesAt  *time.Time
-	LastError       *string `gorm:"size:255"`
+	// ConsoleHost 是这台宿主机上控制台（SPICE / VNC）对外可达的地址。
+	//
+	// 由**管理员填写**：控制台监听在宿主机上，而面板与浏览器之间的那条
+	// 通道是代理——代理能让网页看到画面，却无法让本地客户端连上去。宿主机
+	// 自己知道的地址（内网 IP）往往对用户不可达，因此这个地址只能由部署者
+	// 给。留空表示不提供连接文件。
+	ConsoleHost    *string `gorm:"size:255"`
+	CapabilitiesAt *time.Time
+	LastError      *string `gorm:"size:255"`
 
 	Remark    *string `gorm:"size:255"`
 	CreatedAt time.Time

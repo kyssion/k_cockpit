@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -86,6 +87,16 @@ type ConsoleConfig struct {
 	Exposed       bool   `json:"exposed"`
 	HasPassword   bool   `json:"has_password"`
 	DisplayDevice string `json:"display_device"`
+
+	// Host 是控制台**对外可达**的地址（取自节点的 console_host）。
+	//
+	// 它与 Bind 是两件事：Bind 是宿主机上的监听地址（常常是 127.0.0.1），
+	// 而 Host 是"从用户网络看过去该连哪里"。生成 SPICE 连接文件要用后者，
+	// 用前者的连接文件在用户机器上必然连不上。
+	//
+	// 为空表示管理员还没给这个节点填地址，此时不提供连接文件——猜一个
+	// 地址的代价是"下载了却连不上"，而用户无从判断是控制台没开还是地址错。
+	Host string `json:"host,omitempty"`
 
 	// ActiveSessions 与 SessionLimit 供界面判断还能不能再开一个（R-014）。
 	ActiveSessions int `json:"active_sessions"`
@@ -218,8 +229,18 @@ func (s *Service) consoleConfig(
 		ActiveSessions:  s.consoleSessions().count(vm.ID),
 		StreamSupported: s.streamSupported(),
 	}
-	if vm.VNCPort != nil {
-		cfg.Port = *vm.VNCPort
+	// 端口按**当前所选协议**取：两种协议各自监听在不同端口上（VNC 5900 段、
+	// SPICE 5901 段），取错的后果是连接文件指向一个别的服务的端口，而用户
+	// 会以为是控制台没开。
+	switch protocol {
+	case ConsoleProtocolSPICE:
+		if vm.SPICEPort != nil {
+			cfg.Port = *vm.SPICEPort
+		}
+	default:
+		if vm.VNCPort != nil {
+			cfg.Port = *vm.VNCPort
+		}
 	}
 
 	// 显示设备为 none 的虚拟机没有控制台（R-011）。这里给出**原因**，
@@ -237,7 +258,136 @@ func (s *Service) consoleConfig(
 	}
 	cfg.HasPassword = hasPassword
 
+	// 控制台对外地址来自节点，而不是虚拟机：同一台宿主机上的所有虚拟机
+	// 共用同一个入口地址，让每台机器各存一份只会在迁移后全部过期。
+	var node model.Node
+	if err := s.db.WithContext(ctx).Where("id = ?", vm.NodeID).
+		Select("id", "console_host").First(&node).Error; err == nil && node.ConsoleHost != nil {
+		cfg.Host = *node.ConsoleHost
+	} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		log.Printf("[vm] 查询节点控制台地址失败 node=%d: %v", vm.NodeID, err)
+	}
+
 	return cfg, nil
+}
+
+// ConsoleConnectionFile 生成 SPICE 连接文件（.vv）的内容与文件名。
+//
+// 为什么只支持 SPICE：VNC 没有标准的连接文件格式，而浏览器里的 VNC 由
+// noVNC 走面板代理——那条路已经可用。SPICE 恰恰相反：它的体验优势全在
+// 本地客户端上（USB 重定向、剪贴板、音频），而这些只有在 virt-viewer
+// 里才存在。
+//
+// 密码是**可选**的：默认不写进文件（用户手输），只有显式请求时才带，且
+// 那时必须已经完成二次验证。控制台密码属于凭据，"只写不读"（R-005）那
+// 条原则的落点就在这里——默认路径不泄漏。
+func (s *Service) ConsoleConnectionFile(
+	ctx context.Context, id int64, protocol string, withPassword bool,
+	v authz.Viewer, operatorName, clientIP string,
+) (*ConsoleFile, error) {
+	protocol = normalizeProtocol(protocol)
+	if protocol != ConsoleProtocolSPICE {
+		return nil, api.ValidationFailed("只有 SPICE 提供连接文件；VNC 请在浏览器中使用内置控制台")
+	}
+
+	vm, err := s.load(ctx, id, v)
+	if err != nil {
+		return nil, err
+	}
+	if !vm.HasConsole() {
+		return nil, api.ValidationFailed("该虚拟机没有图形显示设备，无法提供控制台")
+	}
+	cfg, err := s.consoleConfig(ctx, vm, protocol)
+	if err != nil {
+		return nil, err
+	}
+	if !cfg.Enabled {
+		return nil, api.ValidationFailed("SPICE 控制台尚未开启")
+	}
+	if cfg.Host == "" {
+		return nil, api.ValidationFailed(
+			"该节点还没有配置控制台的对外地址，无法生成连接文件（请管理员在节点上填写）")
+	}
+
+	password := ""
+	if withPassword {
+		if !cfg.HasPassword {
+			return nil, api.ValidationFailed("该控制台尚未设置密码，无需写入连接文件")
+		}
+		p, err := s.consolePassword(ctx, vm.ID)
+		if err != nil {
+			return nil, err
+		}
+		password = p
+	}
+
+	s.record(ctx, audit.Entry{
+		OperatorID: v.UserID, OperatorName: operatorName,
+		NodeID: vm.NodeID, ResourceType: "vm", ResourceID: vm.ID, ResourceName: vm.Name,
+		Action:     "vm.console.connection_file",
+		Params:     map[string]any{"protocol": protocol, "with_password": withPassword},
+		AfterState: map[string]any{"host": cfg.Host, "port": cfg.Port},
+		Success:    true,
+		ClientIP:   clientIP,
+	})
+
+	return &ConsoleFile{
+		Filename: spiceFileName(vm.Name),
+		Content:  buildVV(cfg.Host, cfg.Port, vm.Name, password),
+	}, nil
+}
+
+// ConsoleFile 是一个待下载的连接文件。
+type ConsoleFile struct {
+	Filename string
+	Content  string
+}
+
+// spiceFileName 生成下载文件名。
+func spiceFileName(vmName string) string {
+	return sanitizeFilePart(vmName) + "-spice.vv"
+}
+
+// sanitizeFilePart 去掉文件名里不安全的字符。
+//
+// 虚拟机名允许的字符比文件名广，直接拼进 Content-Disposition 会让一个
+// 含换行或引号的名字注入额外的响应头——那是实打实的头注入，不只是
+// "文件名难看"。
+func sanitizeFilePart(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "vm"
+	}
+	return out
+}
+
+// buildVV 构造 .vv 文件内容（INI 形态）。
+//
+// 字段顺序固定、只写我们认识的键：这个文件由外部程序解析，而它的格式
+// 容忍度高到可以塞进任意键——只输出固定的几行是唯一可靠的做法。
+func buildVV(host string, port int, vmName, password string) string {
+	var b strings.Builder
+	b.WriteString("[virt-viewer]\n")
+	b.WriteString("type=spice\n")
+	b.WriteString("host=" + host + "\n")
+	if port > 0 {
+		b.WriteString("port=" + strconv.Itoa(port) + "\n")
+	}
+	b.WriteString("title=" + vmName + "\n")
+	if password != "" {
+		b.WriteString("password=" + password + "\n")
+	}
+	b.WriteString("delete-this-file=1\n")
+	return b.String()
 }
 
 // UpdateConsole 更新控制台配置（API-031）。
@@ -501,6 +651,36 @@ func (s *Service) setConsolePassword(ctx context.Context, vmID int64, password s
 		return api.Internal()
 	}
 	return nil
+}
+
+// consolePassword 解密读出控制台密码。
+//
+// 它只有一个调用点（生成带密码的连接文件），且那一条路径受二次验证保护。
+// 单独成函数而不是内联，是为了让"明文密码离开服务端"这件事在代码里只有
+// 一处可审计。
+func (s *Service) consolePassword(ctx context.Context, vmID int64) (string, error) {
+	if s.encKey == nil {
+		return "", api.Internal()
+	}
+	var row model.VMCredential
+	err := s.db.WithContext(ctx).
+		Where("vm_id = ? AND username = ?", vmID, model.CredentialVNC).
+		First(&row).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return "", api.ValidationFailed("该控制台尚未设置密码")
+	case err != nil:
+		log.Printf("[vm] 查询控制台密码失败: %v", err)
+		return "", api.Internal()
+	}
+	plain, err := cryptoutil.Open(s.encKey, row.PasswordEnc)
+	if err != nil {
+		// 解密失败通常意味着根密钥变了（重启时未持久化配置），
+		// 而不是"密码错了"——按内部错误处理，避免用户去反复改密码。
+		log.Printf("[vm] 解密控制台密码失败 vm=%d: %v", vmID, err)
+		return "", api.Internal()
+	}
+	return plain, nil
 }
 
 // closeByVM 释放某虚拟机的全部会话。

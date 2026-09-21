@@ -121,6 +121,46 @@ func (h *Console) Update(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, cfg)
 }
 
+// ConnectionFile 下载 SPICE 连接文件（.vv）。
+//
+// 只有 SPICE 有标准的连接文件；VNC 在浏览器里由 noVNC 承载，而它没有
+// 跨客户端通用的文件格式。
+//
+// 密码是**可选**的：不请求时生成的文件不含密码（用户手输），请求时必须
+// 已经完成二次验证——控制台密码平时只写不读（R-005），让它以明文离开
+// 服务端需要一次明确的动作。
+func (h *Console) ConnectionFile(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	withPassword := c.Query("with_password") == "true"
+	if withPassword {
+		if !h.risk.Require(c, risk.ActionConsoleConnectionFile) {
+			return
+		}
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	file, err := h.svc.ConsoleConnectionFile(ctx, id, c.Query("protocol"), withPassword,
+		authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	c.Response.Header.Set("Content-Type", "application/x-virt-viewer; charset=utf-8")
+	c.Response.Header.Set("Content-Disposition", `attachment; filename="`+file.Filename+`"`)
+	c.Response.Header.Set("X-Content-Type-Options", "nosniff")
+	// delete-this-file=1 已经写进文件内容，这里再标一次只是为了让中间的
+	// 下载管理器也不要把它留在"下载"目录里——那是一个含凭据的文件。
+	c.Response.Header.Set("Cache-Control", "no-store")
+	c.String(200, file.Content)
+}
+
 // Screenshot 返回控制台截帧（API-032）。
 //
 // 当前**尚未实现**：截帧需要 agent 侧的图形导出能力，而这一能力还没有

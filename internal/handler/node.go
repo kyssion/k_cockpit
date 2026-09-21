@@ -116,6 +116,38 @@ func (h *Node) SetMaintenance(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, view)
 }
 
+type consoleHostRequest struct {
+	Host string `json:"host"`
+}
+
+// SetConsoleHost 设置节点控制台的对外地址。
+//
+// 它决定的只有一件事：**能不能下载 SPICE 连接文件**。控制台本身的开关与
+// 监听地址不受它影响——"网页里能看"与"本地客户端能连"是两条独立的路。
+func (h *Node) SetConsoleHost(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "节点 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	var req consoleHostRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	view, err := h.svc.SetConsoleHost(ctx, id, req.Host, user.ID, user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, view)
+}
+
 // Remove 移除节点。
 func (h *Node) Remove(ctx context.Context, c *app.RequestContext) {
 	// 高风险操作：移除节点后其上的虚拟机将失去管控（f-10-02）。

@@ -297,6 +297,8 @@ func Register(h *server.Hertz, deps Deps) {
 		// 它纯粹是控制面的标志，所有拦截都发生在受理那一刻；做成任务会
 		// 制造一个「界面说维护中、操作仍被受理」的窗口。
 		v1.PATCH("/nodes/:id/maintenance", requireAuth, adminOnly, nodeHandler.SetMaintenance)
+		// 控制台对外地址：决定能否生成 SPICE 连接文件。
+		v1.PATCH("/nodes/:id/console-host", requireAuth, adminOnly, nodeHandler.SetConsoleHost)
 
 		v1.POST("/nodes/registration-tokens", requireAuth, adminOnly, nodeHandler.CreateEnrollToken)
 		v1.DELETE("/nodes/:id", requireAuth, adminOnly, nodeHandler.Remove)
@@ -886,6 +888,9 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.PATCH("/vms/:id/console", requireAuth, consoleHandler.Update)
 		v1.GET("/vms/:id/console/screenshot", requireAuth, consoleHandler.Screenshot)
 		v1.GET("/vms/:id/console/ws", requireAuth, consoleHandler.WS)
+		// SPICE 连接文件（.vv）。含明文密码的版本需要二次验证，由 handler
+		// 按查询参数决定——默认不含密码，用户手输即可。
+		v1.GET("/vms/:id/console/connection-file", requireAuth, consoleHandler.ConnectionFile)
 		// 虚拟机定义（**只读**）。排查「面板显示的和实际跑的不是一回事」时
 		// 它是唯一的真相，因此总是现读、不缓存。返回内容已脱敏——libvirt
 		// 的定义里有控制台密码，原样送出等于把界面上「只写不读」的凭据
