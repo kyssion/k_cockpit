@@ -5,7 +5,7 @@
  * 两份清单一旦不同步，用户会看到「界面显示的选项与实际校验规则不符」，
  * 而这类问题只会在提交时才暴露。
  */
-import { get, patch, post } from './client'
+import { del, get, patch, post } from './client'
 
 export type SettingKind = 'string' | 'int' | 'bool' | 'select'
 export type ApplyMode = 'immediate' | 'restart'
@@ -91,4 +91,51 @@ export const UPDATE_STATUS_LABEL: Record<UpdateStatus, string> = {
   applied: '已生效',
   failed: '失败',
   rolled_back: '已回滚',
+}
+
+/** 一条请求日志。 */
+export interface RequestLogItem {
+  id: number
+  at: string
+  user_id?: number
+  username?: string
+  method: string
+  path: string
+  status: number
+  duration_ms: number
+  client_ip?: string
+  user_agent?: string
+}
+
+/**
+ * 请求日志（F-10-07）。
+ *
+ * 与审计分开：审计回答"谁改了什么"，请求日志回答"接口被调用了多少次、
+ * 慢不慢"。默认关闭——默认打开只会把磁盘用在心跳与轮询上。
+ */
+export const requestLogApi = {
+  list: (userID?: number, limit?: number) =>
+    get<{ items: RequestLogItem[]; enabled: boolean }>('/api/v1/request-logs', {
+      user_id: userID,
+      limit,
+    }),
+  /** 清理。keepDays > 0 只删这个天数之前的；否则清全部。 */
+  clear: (keepDays?: number) => {
+    const qs = keepDays && keepDays > 0 ? `?keep_days=${keepDays}` : ''
+    return del<{ deleted: number }>(`/api/v1/request-logs${qs}`)
+  },
+}
+
+/** 口令安全检查的结果（F-10-06）。 */
+export interface PasswordAuditResult {
+  checked: number
+  hits: { user_id: number; username: string; reason?: string }[]
+  message?: string
+  /** 非空表示节点没实现，因此**没有真正检查**。 */
+  unavailable?: string
+}
+
+export const securityApi = {
+  runPasswordAudit: () => post<PasswordAuditResult>('/api/v1/security/password-audit'),
+  passwordAuditStatus: () => get<{ hits: number }>('/api/v1/security/password-audit'),
 }

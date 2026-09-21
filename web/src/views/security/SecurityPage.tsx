@@ -9,6 +9,7 @@ import { useState, type FormEvent } from 'react'
 import { authApi } from '@/api/auth'
 import { ApiError, NetworkError } from '@/api/client'
 import { METHOD_LABEL, riskApi } from '@/api/risk'
+import { securityApi } from '@/api/settings'
 import { AccountSection } from './AccountSection'
 import { EmailSection } from './EmailSection'
 import { Button } from '@/components/common/Button'
@@ -235,6 +236,9 @@ export function SecurityPage() {
       />
 
       <AccountSection username={session.data?.user.username ?? ''} />
+      {/* 口令安全检查：命中只做标记、不自动改密——那是用户自己的凭据，
+          系统替他改掉会让他自己也不知道新密码是什么。 */}
+      <PasswordAuditSection />
     </div>
   )
 }
@@ -246,6 +250,76 @@ function secretOf(uri: string): string {
   } catch {
     return ''
   }
+}
+
+/**
+ * PasswordAuditSection 弱口令 / 已知泄露口令检查（F-10-06）。
+ *
+ * 判定由**节点**完成：控制面只有 argon2 哈希，无从比对，也不该为了这项检查
+ * 去联网。这里只负责触发与展示。
+ *
+ * 命中不自动改密：改密会让已登录会话全部失效，而"我还没准备好改"是完全
+ * 合理的状态。因此这里只提示，由用户自己在「账号」区块改。
+ */
+function PasswordAuditSection() {
+  const status = useQuery({
+    queryKey: ['password-audit'],
+    queryFn: securityApi.passwordAuditStatus,
+  })
+
+  const run = useMutation({
+    mutationFn: securityApi.runPasswordAudit,
+    onSuccess: () => {
+      void status.refetch()
+    },
+  })
+
+  const hits = status.data?.hits ?? 0
+  const result = run.data
+
+  return (
+    <section className="rounded-card border border-line">
+      <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
+        <h2 className="text-sm font-medium text-ink-2">口令安全检查</h2>
+        <Button size="sm" variant="secondary" loading={run.isPending} onClick={() => run.mutate()}>
+          立即检查
+        </Button>
+      </div>
+
+      <div className="flex flex-col gap-2 px-4 py-3">
+        <p className="text-sm text-ink-3">
+          检查账号口令是否属于弱口令或已出现在公开泄露清单中。**命中不会自动改密**
+          ——那会让你自己也不知道新密码是什么。定时检查的开关在系统设置里。
+        </p>
+
+        {hits > 0 && (
+          <p className="rounded-control bg-warning/10 px-3 py-2 text-base text-warning">
+            有 {hits} 个账号的口令命中，建议尽快修改。
+          </p>
+        )}
+
+        {result?.unavailable && (
+          // "没真正检查"与"检查了但没命中"必须分开：前者是功能不可用，
+          // 后者是好消息。混在一起会让人以为检查过了。
+          <p className="rounded-control bg-danger/10 px-3 py-2 text-base text-danger">
+            {result.unavailable}
+          </p>
+        )}
+
+        {result && !result.unavailable && (
+          <ul className="flex flex-col gap-1 text-base">
+            <li className="text-ink-2">已检查 {result.checked} 个账号</li>
+            {result.hits.map((h) => (
+              <li key={h.user_id} className="text-warning">
+                {h.username}
+                {h.reason ? ` · ${h.reason}` : ''}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
+  )
 }
 
 function describe(error: unknown): string {

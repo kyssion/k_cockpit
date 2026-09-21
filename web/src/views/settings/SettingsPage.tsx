@@ -5,10 +5,13 @@ import { ApiError, NetworkError } from '@/api/client'
 import {
   SOURCE_LABEL,
   UPDATE_STATUS_LABEL,
+  requestLogApi,
   settingsApi,
+  type RequestLogItem,
   type SettingItem,
   type UpdateResult,
 } from '@/api/settings'
+import { relativeTime } from '@/utils/format'
 import { Button } from '@/components/common/Button'
 import { PageLoading } from '@/components/common/Feedback'
 import { Input } from '@/components/common/Input'
@@ -110,6 +113,9 @@ export function SettingsPage() {
           </section>
         )
       })}
+
+      {/* 请求日志：排查时才需要，因此默认关（开关在「安全」分组里）。 */}
+      <RequestLogPanel />
 
       {results && results.length > 0 && (
         <div className="flex flex-col gap-1.5 rounded-card border border-line bg-raised px-4 py-3 text-base">
@@ -357,6 +363,100 @@ function FieldControl({
       />
       {item.unit && <span className="text-sm text-ink-3">{item.unit}</span>}
     </div>
+  )
+}
+
+/**
+ * RequestLogPanel 请求日志的查看与清理（F-10-07）。
+ *
+ * 与审计的区别必须写在界面上：审计回答"谁改了什么"，请求日志回答"接口被
+ * 调用了多少次、慢不慢"。量级差两个数量级，因此默认关闭。
+ */
+function RequestLogPanel() {
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+
+  const list = useQuery({
+    queryKey: ['request-logs'],
+    queryFn: () => requestLogApi.list(undefined, 100),
+    enabled: open,
+  })
+
+  const clear = useMutation({
+    mutationFn: () => requestLogApi.clear(),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['request-logs'] })
+    },
+  })
+
+  const items = list.data?.items ?? []
+
+  return (
+    <section className="rounded-card border border-line">
+      <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
+        <div>
+          <h2 className="text-sm font-medium text-ink-2">请求日志</h2>
+          <p className="mt-0.5 text-xs text-ink-3">
+            记录每一次接口调用（方法、路径、状态码、耗时）。健康检查与静态资源不记。
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="secondary" onClick={() => setOpen((v) => !v)}>
+            {open ? '收起' : '查看'}
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            loading={clear.isPending}
+            disabled={items.length === 0}
+            onClick={() => clear.mutate()}
+          >
+            清空
+          </Button>
+        </div>
+      </div>
+
+      {open && (
+        <div className="px-4 py-3">
+          {list.data && !list.data.enabled && (
+            <p className="text-base text-warning">
+              记录开关当前是关闭的，下面这些是开启期间留下的数据。
+            </p>
+          )}
+
+          {items.length === 0 ? (
+            <p className="text-base text-ink-3">还没有请求日志。</p>
+          ) : (
+            <div className="max-h-80 overflow-auto">
+              <table className="w-full border-collapse text-base">
+                <thead>
+                  <tr className="text-left text-xs text-ink-3">
+                    <th className="px-2 py-1.5 font-normal">时间</th>
+                    <th className="px-2 py-1.5 font-normal">用户</th>
+                    <th className="px-2 py-1.5 font-normal">方法</th>
+                    <th className="px-2 py-1.5 font-normal">路径</th>
+                    <th className="px-2 py-1.5 font-normal">状态</th>
+                    <th className="px-2 py-1.5 font-normal">耗时</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((it: RequestLogItem) => (
+                    <tr key={it.id} className="border-t border-line">
+                      <td className="px-2 py-1.5 text-ink-3">{relativeTime(it.at)}</td>
+                      <td className="px-2 py-1.5 text-ink-2">{it.username || '—'}</td>
+                      <td className="px-2 py-1.5 text-ink-2">{it.method}</td>
+                      <td className="kc-mono px-2 py-1.5 text-ink-2">{it.path}</td>
+                      <td className="kc-nums px-2 py-1.5">{it.status}</td>
+                      <td className="kc-nums px-2 py-1.5 text-ink-3">{it.duration_ms} ms</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </section>
   )
 }
 
