@@ -30,6 +30,8 @@ import { Button } from '@/components/common/Button'
 import { EmptyState, PageLoading } from '@/components/common/Feedback'
 import { Modal } from '@/components/common/Modal'
 import { StatusBadge } from '@/components/common/StatusBadge'
+import { AclSection } from './AclSection'
+import { NetworkToolsSection } from './NetworkToolsSection'
 
 export function NetworkPage2() {
   const queryClient = useQueryClient()
@@ -223,6 +225,10 @@ export function NetworkPage2() {
           </div>
         )}
       </section>
+
+      {/* ACL 与运维动作：它们面向"这个节点上的网络整体该怎么限制/维护"。 */}
+      <AclSection nodeID={effectiveNodeID} onError={setError} />
+      <NetworkToolsSection nodeID={effectiveNodeID} onError={setError} onNotice={setNotice} />
 
       <UplinkModal
         target={uplinkTarget}

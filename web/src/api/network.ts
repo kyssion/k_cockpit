@@ -112,3 +112,25 @@ export const CAPABILITY_STATE_TONE: Record<CapabilityState, 'success' | 'danger'
   // 标红会让人去修一个可能根本没坏的东西。
   unknown: 'idle',
 }
+
+/** 交换机的维护动作（F-4-05）：迁移与重配置都走任务队列。 */
+export const netMaintainApi = {
+  migrateSwitch: (id: number, input: { uplink_if: string; vlan_id?: number; acknowledge: boolean }) =>
+    post<{ task_id: number; status: string }>(`/api/v1/vpc-switches/${id}/migrate`, input),
+
+  /** 重配置不需要参数：它做的是"让节点与我们记录的保持一致"。 */
+  reconfigureSwitch: (id: number) =>
+    post<{ task_id: number; status: string }>(`/api/v1/vpc-switches/${id}/reconfigure`),
+
+  releasePort: (input: { node_id: number; switch_id?: number; port_ref: string }) =>
+    post<{ task_id: number; status: string }>('/api/v1/networks/ports/release', input),
+
+  resetCounters: (nodeID: number) =>
+    post<{ reset: number; message: string }>('/api/v1/networks/counters/reset', { node_id: nodeID }),
+
+  applyIPv6Policy: (input: { node_id: number; protect: boolean; trusted_prefixes: string[] }) =>
+    post<{ applied: boolean; message: string; trusted: string[] }>(
+      '/api/v1/networks/ipv6/policy',
+      input,
+    ),
+}

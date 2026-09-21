@@ -5,6 +5,7 @@ import { ApiError, NetworkError } from '@/api/client'
 import {
   CAPABILITY_STATE_LABEL,
   CAPABILITY_STATE_TONE,
+  netMaintainApi,
   networkApi,
   SWITCH_MODE_LABEL,
   type Capability,
@@ -23,6 +24,10 @@ export function NetworkPage() {
   const [formOpen, setFormOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<SwitchView | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<SwitchView | null>(null)
+  // 迁移要选目标物理网卡与 VLAN，因此是一个弹窗而不是一个按钮直发。
+  const [migrateTarget, setMigrateTarget] = useState<SwitchView | null>(null)
+  const [migrateUplink, setMigrateUplink] = useState('')
+  const [migrateVlan, setMigrateVlan] = useState('')
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
 
@@ -54,6 +59,36 @@ export function NetworkPage() {
     queryKey: ['network-status', effectiveNodeID],
     queryFn: () => networkApi.status(effectiveNodeID),
     enabled: effectiveNodeID > 0,
+  })
+
+  const reconfigure = useMutation({
+    mutationFn: (id: number) => netMaintainApi.reconfigureSwitch(id),
+    onSuccess: () => {
+      setError('')
+      setNotice('已提交重配置')
+      void queryClient.invalidateQueries({ queryKey: ['tasks'] })
+    },
+    onError: (err) => setError(describe(err)),
+  })
+
+  const migrate = useMutation({
+    mutationFn: (vars: { id: number; uplink_if: string; vlan_id?: number }) =>
+      netMaintainApi.migrateSwitch(vars.id, {
+        uplink_if: vars.uplink_if,
+        vlan_id: vars.vlan_id,
+        acknowledge: true,
+      }),
+    onSuccess: () => {
+      setMigrateTarget(null)
+      setError('')
+      setNotice('已提交迁移')
+      void queryClient.invalidateQueries({ queryKey: ['networks', effectiveNodeID] })
+      void queryClient.invalidateQueries({ queryKey: ['tasks'] })
+    },
+    onError: (err) => {
+      setMigrateTarget(null)
+      setError(describe(err))
+    },
   })
 
   const networks = useQuery({
@@ -213,6 +248,23 @@ export function NetworkPage() {
                           >
                             编辑
                           </button>
+                          {/* 迁移：换物理网卡（可同时换 VLAN）。它搬的是**现有
+                              端口**，与"只改配置"的编辑不是一回事。 */}
+                          <button
+                            className="text-sm text-ink-2 hover:underline"
+                            onClick={() => setMigrateTarget(nw)}
+                          >
+                            迁移
+                          </button>
+                          {/* 重配置：按现有记录重新下发。对应"配置是对的、
+                              节点上状态漂了"这一场景，因此不需要参数。 */}
+                          <button
+                            className="text-sm text-ink-2 hover:underline"
+                            disabled={reconfigure.isPending}
+                            onClick={() => reconfigure.mutate(nw.id)}
+                          >
+                            重配置
+                          </button>
                           <button
                             className="text-sm text-danger hover:underline"
                             onClick={() => setDeleteTarget(nw)}
@@ -254,6 +306,50 @@ export function NetworkPage() {
           setError(msg)
         }}
       />
+      <Modal
+        open={migrateTarget !== null}
+        title={`迁移「${migrateTarget?.name ?? ''}」`}
+        description="把这台交换机的端口搬到另一块物理网卡上。迁移期间该网络的网口会短暂中断。"
+        onClose={() => setMigrateTarget(null)}
+        footer={
+          <>
+            <Button variant="secondary" size="sm" onClick={() => setMigrateTarget(null)}>
+              取消
+            </Button>
+            <Button
+              size="sm"
+              loading={migrate.isPending}
+              disabled={migrateUplink.trim() === ''}
+              onClick={() =>
+                migrateTarget &&
+                migrate.mutate({
+                  id: migrateTarget.id,
+                  uplink_if: migrateUplink.trim(),
+                  vlan_id: migrateVlan.trim() === '' ? undefined : Number(migrateVlan),
+                })
+              }
+            >
+              提交迁移
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3">
+          <Input
+            label="目标物理网卡"
+            value={migrateUplink}
+            onChange={(e) => setMigrateUplink(e.target.value)}
+            placeholder="例如 eth1"
+          />
+          <Input
+            label="目标 VLAN（可留空表示不变）"
+            value={migrateVlan}
+            onChange={(e) => setMigrateVlan(e.target.value)}
+            placeholder="1-4094"
+          />
+          {migrate.isError && <p className="text-sm text-danger">{describe(migrate.error)}</p>}
+        </div>
+      </Modal>
 
       <Modal
         open={deleteTarget != null}
@@ -480,6 +576,7 @@ function CapabilityCard({ capability }: { capability: Capability }) {
           )}
         </div>
       )}
+
     </div>
   )
 }
