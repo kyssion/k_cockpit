@@ -10,6 +10,13 @@ const (
 	FileCategoryShare = "share"
 	// FileCategoryDisk 虚拟磁盘。它可以作为数据盘挂到虚拟机上。
 	FileCategoryDisk = "disk"
+	// FileCategoryTemplatePackage 模板包（tar.gz）。它只能被**导入成模板**，
+	// 不能挂到光驱、也不能当数据盘——一个 .tar.gz 挂上去虚拟机不会认识它。
+	//
+	// 单独一类而不是复用 disk：类别决定"这个文件能被怎么用"，而它的用途
+	// 与虚拟磁盘完全不同。混在一起的结果是在"挂载数据盘"的候选里出现一个
+	// 模板包，而那正是「看起来可用、实际挂上去没用」的那类错误。
+	FileCategoryTemplatePackage = "template_package"
 )
 
 // StorageFile 对应 storage_file 表：用户存储空间里的一个文件（F-5-03 / F-5-05）。
@@ -73,7 +80,7 @@ func (f *StorageFile) IsReady() bool { return f.UploadedAt != nil }
 // ValidFileCategory 报告类别取值是否合法。
 func ValidFileCategory(c string) bool {
 	switch c {
-	case FileCategoryISO, FileCategoryShare, FileCategoryDisk:
+	case FileCategoryISO, FileCategoryShare, FileCategoryDisk, FileCategoryTemplatePackage:
 		return true
 	}
 	return false

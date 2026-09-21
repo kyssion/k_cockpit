@@ -368,6 +368,17 @@ func Register(h *server.Hertz, deps Deps) {
 		// 模板族：同一条派生链上的全部版本（F-3-04）。放在 :id 通配之后也不会
 		// 被吃掉，因为它多一段路径。
 		v1.GET("/templates/:id/family", requireAuth, templateHandler.Family)
+
+		// 模板导出与导入（F-3-05）：模板包是跨节点搬运模板的载体。
+		//
+		// 导出记在 /template-exports 下而不是 /templates/:id/exports：产物是
+		// **独立的对象**（可以下载、可以删除、模板删了它还在），挂在模板下面
+		// 会让"模板已删除"之后无处可找。
+		v1.POST("/templates/:id/exports", requireAuth, templateHandler.Export)
+		v1.GET("/template-exports", requireAuth, templateHandler.ListExports)
+		v1.DELETE("/template-exports/:id", requireAuth, templateHandler.DeleteExport)
+		v1.POST("/templates/imports/preview", requireAuth, templateHandler.ImportPreview)
+		v1.POST("/templates/imports", requireAuth, templateHandler.Import)
 		v1.DELETE("/templates/:id", requireAuth, templateHandler.Delete)
 
 		// 跨节点迁移（F-2-09）。前置条件在受理时同步判定——每一个条件

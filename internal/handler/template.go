@@ -185,6 +185,95 @@ func (h *Template) Delete(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
 }
 
+// --- 模板导出与导入（F-3-05）---
+
+// Export 导出一个模板。
+func (h *Template) Export(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "模板 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.Export(ctx, id, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
+// ListExports 列出导出产物。
+func (h *Template) ListExports(ctx context.Context, c *app.RequestContext) {
+	items, err := h.svc.ListExports(ctx, int64(queryInt(c, "node_id")), authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"items": items})
+}
+
+// DeleteExport 删除一个导出产物。
+func (h *Template) DeleteExport(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "导出 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.DeleteExport(ctx, id, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
+// ImportPreview 预览一个模板包。
+func (h *Template) ImportPreview(ctx context.Context, c *app.RequestContext) {
+	var req struct {
+		FileID int64 `json:"file_id"`
+	}
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+	view, err := h.svc.ImportPreview(ctx, template.ImportRequest{FileID: req.FileID}, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, view)
+}
+
+// Import 导入一个模板包。
+func (h *Template) Import(ctx context.Context, c *app.RequestContext) {
+	var req struct {
+		FileID int64 `json:"file_id"`
+	}
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.Import(ctx, template.ImportRequest{FileID: req.FileID},
+		authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
 // Family 返回同一个模板族的全部版本（F-3-04）。
 func (h *Template) Family(ctx context.Context, c *app.RequestContext) {
 	id, err := namedPathID(c, "id", "模板 ID")

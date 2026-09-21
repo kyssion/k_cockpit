@@ -48,8 +48,11 @@ func newTestEnv(t *testing.T, status string) (*template.Service, *gorm.DB) {
 	if err != nil {
 		t.Fatalf("打开测试库失败: %v", err)
 	}
+	// StorageFile 与 TemplateExport 也要建：导入的来源是「我的存储」里的
+	// 模板包，导出产物记在 template_export。
 	if err := db.AutoMigrate(
 		&model.Template{}, &model.VM{}, &model.Task{}, &model.TaskStage{}, &model.AuditLog{},
+		&model.StorageFile{}, &model.TemplateExport{},
 	); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}

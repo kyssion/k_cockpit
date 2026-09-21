@@ -164,6 +164,30 @@ func stagePlan(op Operation) [][2]string {
 			{"nvram_rebuild", "重建 UEFI 启动项"},
 			{"domain_define", "重新定义并校验"},
 		}
+	case OpTemplateExport:
+		return [][2]string{
+			{"manifest_build", "生成清单"},
+			{"digest_calc", "计算摘要"},
+			{"archive_pack", "打包为 tar.gz"},
+		}
+	case OpTemplateExportDelete:
+		return [][2]string{
+			{"file_remove", "删除导出包"},
+		}
+	case OpTemplateImportPreview:
+		return [][2]string{
+			{"archive_open", "打开模板包"},
+			{"manifest_read", "读取清单"},
+			{"digest_verify", "校验内容摘要"},
+		}
+	case OpTemplateImport:
+		return [][2]string{
+			{"archive_open", "打开模板包"},
+			{"digest_verify", "校验内容摘要"},
+			{"disk_extract", "解出磁盘镜像"},
+			{"disk_convert", "转换磁盘格式"},
+			{"template_register", "登记为模板"},
+		}
 	case OpStoragePoolCreate:
 		return [][2]string{
 			{"device_format", "格式化设备"},
@@ -1272,6 +1296,63 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 			BootPath:  `\EFI\BOOT\BOOTX64.EFI`,
 			Message:   "已重建 UEFI 启动项，请重新启动虚拟机确认",
 		}
+
+	case OpTemplateExport:
+		// 清单取自控制面给的模板信息：节点不认识"这个模板叫什么"以外的
+		// 元数据，而控制面不认识"这个文件放在哪"。
+		manifest := TemplateManifest{
+			Name:       strParam(op.Params, "name"),
+			Version:    versionOf(op.Params),
+			DiskFormat: orString(strParam(op.Params, "disk_format"), "qcow2"),
+			DiskSizeGB: intParam(op.Params, "disk_size"),
+		}
+		if s := strParam(op.Params, "family_name"); s != "" {
+			manifest.FamilyName = s
+		}
+		version := manifest.Version
+		if version <= 0 {
+			version = 1
+		}
+		filename := manifest.Name + "-v" + strconv.Itoa(version) + ".tar.gz"
+		data[TemplateExportDataKey] = TemplateExportInfo{
+			RelPath:   "template-packages/" + filename,
+			Filename:  filename,
+			SizeBytes: int64(manifest.DiskSizeGB) * 1024 * 1024 * 1024 / 4,
+			SHA256:    "mock-digest-" + filename,
+			Manifest:  manifest,
+		}
+
+	case OpTemplateImportPreview, OpTemplateImport:
+		// 清单由节点从包里读出来；mock 用包文件名推一个，形状必须完整
+		// ——少一个字段的表现是界面上那一列空白。
+		pkg := strParam(op.Params, "rel_path")
+		base := pkg
+		if i := strings.LastIndexByte(pkg, '/'); i >= 0 {
+			base = pkg[i+1:]
+		}
+		name := strings.TrimSuffix(strings.TrimSuffix(base, ".tar.gz"), ".tgz")
+		if name == "" {
+			name = "imported-template"
+		}
+		manifest := TemplateManifest{
+			Name:       name,
+			Version:    1,
+			DiskFormat: "qcow2",
+			DiskSizeGB: 20,
+		}
+		info := TemplateImportInfo{
+			Manifest: manifest,
+			// 摘要不符这条分支要**可达**：界面必须能渲染出"包内容与清单
+			// 不符"这种失败，否则用户会在导入失败时看到一句空话。
+			DigestMismatch: strings.Contains(pkg, "corrupt"),
+			Message:        "模板包校验通过",
+		}
+		if op.Kind == OpTemplateImport {
+			info.DiskPath = "/var/lib/k_cockpit/templates/" + name + ".qcow2"
+			info.SizeGB = manifest.DiskSizeGB
+			info.Format = manifest.DiskFormat
+		}
+		data[TemplateImportDataKey] = info
 	}
 
 	return &Result{
@@ -1406,6 +1487,36 @@ func mockStats(target string) VMStats {
 func strParam(params map[string]any, key string) string {
 	s, _ := params[key].(string)
 	return s
+}
+
+// intParam 读一个整数参数。JSON 反序列化后整数是 float64，
+// 两种形状都要认——否则跨进程调用时它会永远是 0。
+// versionOf 读版本号：没有或不是正数时按 1——版本号是"第几代"，
+// 0 会让文件名变成 -v0，而那看起来像导出失败了。
+func versionOf(params map[string]any) int {
+	if v := intParam(params, "version"); v > 0 {
+		return v
+	}
+	return 1
+}
+
+func intParam(params map[string]any, key string) int {
+	switch v := params[key].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	}
+	return 0
+}
+
+func orString(v, fallback string) string {
+	if v == "" {
+		return fallback
+	}
+	return v
 }
 
 func mockUUID(nodeID int64, name string) string {

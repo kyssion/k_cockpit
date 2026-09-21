@@ -18,6 +18,20 @@ const (
 
 	// OpVMClone 从模板克隆出一台虚拟机。
 	OpVMClone OpKind = "vm.clone"
+
+	// 模板导出与导入（F-3-05）。
+	//
+	// 模板包（tar.gz）是**跨节点搬运模板**的载体：在一台宿主机上导出、
+	// 在另一台上导入。没有它，模板就只能活在制备它的那个节点上——而
+	// 节点会下线、会迁移、会换盘。
+	//
+	// 四个操作合起来才是一条完整的路：导出、删除导出包、预览导入、导入。
+	// 其中"预览"单独成一个操作而不是让控制面自己解包：包在**节点上**，
+	// 控制面看不到它的内容。
+	OpTemplateExport        OpKind = "template.export"
+	OpTemplateExportDelete  OpKind = "template.export.delete"
+	OpTemplateImportPreview OpKind = "template.import.preview"
+	OpTemplateImport        OpKind = "template.import"
 )
 
 // TemplateDataKey 是模板制备结果中承载磁盘信息的键。
@@ -35,6 +49,67 @@ type TemplateInfo struct {
 
 // CloneDataKey 是克隆结果中承载磁盘信息的键。
 const CloneDataKey = "clone"
+
+// TemplateExportDataKey 是导出结果中承载产物信息的键。
+const TemplateExportDataKey = "template_export"
+
+// TemplateExportInfo 是节点在导出完成后回传的信息。
+type TemplateExportInfo struct {
+	// RelPath 是导出包相对**用户存储根**的路径。
+	//
+	// 放在用户存储里：这样它能被下载、能被作为导入来源选中，也受存储
+	// 配额约束。
+	RelPath   string
+	Filename  string
+	SizeBytes int64
+	// SHA256 是包的内容摘要，供导入前校验。
+	//
+	// 节点算而不是控制面算：文件在节点上，控制面拿到它要先把几十 GB
+	// 传过来再算，那没有任何意义。
+	SHA256 string
+	// Manifest 是包内清单的一份拷贝，供控制面在列表中展示"里面有什么"，
+	// 而不必为了看一眼再去解一次包。
+	Manifest TemplateManifest
+}
+
+// TemplateManifest 是模板包内的清单。
+//
+// 有它，导入才能**先验后做**：控制面在受理前就把"将导入成什么"显示给
+// 用户，而不是导完才发现名字撞了或者格式不对。
+type TemplateManifest struct {
+	Name       string
+	Version    int
+	FamilyName string
+	DiskFormat string
+	DiskSizeGB int
+
+	OSType    string
+	OSVariant string
+
+	DefaultCPU      int
+	DefaultMemoryMB int
+	DefaultDiskBus  string
+	DefaultNicModel string
+	DefaultFirmware string
+}
+
+// TemplateImportDataKey 是导入（含预览）结果中承载信息的键。
+const TemplateImportDataKey = "template_import"
+
+// TemplateImportInfo 是节点在导入完成（或预览）后回传的信息。
+type TemplateImportInfo struct {
+	// 预览阶段只有 Manifest 有值；导入完成后补充磁盘信息。
+	Manifest TemplateManifest
+	DiskPath string
+	SizeGB   int
+	Format   string
+	// DigestMismatch 为 true 表示包内容与清单里的摘要不符。
+	//
+	// 校验由**节点**做：包就在它那里。让控制面拿着摘要去比对一个它看不到
+	// 的文件，只能得到一个永远为假的结论。
+	DigestMismatch bool
+	Message        string
+}
 
 // 重装系统（F-2-11）。
 const (
