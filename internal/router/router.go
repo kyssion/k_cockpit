@@ -844,6 +844,10 @@ func Register(h *server.Hertz, deps Deps) {
 		// 两者都是**只读探测**，不入队、不写投影：指标与画面都是瞬时的，
 		// 存下来只会在下一次读取时给出一个过期的答案。
 		v1.GET("/vms/:id/stats", requireAuth, vmHandler.Stats)
+		// 详情页的三块补充能力：事件时间线、PCIe 槽位余量、邻居表。三者都是**按需**取——它们各需要一次向节点的请求或一次流水查询，塞进详情会让每次打开详情页都变慢。
+		v1.GET("/vms/:id/timeline", requireAuth, vmHandler.Timeline)
+		v1.GET("/vms/:id/pcie-info", requireAuth, vmHandler.PCIeInfo)
+		v1.GET("/vms/:id/neighbors", requireAuth, vmHandler.Neighbors)
 		v1.GET("/vms/:id/console/frame", requireAuth, vmHandler.ConsoleFrame)
 		// 电源与删除都是异步操作：受理时校验状态并返回任务标识，执行由
 		// 任务队列按资源锁串行（f-2-01 R-005）。

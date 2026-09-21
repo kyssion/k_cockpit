@@ -145,6 +145,8 @@ type VM struct {
 	// 24.04"对虚拟化层是不同的信息量。
 	OSVariant   string `gorm:"column:os_variant;size:64"`
 	MachineType string `gorm:"size:32;not null;default:q35"`
+	// CPUAffinity 是绑核设置（cpuset，形如 "0-3"），为空表示不绑核。
+	CPUAffinity string `gorm:"column:cpu_affinity;size:128"`
 	Firmware    string `gorm:"size:16;not null;default:bios"`
 	SecureBoot  bool   `gorm:"not null;default:false"`
 	BootOrder   string `gorm:"size:128;not null;default:disk,cdrom,network"`

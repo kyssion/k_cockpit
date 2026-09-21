@@ -10,6 +10,12 @@ const (
 	ScheduleActionStart    = "start"
 	ScheduleActionShutdown = "shutdown"
 	ScheduleActionDelete   = "delete"
+	// ScheduleActionSnapshot 定时创建快照。
+	//
+	// 它与前三种一样**复用已有的任务类型**（vm.snapshot.create），不需要新的
+	// agent 能力。它与"删除"的关键差别是可逆：快照可以再删，因此可以周期
+	// 执行——而删除只能一次性（见 schedule.Service.Create 里的说明）。
+	ScheduleActionSnapshot = "snapshot"
 )
 
 // 调度类型。
@@ -54,6 +60,13 @@ type VMSchedule struct {
 	LastResult *string `gorm:"size:32"`
 	// LastTaskID 指向该次执行产生的任务，便于从定时任务跳到任务详情排查。
 	LastTaskID *int64
+
+	// --- 仅 snapshot 动作使用 ---
+
+	// SnapshotName 是快照名模板。留空时由服务端按时间生成一个。
+	SnapshotName *string `gorm:"size:128"`
+	// IncludeMemory 表示是否保存运行现场。
+	IncludeMemory bool `gorm:"not null;default:false"`
 
 	// Enabled 控制任务是否参与调度。
 	//

@@ -164,6 +164,17 @@ func stagePlan(op Operation) [][2]string {
 			{"nvram_rebuild", "重建 UEFI 启动项"},
 			{"domain_define", "重新定义并校验"},
 		}
+	case OpVMPcieInfo:
+		return [][2]string{
+			{"domain_read", "读取域定义"},
+			{"root_port_count", "统计 PCIe 根端口"},
+		}
+	case OpVMNeighbors:
+		return [][2]string{
+			{"iface_resolve", "定位网口与网桥"},
+			{"neighbour_read", "读取邻居表"},
+		}
+
 	case OpHostHardware:
 		return [][2]string{
 			{"capabilities_read", "读取宿主机能力"},
@@ -1318,6 +1329,24 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 				"节点侧会由节点流式返回导出包。\n" +
 				"target=" + op.Target + "\n"),
 			MIME: "application/gzip",
+		}
+
+	case OpVMPcieInfo:
+		// 给一个"还剩两个"的场景：全满与全空都太干净，界面上无法区分
+		// "读到了"与"节点没实现"、"还有余量"与"刚好用完"。
+		data[PCIeDataKey] = PCIeInfo{
+			Total:            6,
+			Free:             2,
+			HotplugSupported: true,
+			MachineType:      "q35",
+		}
+
+	case OpVMNeighbors:
+		data[NeighborDataKey] = []NeighborEntry{
+			{IP: "10.0.0.1", MAC: "52:54:00:aa:bb:01", Interface: "vnet0", State: "reach", IsSelf: true, Bridge: "br-lan"},
+			{IP: "10.0.0.10", MAC: "52:54:00:aa:bb:10", Interface: "vnet0", State: "reach", Bridge: "br-lan"},
+			{IP: "10.0.0.11", MAC: "52:54:00:aa:bb:11", Interface: "vnet0", State: "stale", Bridge: "br-lan"},
+			{IP: "10.0.0.99", MAC: "", Interface: "vnet0", State: "failed", Bridge: "br-lan"},
 		}
 
 	case OpHostHardware:

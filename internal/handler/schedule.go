@@ -24,8 +24,12 @@ func NewSchedule(svc *schedule.Service, guard *risk.Guard) *Schedule {
 }
 
 type createScheduleRequest struct {
-	// Action 取值 start / shutdown / delete。
+	// Action 取值 start / shutdown / delete / snapshot。
 	Action string `json:"action"`
+	// SnapshotName 是快照名模板，仅 snapshot 动作需要：它让自动快照在列表里能与手动快照区分。
+	SnapshotName string `json:"snapshot_name"`
+	// IncludeMemory 是否保存运行现场，仅 snapshot 动作使用。
+	IncludeMemory bool `json:"include_memory"`
 	// ScheduleType 取值 once / daily / weekly。
 	ScheduleType string `json:"schedule_type"`
 	// Weekdays 每周模式下要执行的日子，1=周一 … 7=周日。
@@ -77,11 +81,13 @@ func (h *Schedule) Create(ctx context.Context, c *app.RequestContext) {
 	}
 
 	row, err := h.svc.Create(ctx, vmID, schedule.CreateRequest{
-		Action:       req.Action,
-		ScheduleType: req.ScheduleType,
-		Weekdays:     req.Weekdays,
-		TimeOfDay:    req.TimeOfDay,
-		Date:         req.Date,
+		Action:        req.Action,
+		ScheduleType:  req.ScheduleType,
+		Weekdays:      req.Weekdays,
+		TimeOfDay:     req.TimeOfDay,
+		Date:          req.Date,
+		SnapshotName:  req.SnapshotName,
+		IncludeMemory: req.IncludeMemory,
 	}, authz.ViewerOf(c))
 	if err != nil {
 		api.Fail(c, err)

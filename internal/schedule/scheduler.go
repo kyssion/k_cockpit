@@ -7,15 +7,19 @@ package schedule
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
 
+	"k_cockpit/internal/authz"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/scheduler"
 	"k_cockpit/internal/task"
+	vmsvc "k_cockpit/internal/vm"
 )
 
 // Options 是调度器的运行参数。
@@ -52,6 +56,11 @@ type Scheduler struct {
 
 	// obs 是调度事件的记录器；为 nil 时不做任何记录。
 	obs *scheduler.Recorder
+
+	// snapshots 是「创建快照」动作的入口。它与开机、关机、删除不同：那三种
+	// 只是入队，而快照要先建记录、过配额、探测运行态才能入队，因此复用
+	// vm 服务的同一条路径（传进来的就是这个服务）。
+	snapshots SnapshotCreator
 }
 
 // New 构造调度器。
@@ -227,6 +236,39 @@ func actionLabel(action string) string {
 // 参数用 map 而不是复用 vm 包的结构体：那会让本包依赖 vm 包的内部类型，
 // 而两者的耦合点其实只有「任务参数的 JSON 字段名」这一点契约。
 // 字段名变了这里会编译不过——不会，但测试会失败，足以拦住。
+// SnapshotCreator 是创建快照的入口（由 vm 服务实现）。
+//
+// 定时任务只是"到点了替用户点一次按钮"，因此它复用同一条路径，而不是自己
+// 拼任务参数。
+
+type SnapshotCreator interface {
+	CreateSnapshot(
+		ctx context.Context, vmID int64, req vmsvc.CreateSnapshotRequest,
+		v authz.Viewer, operatorName, clientIP string,
+	) (*model.Task, error)
+}
+
+// SetSnapshotCreator 装配快照入口；不装配时定时快照动作会**报错**而不是静默跳过——
+// 静默跳过的表现是"设了任务却从来没跑过"，那比显式失败难查得多。
+
+func (s *Scheduler) SetSnapshotCreator(c SnapshotCreator) { s.snapshots = c }
+
+// snapshotName 生成这次快照的名字。
+//
+// 用模板 + 时间戳而不是固定名字：固定名字会在第二次触发时撞唯一约束，
+// 而那种失败看起来像"任务失败了"，用户会去看节点，而不是发现名字重复。
+func snapshotName(sch model.VMSchedule) string {
+	stamp := time.Now().Format("20060102-1504")
+	base := ""
+	if sch.SnapshotName != nil {
+		base = strings.TrimSpace(*sch.SnapshotName)
+	}
+	if base == "" {
+		return "auto-" + stamp
+	}
+	return base + "-" + stamp
+}
+
 func (s *Scheduler) enqueue(ctx context.Context, sch model.VMSchedule) (*model.Task, error) {
 	vm, err := s.vmOf(ctx, sch.VMID)
 	if err != nil {
@@ -247,6 +289,23 @@ func (s *Scheduler) enqueue(ctx context.Context, sch model.VMSchedule) (*model.T
 		// CreatedBy 为 0 时 Enqueue 会记成「无发起人」——这正是定时任务
 		// 的实情：它由调度器触发，没有人在那一刻按按钮。
 		CreatedBy: deref(sch.CreatedBy),
+	}
+
+	// 快照动作**不在这里拼任务参数**，而是调用虚拟机的创建快照入口。
+	//
+	// 原因很具体：`vm.snapshot.create` 需要先建一条快照记录拿到 ID，还要过配额、
+	// 实时探测运行态才能决定用内部还是外部快照。在调度器里重抄一遍这套逻辑
+	// 等于把规则放两份，而两份规则只在"配额超限"这个分支上分叉时就够查一天。
+	//
+	// 用接口换进来，调度器因此不依赖 vm 包，测试也不用构造整套虚拟机服务。
+	if sch.Action == model.ScheduleActionSnapshot {
+		if s.snapshots == nil {
+			return nil, errors.New("未装配快照服务，定时快照无法执行")
+		}
+		return s.snapshots.CreateSnapshot(ctx, sch.VMID, vmsvc.CreateSnapshotRequest{
+			Name:          snapshotName(sch),
+			IncludeMemory: sch.IncludeMemory,
+		}, authz.Viewer{UserID: ownerID(vm.OwnerID), IsAdmin: true}, "", "")
 	}
 
 	switch sch.Action {

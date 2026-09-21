@@ -76,9 +76,27 @@ type Service struct {
 func NewService(db *gorm.DB) *Service { return &Service{db: db} }
 
 // CreateRequest 是新建定时任务的请求。
+// optString 空串存 NULL 而不是空串。
+//
+// 空串在界面上会被渲染成一个空的「快照名：」，看起来像名字丢了；NULL 让
+// 界面能明确显示「未指定」。
+func optString(v string) *string {
+	if v == "" {
+		return nil
+	}
+	return &v
+}
+
 type CreateRequest struct {
-	// Action 取值 start / shutdown / delete。
+	// Action 取值 start / shutdown / delete / snapshot。
 	Action string
+	// SnapshotName 快照名模板，仅 snapshot 动作使用。
+	//
+	// 留空时服务端按时间生成一个（形如 `auto-20260921-0300）。让用户填模板的
+	// 用处是"在界面上一眼看出这批快照是谁建的——定时任务那份。
+	SnapshotName string
+	// IncludeMemory 是否保存运行现场。仅 snapshot 动作使用。
+	IncludeMemory bool
 	// ScheduleType 取值 once / daily / weekly。
 	ScheduleType string
 	// Weekdays 每周模式下要执行的日子，取值 1=周一 … 7=周日。
@@ -100,9 +118,10 @@ func (s *Service) Create(
 
 	action := strings.TrimSpace(req.Action)
 	switch action {
-	case model.ScheduleActionStart, model.ScheduleActionShutdown, model.ScheduleActionDelete:
+	case model.ScheduleActionStart, model.ScheduleActionShutdown,
+		model.ScheduleActionDelete, model.ScheduleActionSnapshot:
 	default:
-		return nil, api.InvalidParameter("不支持的动作，可选 开机 / 关机 / 删除")
+		return nil, api.InvalidParameter("不支持的动作，可选 开机 / 关机 / 删除 / 创建快照")
 	}
 
 	kind := strings.TrimSpace(req.ScheduleType)
@@ -122,6 +141,12 @@ func (s *Service) Create(
 		return nil, api.ValidationFailed(
 			"删除类定时任务仅支持「一次性」：周期删除会在无人察觉的情况下反复抹掉数据")
 	}
+	// 快照**允许周期执行**，这与删除相反：快照是累加的、可再删的，而它的价值恰恰在于"定期留下还原点"。
+	//
+	// 但周期快照会**累积**，因此这里只接受有名字模板的写法——名字里带时间，用户才能一眼看出这批是定时建的，而不是被误当成手动快照。
+	if action == model.ScheduleActionSnapshot && strings.TrimSpace(req.SnapshotName) == "" {
+		return nil, api.InvalidParameter("定时快照必须填快照名模板，便于区分自动快照与手动快照")
+	}
 
 	hour, minute, err := parseTimeOfDay(req.TimeOfDay)
 	if err != nil {
@@ -130,13 +155,16 @@ func (s *Service) Create(
 	runAt := fmt.Sprintf("%02d:%02d", hour, minute)
 
 	row := model.VMSchedule{
-		VMID:         vm.ID,
-		NodeID:       vm.NodeID,
-		Action:       action,
-		ScheduleType: kind,
-		RunAt:        &runAt,
-		Enabled:      true,
-		CreatedBy:    &v.UserID,
+		// 快照动作的两项参数落库：调度器触发时直接读，不必再去推断这次要建什么。
+		SnapshotName:  optString(strings.TrimSpace(req.SnapshotName)),
+		IncludeMemory: req.IncludeMemory,
+		VMID:          vm.ID,
+		NodeID:        vm.NodeID,
+		Action:        action,
+		ScheduleType:  kind,
+		RunAt:         &runAt,
+		Enabled:       true,
+		CreatedBy:     &v.UserID,
 	}
 
 	switch kind {

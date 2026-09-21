@@ -321,6 +321,13 @@ var editFields = []EditField{
 		},
 	},
 	{
+		// CPU 亲和性（绑核）。它决定 vCPU 实际跑在哪些物理核上，与"给多少核"
+		// 是同一类决策，因此放在同一处。
+		Key: "cpu_affinity", Label: "CPU 亲和性（绑核）", Kind: EditKindText, Group: EditGroupAdvanced,
+		RequiresNode: true, InCreate: true,
+		Hint: "形如 0-3 或 0,2,4。留空表示不绑核，由调度器自行选择物理核。",
+	},
+	{
 		Key: "cpu_limit_percent", Label: "CPU 使用率上限（%）", Kind: EditKindNumber,
 		Group: EditGroupAdvanced, InCreate: true, Default: "0",
 		RequiresNode: true, Min: 0, Max: 100,
@@ -501,6 +508,7 @@ var columnToField = map[string]string{
 	"watchdog":          "Watchdog",
 	"cpu_type":          "CPUType",
 	"cpu_limit_percent": "CPULimitPercent",
+	"cpu_affinity":      "CPUAffinity",
 	"memory_hugepages":  "MemoryHugepages",
 	"apic":              "APIC",
 	"pae":               "PAE",

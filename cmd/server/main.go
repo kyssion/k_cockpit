@@ -334,6 +334,9 @@ func main() {
 	scheduleSvc := schedule.NewService(db)
 	templateSvc := template.NewService(db, queue, recorder, mockAgent, quotaSvc)
 	scheduler := schedule.New(db, queue, schedule.Options{})
+	// 定时快照复用 vm 服务的创建快照入口：那条路要先建记录拿 ID、过配额、
+	// 探测运行态。在调度器里重抄一遍等于把规则放两份。
+	scheduler.SetSnapshotCreator(vmSvc)
 	// 观测要在启动之前接上，否则启动后到接上之间那一轮的动作不会被记录。
 	scheduler.Observe(schedRecorder)
 	scheduler.Start(context.Background())

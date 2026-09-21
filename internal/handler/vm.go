@@ -1219,6 +1219,54 @@ func (h *VM) DeleteExport(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
 }
 
+// Timeline 返回虚拟机的事件时间线（合并审计与任务流水）。
+//
+// 为什么要合成一条：用户问的是"这台机器发生过什么"，而不是"审计里有什么"。
+// 让他自己按时间去对两个列表，等于把这个问题的答案藏起来了。
+func (h *VM) Timeline(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	items, err := h.svc.Timeline(ctx, id, authz.ViewerOf(c), queryInt(c, "limit"))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"items": items})
+}
+
+// PCIeInfo 返回 PCIe 根端口余量（热插拔还有几个槽位可用）。
+func (h *VM) PCIeInfo(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	info, err := h.svc.PCIeInfo(ctx, id, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, info)
+}
+
+// Neighbors 返回虚拟机所在二层网络的邻居表（ARP / NDP）。
+func (h *VM) Neighbors(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	view, err := h.svc.Neighbors(ctx, id, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, view)
+}
+
 // DownloadExport 下载导出产物（API-086）。
 //
 // 直接返回**产物字节**而不是一个节点上的直链：直链意味着要把节点的访问凭据
