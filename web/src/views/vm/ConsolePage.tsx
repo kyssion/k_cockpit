@@ -7,7 +7,12 @@ import { Link, useParams } from 'react-router'
 import RFB from '@novnc/novnc'
 
 import { ApiError, NetworkError } from '@/api/client'
-import { consoleApi, consoleSocketURL, type ConsoleConfig } from '@/api/console'
+import {
+  consoleApi,
+  consoleConnectionFileURL,
+  consoleSocketURL,
+  type ConsoleConfig,
+} from '@/api/console'
 import { vmApi } from '@/api/vm'
 import { Button } from '@/components/common/Button'
 import { PageLoading } from '@/components/common/Feedback'
@@ -21,7 +26,14 @@ type ConnState = 'idle' | 'connecting' | 'connected' | 'failed' | 'unsupported'
 /** 重连上限（R-009：需提示重试次数，且不得创建重复会话）。 */
 const MAX_RETRIES = 3
 
-export function ConsolePage() {
+/**
+ * ConsolePage 是控制台画面。
+ *
+ * `standalone` 为真时它是**独立窗口**里的那一页（没有侧栏与顶栏）：控制台
+ * 要占满屏幕才好用，而在布局里它既要减去侧栏又要减去标签栏——把机器名
+ * 那一行也去掉，画面就能多出一整条。
+ */
+export function ConsolePage({ standalone = false }: { standalone?: boolean }) {
   const { id } = useParams<{ id: string }>()
   const vmID = Number(id)
 
@@ -138,19 +150,34 @@ export function ConsolePage() {
 
   return (
     <div className="flex h-full flex-col gap-3">
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <Link to={`/vm/${vmID}`} className="text-sm text-ink-3 hover:text-brand">
-            ← 返回详情
-          </Link>
-          <span className="text-base font-medium text-ink">{vm.data?.name ?? `#${vmID}`}</span>
-          <ConnBadge state={displayState} />
-        </div>
+      {!standalone && (
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <Link to={`/vm/${vmID}`} className="text-sm text-ink-3 hover:text-brand">
+              ← 返回详情
+            </Link>
+            <span className="text-base font-medium text-ink">{vm.data?.name ?? `#${vmID}`}</span>
+            <ConnBadge state={displayState} />
+          </div>
 
-        <Button variant="secondary" size="sm" onClick={() => setConfigOpen(true)}>
-          控制台设置
-        </Button>
-      </div>
+          <div className="flex items-center gap-2">
+            {/* 独立窗口：控制台要占满屏幕才好用，而在布局里它要让位给
+                侧栏、标签栏与顶栏。 */}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() =>
+                window.open(`/vm/${vmID}/console-window`, '_blank', 'noopener,noreferrer')
+              }
+            >
+              在独立窗口中打开
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => setConfigOpen(true)}>
+              控制台设置
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* 不可用与不支持要**分开说**：前者是配置问题（去开启控制台），
           后者是能力问题（当前节点不支持），提示错了会让用户白折腾。 */}
@@ -380,11 +407,40 @@ function ConsoleSettingsModal({
               ))}
             </div>
             {protocol === 'spice' && (
-              <p className="rounded-control border border-line bg-sunken px-3 py-2 text-xs text-ink-3">
-                SPICE 的价值在于外部客户端（声音、USB 重定向、多显示器）——
-                这里的配置是给 virt-viewer 这类客户端用的。面板内置的查看器是
-                VNC 的，SPICE 的画面请用外部客户端连接上面的地址与端口。
-              </p>
+              <div className="flex flex-col gap-1.5 rounded-control border border-line bg-sunken px-3 py-2 text-xs text-ink-3">
+                <span>
+                  SPICE 的价值在于外部客户端（声音、USB 重定向、多显示器）——
+                  这里的配置是给 virt-viewer 这类客户端用的。面板内置的查看器是
+                  VNC 的，SPICE 的画面请用外部客户端连接。
+                </span>
+                {/* 连接文件只在**节点填了对外地址**时才有意义：没有地址的
+                    文件在用户机器上必然连不上，而他会以为是控制台没开。 */}
+                {config.host && config.enabled ? (
+                  <span className="flex flex-wrap items-center gap-2">
+                    <a
+                      className="text-brand hover:underline"
+                      href={consoleConnectionFileURL(vmID, false)}
+                    >
+                      下载连接文件（.vv）
+                    </a>
+                    {config.has_password && (
+                      <a
+                        className="text-brand hover:underline"
+                        href={consoleConnectionFileURL(vmID, true)}
+                        title="文件里会带上控制台密码的明文，下载时需要二次验证"
+                      >
+                        下载含密码的版本
+                      </a>
+                    )}
+                  </span>
+                ) : (
+                  <span>
+                    {config.enabled
+                      ? '该节点还未配置控制台的对外地址，暂不提供连接文件。'
+                      : '开启后可下载连接文件。'}
+                  </span>
+                )}
+              </div>
             )}
           </div>
         )}

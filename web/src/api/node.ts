@@ -34,6 +34,13 @@ export interface NodeView {
   last_heartbeat_at?: string
   last_error?: string
   remark?: string
+  /**
+   * 控制台的**对外可达**地址（管理员填写）。
+   *
+   * 它不是宿主机上的监听地址——那通常是 127.0.0.1。这里填的是"用户在自己
+   * 的网络里连接控制台时该用的地址"，只影响能否生成 SPICE 连接文件。
+   */
+  console_host?: string
   created_at: string
 }
 
@@ -66,6 +73,10 @@ export const nodeApi = {
    */
   setMaintenance: (id: number, enabled: boolean, reason?: string) =>
     patch<NodeView>(`/api/v1/nodes/${id}/maintenance`, { enabled, reason }),
+
+  /** 设置控制台对外地址；留空表示不提供连接文件。 */
+  setConsoleHost: (id: number, host: string) =>
+    patch<NodeView>(`/api/v1/nodes/${id}/console-host`, { host }),
 
   /**
    * 宿主机实时指标（F-6-03）。只读探测，不入队。

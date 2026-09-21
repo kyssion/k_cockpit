@@ -19,9 +19,21 @@ export function NodeListPage() {
   const queryClient = useQueryClient()
   const [enrollOpen, setEnrollOpen] = useState(false)
   const [removeTarget, setRemoveTarget] = useState<NodeView | null>(null)
+  const [consoleHostTarget, setConsoleHostTarget] = useState<NodeView | null>(null)
   const [error, setError] = useState('')
 
   const nodes = useQuery({ queryKey: ['nodes'], queryFn: nodeApi.list })
+
+  // 控制台地址是**节点级**设置：同一台宿主机上的全部虚拟机共用它。
+  const setConsoleHost = useMutation({
+    mutationFn: (vars: { id: number; host: string }) => nodeApi.setConsoleHost(vars.id, vars.host),
+    onSuccess: () => {
+      setConsoleHostTarget(null)
+      setError('')
+      void queryClient.invalidateQueries({ queryKey: ['nodes'] })
+    },
+    onError: (err) => setError(describe(err)),
+  })
 
   const remove = useMutation({
     mutationFn: (id: number) => nodeApi.remove(id),
@@ -110,6 +122,16 @@ export function NodeListPage() {
                     {node.capabilities?.length ? `${node.capabilities.length} 项` : '—'}
                   </td>
                   <td className="px-4 py-2.5 text-right">
+                    {/* 控制台对外地址：它决定这台节点上的虚拟机能否下载
+                        SPICE 连接文件。放在节点上而不是每台虚拟机上——
+                        同一台宿主机共用同一个入口地址。 */}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setConsoleHostTarget(node)}
+                    >
+                      控制台地址
+                    </Button>
                     <Button variant="ghost" size="sm" onClick={() => setRemoveTarget(node)}>
                       移除
                     </Button>
@@ -122,6 +144,19 @@ export function NodeListPage() {
       )}
 
       <EnrollNodeModal open={enrollOpen} onClose={() => setEnrollOpen(false)} />
+
+      <ConsoleHostModal
+        node={consoleHostTarget}
+        onClose={() => {
+          setConsoleHostTarget(null)
+          setError('')
+        }}
+        onSubmit={(host) =>
+          consoleHostTarget && setConsoleHost.mutate({ id: consoleHostTarget.id, host })
+        }
+        pending={setConsoleHost.isPending}
+        error={error}
+      />
 
       <Modal
         open={removeTarget !== null}
@@ -154,6 +189,68 @@ export function NodeListPage() {
         {error && <p className="text-base text-danger">{error}</p>}
       </Modal>
     </div>
+  )
+}
+
+/**
+ * ConsoleHostModal 填写节点控制台的对外地址。
+ *
+ * 说明必须写清"这不是监听地址"：宿主机上的控制台常常只监听 127.0.0.1
+ * （更安全），而这里要填的是**用户网络里能连到它的那个地址**。填错的表现
+ * 是"下载了连接文件却连不上"，而用户会去反复检查控制台是不是没开。
+ */
+function ConsoleHostModal({
+  node,
+  onClose,
+  onSubmit,
+  pending,
+  error,
+}: {
+  node: NodeView | null
+  onClose: () => void
+  onSubmit: (host: string) => void
+  pending: boolean
+  error: string
+}) {
+  const [host, setHost] = useState('')
+  const [seeded, setSeeded] = useState<number | null>(null)
+
+  if (seeded !== (node?.id ?? null)) {
+    setSeeded(node?.id ?? null)
+    setHost(node?.console_host ?? '')
+  }
+
+  return (
+    <Modal
+      open={node !== null}
+      title={`${node?.name ?? ''} 的控制台地址`}
+      description="用于生成 SPICE 连接文件（.vv）。留空表示不提供连接文件。"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            取消
+          </Button>
+          <Button size="sm" loading={pending} onClick={() => onSubmit(host.trim())}>
+            保存
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-2">
+        <Input
+          label="控制台对外地址"
+          value={host}
+          onChange={(e) => setHost(e.target.value)}
+          placeholder="例如 kvm-node-1.example.com:5901"
+        />
+        <p className="text-sm text-ink-3">
+          这是**用户在自己的网络里连接控制台时该用的地址**，不是宿主机上的监听
+          地址。控制台通常只监听 127.0.0.1，因此这里常填一个跳板或映射后的地址。
+        </p>
+        {error && <p className="text-base text-danger">{error}</p>}
+      </div>
+    </Modal>
   )
 }
 

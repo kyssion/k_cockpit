@@ -33,6 +33,26 @@ export interface ConsoleConfig {
   session_limit: number
   /** 当前 agent 是否支持流式转发。 */
   stream_supported: boolean
+
+  /**
+   * 控制台**对外可达**的地址（取自节点的 console_host）。
+   *
+   * 它与 bind 是两件事：bind 是宿主机上的监听地址（常常是 127.0.0.1），
+   * host 是"从用户网络看过去该连哪里"。为空表示管理员还没填，此时不能
+   * 生成 SPICE 连接文件。
+   */
+  host?: string
+}
+
+/**
+ * 下载 SPICE 连接文件（.vv）。
+ *
+ * 用链接直接下载而不是 fetch：它是凭据类文件，不该进 JS 内存，也不该
+ * 经过任何可能被记录的请求拦截层。
+ */
+export function consoleConnectionFileURL(vmID: number, withPassword: boolean): string {
+  const suffix = withPassword ? '&with_password=true' : ''
+  return `/api/v1/vms/${vmID}/console/connection-file?protocol=spice${suffix}`
 }
 
 export interface ConsoleUpdateInput {

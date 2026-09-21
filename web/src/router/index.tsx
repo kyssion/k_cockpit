@@ -53,6 +53,15 @@ import { VmDetailPage } from '@/views/vm/VmDetailPage'
 const LazyConsolePage = lazy(() =>
   import('@/views/vm/ConsolePage').then((m) => ({ default: m.ConsolePage })),
 )
+
+// 独立窗口用的加载态：整屏而不是卡片，避免出现一屏空白。
+function StreamFallback() {
+  return (
+    <div className="flex h-full items-center justify-center bg-base">
+      <PageLoading />
+    </div>
+  )
+}
 /* oxlint-enable react/only-export-components */
 import { VmListPage } from '@/views/vm/VmListPage'
 import { TrashPage } from '@/views/vm/TrashPage'
@@ -71,6 +80,19 @@ export const router = createBrowserRouter([
       // 找回密码是**公开**路由：处于这个状态的人拿不出任何凭据，
       // 要求登录才能找回等于没有这个功能。
       { path: '/forgot', element: <ForgotPasswordPage /> },
+      // 独立控制台窗口：**不带布局**。控制台要占满屏幕才好用，而布局里的
+      // 侧栏、标签栏与顶栏会各吃掉一条。它仍需要登录（Cookie 由浏览器自动
+      // 带上，因此新开的窗口同样是已登录状态）。
+      {
+        path: '/vm/:id/console-window',
+        element: (
+          <RequireAuth>
+            <Suspense fallback={<StreamFallback />}>
+              <LazyConsolePage standalone />
+            </Suspense>
+          </RequireAuth>
+        ),
+      },
       {
         path: '/',
         element: (
