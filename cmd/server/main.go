@@ -61,6 +61,7 @@ import (
 	"k_cockpit/internal/version"
 	"k_cockpit/internal/vm"
 	"k_cockpit/internal/vmtag"
+	"k_cockpit/internal/vpcacl"
 )
 
 func main() {
@@ -176,6 +177,8 @@ func main() {
 	// 批量删除快照与 UEFI 启动项修复（F-2-07 / F-2-11）。
 	queue.Register(vm.NewSnapshotDeleteAllExecutor(db, mockAgent))
 	queue.Register(vm.NewNVRAMRepairExecutor(mockAgent))
+	// ACL 应用（F-4-05）。
+	queue.Register(vpcacl.NewExecutor(mockAgent))
 	queue.Register(vm.NewConfigUpdateExecutor(db, mockAgent))
 	queue.Register(vm.NewEnterRescueExecutor(db, mockAgent))
 	queue.Register(vm.NewExitRescueExecutor(db, mockAgent))
@@ -403,6 +406,7 @@ func main() {
 		Settings:      settingsSvc,
 		Mailer:        mailSvc,
 		Bus:           bus,
+		VpcACL:        vpcacl.NewService(db, mockAgent, queue, recorder),
 		SecureCookie:  cfg.Session.SecureCookie,
 		SimulateAgent: cfg.Agent.Transport == config.AgentTransportMock,
 	})

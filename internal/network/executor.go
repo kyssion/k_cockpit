@@ -61,8 +61,22 @@ func (e *SwitchChangeExecutor) Run(ctx context.Context, t *model.Task) error {
 		return api.Internal()
 	}
 
+	// 迁移、重配置与端口释放各有自己的操作：它们与"增删改"不是同一种动作
+	// （一个搬动现有端口，一个按记录重新下发，一个回收资源），塞进
+	// OpVPCSwitchChange 会让节点那边用一个 action 字段去区分四种语义完全不同的
+	// 事情——那种 switch 迟早会漏掉一种。
+	kind := agent.OpVPCSwitchChange
+	switch p.Action {
+	case "migrate":
+		kind = agent.OpVpcSwitchMigrate
+	case "reconfigure":
+		kind = agent.OpVpcSwitchReconfigure
+	case "release_port":
+		kind = agent.OpVpcPortRelease
+	}
+
 	op := agent.Operation{
-		Kind:   agent.OpVPCSwitchChange,
+		Kind:   kind,
 		NodeID: *t.NodeID,
 		Target: p.BridgeName,
 		Params: map[string]any{"action": p.Action},
@@ -88,6 +102,13 @@ func (e *SwitchChangeExecutor) Run(ctx context.Context, t *model.Task) error {
 		return e.updateRecord(ctx, &p, result)
 	case "delete":
 		return e.deleteRecord(ctx, &p)
+	case "migrate":
+		// 例外：迁移要写回新的上行与 VLAN，否则面板会一直显示旧网卡。
+		return e.migrateRecord(ctx, &p)
+	case "reconfigure", "release_port":
+		// 这两个不产生新的控制面记录：重配置按现有记录重新下发，释放只是
+		// 回收节点资源。为它们各写一份记录等于把"记录"变成"日志"。
+		return nil
 	default:
 		// 受理时已经校验过动作，走到这里说明任务参数被改过或来自更早的
 		// 版本——当作失败，而不是静默成功留下一条语义不明的记录。
@@ -160,6 +181,27 @@ func (e *SwitchChangeExecutor) updateRecord(
 		log.Printf("[network] 更新交换机记录失败 id=%d: %v", p.SwitchID, err)
 	}
 	log.Printf("[network] 交换机变更完成 id=%d action=update", p.SwitchID)
+	return nil
+}
+
+// migrateRecord 在迁移成功后把新的上行与 VLAN 写回记录。
+//
+// 必须写回：迁移改变的是"这台交换机现在挂在哪块网卡上"，而那正是控制面
+// 记录里的字段。不写回的话，面板会一直显示旧的网卡，用户下次按面板上的
+// 信息去排查，方向就是错的。
+func (e *SwitchChangeExecutor) migrateRecord(ctx context.Context, p *switchParams) error {
+	updates := map[string]any{
+		"uplink_if":  specOptStr(p.Spec, "uplink_if"),
+		"updated_at": time.Now(),
+	}
+	if v, ok := p.Spec["vlan_id"]; ok {
+		updates["vlan_id"] = v
+	}
+	if err := e.db.WithContext(ctx).Model(&model.VpcSwitch{}).
+		Where("id = ?", p.SwitchID).Updates(updates).Error; err != nil {
+		log.Printf("[network] 更新交换机迁移结果失败 id=%d: %v", p.SwitchID, err)
+	}
+	log.Printf("[network] 交换机迁移完成 id=%d", p.SwitchID)
 	return nil
 }
 

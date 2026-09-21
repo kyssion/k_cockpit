@@ -62,6 +62,9 @@ const (
 	// TaskVMNVRAMRepair 修复 UEFI 启动项（F-2-11）。
 	TaskVMNVRAMRepair = "vm.nvram.repair"
 
+	// TaskVpcACLApply 应用 VPC 网络的 ACL 规则集（F-4-05）。
+	TaskVpcACLApply = "vpc.acl.apply"
+
 	// 模板导出与导入（F-3-05）。两者都要读写几十 GB 的镜像文件，
 	// 因此与模板制备一样走队列。
 	TaskTemplateExport       = "template.export"

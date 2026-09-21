@@ -175,6 +175,46 @@ func stagePlan(op Operation) [][2]string {
 			{"neighbour_read", "读取邻居表"},
 		}
 
+	case OpVpcSwitchMigrate:
+		return [][2]string{
+			{"new_uplink_up", "拉起新上行"},
+			{"ports_move", "搬动现有端口"},
+			{"old_uplink_down", "断开旧上行"},
+		}
+	case OpVpcSwitchReconfigure:
+		return [][2]string{
+			{"spec_render", "按当前配置渲染"},
+			{"spec_apply", "重新下发"},
+			{"spec_verify", "校验一致"},
+		}
+	case OpVpcPortRelease:
+		return [][2]string{
+			{"port_detach", "端口摘下"},
+			{"port_reclaim", "回收端口资源"},
+		}
+	case OpNetworkCounterReset:
+		return [][2]string{
+			{"counter_zero", "计数归零"},
+		}
+	case OpNetworkIPv6Policy:
+		return [][2]string{
+			{"prefix_validate", "校验可信前缀"},
+			{"policy_apply", "下发 IPv6 保护"},
+		}
+
+	case OpVpcACLPreview:
+		return [][2]string{
+			{"rules_normalize", "归一化规则"},
+			{"rules_render", "渲染为流表"},
+			{"rules_check", "检查顺序与遮蔽"},
+		}
+	case OpVpcACLApply:
+		return [][2]string{
+			{"rules_normalize", "归一化规则"},
+			{"acl_replace", "整集替换"},
+			{"acl_verify", "校验生效"},
+		}
+
 	case OpHostHardware:
 		return [][2]string{
 			{"capabilities_read", "读取宿主机能力"},
@@ -1347,6 +1387,51 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 			{IP: "10.0.0.10", MAC: "52:54:00:aa:bb:10", Interface: "vnet0", State: "reach", Bridge: "br-lan"},
 			{IP: "10.0.0.11", MAC: "52:54:00:aa:bb:11", Interface: "vnet0", State: "stale", Bridge: "br-lan"},
 			{IP: "10.0.0.99", MAC: "", Interface: "vnet0", State: "failed", Bridge: "br-lan"},
+		}
+
+	case OpVpcSwitchMigrate:
+		data[SwitchActionDataKey] = SwitchActionInfo{
+			MovedPorts: 4,
+			Message:    "已迁移到新的上行网卡",
+		}
+	case OpVpcSwitchReconfigure:
+		data[SwitchActionDataKey] = SwitchActionInfo{
+			Message: "已按当前配置重新下发",
+		}
+	case OpVpcPortRelease:
+		data[PortReleaseDataKey] = PortReleaseInfo{
+			Released: true,
+			Message:  "端口已释放",
+		}
+	case OpNetworkCounterReset:
+		data[CounterResetDataKey] = CounterResetInfo{
+			Reset:   2,
+			Message: "计数器已归零",
+		}
+	case OpNetworkIPv6Policy:
+		data[IPv6PolicyDataKey] = IPv6PolicyInfo{
+			Applied: true,
+			Message: "IPv6 保护策略已下发",
+			Trusted: []string{"2001:db8::/32"},
+		}
+
+	case OpVpcACLPreview:
+		// 渲染三行示例：空列表会被当成"预览没跑"，而一次预览至少要能看出
+		// 规则被转成了什么。
+		data[VpcACLPreviewDataKey] = VpcACLPreview{
+			Rendered: []string{
+				"priority=100 action=allow in tcp src=10.0.0.0/24 dst=any dport=22",
+				"priority=200 action=deny out udp src=any dst=10.1.0.0/24",
+				"priority=1000 action=allow in any src=any dst=any",
+			},
+			Count:   3,
+			Version: "mock-acl-version",
+		}
+
+	case OpVpcACLApply:
+		data[VpcACLDataKey] = VpcACLApplyInfo{
+			Applied: 3,
+			Message: "ACL 已应用",
 		}
 
 	case OpHostHardware:

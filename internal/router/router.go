@@ -55,6 +55,7 @@ import (
 	"k_cockpit/internal/userstorage"
 	"k_cockpit/internal/vm"
 	"k_cockpit/internal/vmtag"
+	"k_cockpit/internal/vpcacl"
 )
 
 // Deps 是路由注册所需的外部依赖。
@@ -75,6 +76,8 @@ type Deps struct {
 	Mailer *mailer.Service
 	// Bus 是实时事件总线（F-7-02 的任务流）。为 nil 时实时通道返回"未启用"。
 	Bus *realtime.Bus
+	// VpcACL 提供 VPC 网络的访问控制（F-4-05）。为 nil 时 ACL 接口不可用。
+	VpcACL *vpcacl.Service
 	// Risk 强制高风险操作的二次验证（f-10-01）。受保护的操作在 handler
 	// 入口调用它，清单本身集中在 internal/risk。
 	Risk *risk.Guard
@@ -176,6 +179,7 @@ func Register(h *server.Hertz, deps Deps) {
 	scheduleHandler := handler.NewSchedule(deps.Schedule, deps.Risk)
 	storageHandler := handler.NewStorage(deps.Storage, deps.Risk)
 	networkHandler := handler.NewNetwork(deps.Network)
+	vpcACLHandler := handler.NewVpcACL(deps.VpcACL)
 	settingsHandler := handler.NewSettings(deps.Settings, deps.Mailer)
 	consoleHandler := handler.NewConsole(deps.VM, deps.Risk)
 	templateHandler := handler.NewTemplate(deps.Template)
@@ -314,6 +318,15 @@ func Register(h *server.Hertz, deps Deps) {
 
 		// 网络（F-4-01）：M2 只有只读接口——能力探测与降级说明。
 		// 网络变更（建网桥、物理口入桥）属 M3 范围。
+		// VPC ACL（F-4-05）：挂在**网段**上的访问控制，与安全组（挂在虚拟机
+		// 网口上）并列但不同。必须先预览后应用，且应用要带回预览版本号。
+		v1.GET("/vpc-acl", requireAuth, adminOnly, vpcACLHandler.List)
+		v1.POST("/vpc-acl", requireAuth, adminOnly, vpcACLHandler.Create)
+		v1.PUT("/vpc-acl/:id", requireAuth, adminOnly, vpcACLHandler.Update)
+		v1.DELETE("/vpc-acl/:id", requireAuth, adminOnly, vpcACLHandler.Delete)
+		v1.GET("/vpc-acl/preview", requireAuth, adminOnly, vpcACLHandler.Preview)
+		v1.POST("/vpc-acl/apply", requireAuth, adminOnly, vpcACLHandler.Apply)
+
 		v1.GET("/nodes/:id/network", requireAuth, adminOnly, networkHandler.Status)
 		v1.GET("/nodes/:id/networks", requireAuth, adminOnly, networkHandler.Networks)
 
@@ -324,6 +337,13 @@ func Register(h *server.Hertz, deps Deps) {
 		// 网络连通性而非数据。给可逆操作加验证只会稀释验证本身的分量。
 		v1.POST("/nodes/:id/vpc-switches", requireAuth, adminOnly, networkHandler.CreateSwitch)
 		v1.PATCH("/vpc-switches/:id", requireAuth, adminOnly, networkHandler.UpdateSwitch)
+		// 迁移（换物理网卡 / VLAN）与重配置（按记录重新下发）。两者都走任务队列。
+		v1.POST("/vpc-switches/:id/migrate", requireAuth, adminOnly, networkHandler.MigrateSwitch)
+		v1.POST("/vpc-switches/:id/reconfigure", requireAuth, adminOnly, networkHandler.ReconfigureSwitch)
+		// 端口释放（回收节点上的端口资源）、计数重置、IPv6 策略。
+		v1.POST("/networks/ports/release", requireAuth, adminOnly, networkHandler.ReleasePort)
+		v1.POST("/networks/counters/reset", requireAuth, adminOnly, networkHandler.ResetCounters)
+		v1.POST("/networks/ipv6/policy", requireAuth, adminOnly, networkHandler.ApplyIPv6Policy)
 		v1.DELETE("/vpc-switches/:id", requireAuth, adminOnly, networkHandler.DeleteSwitch)
 
 		// 系统设置（F-9-01）：**仅管理员**（R-014）。设置变更不得成为
