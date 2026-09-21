@@ -9,13 +9,17 @@
  * 被指出是错的。
  */
 import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 import { Link } from 'react-router'
 
+import { BETA_NOTICE, USER_AGREEMENT, type AgreementSection } from '@/utils/agreement'
 import { versionApi } from '@/api/version'
+import { Button } from '@/components/common/Button'
 import { EmptyState, PageLoading } from '@/components/common/Feedback'
 
 /** 仓库地址。留空时界面会显示"未配置"，而不是编一个链接出来。 */
 const REPO_URL = ''
+
 
 export function AboutPage() {
   const version = useQuery({ queryKey: ['version'], queryFn: versionApi.get })
@@ -84,6 +88,19 @@ export function AboutPage() {
         </dl>
       </section>
 
+      {/* 协议：法律文本必须与版本绑定且可审计，因此它是前端常量而不是可编辑
+          的设置项——可编辑会让"当前生效的是哪一版"变成要额外回答的问题。 */}
+      <AgreementSectionView
+        title="用户协议"
+        hint="使用本面板即表示你已阅读并同意以下条款。"
+        sections={USER_AGREEMENT}
+      />
+      <AgreementSectionView
+        title="公测协议"
+        hint="当前版本处于公测阶段，以下几点请特别留意。"
+        sections={BETA_NOTICE}
+      />
+
       <section className="rounded-card border border-line bg-surface p-4">
         <h2 className="text-base font-medium text-ink">相关页面</h2>
         <ul className="mt-2 flex flex-col gap-1 text-base">
@@ -102,6 +119,53 @@ export function AboutPage() {
         </ul>
       </section>
     </div>
+  )
+}
+
+/**
+ * AgreementSectionView 展示一份协议。
+ *
+ * 默认收起：它很长，展开会把页面推得很远。给一个"展开/收起"而不是直接渲染
+ * 全文，是让它**可被找到**又不打扰正常浏览的唯一办法。
+ */
+function AgreementSectionView({
+  title,
+  hint,
+  sections,
+}: {
+  title: string
+  hint: string
+  sections: AgreementSection[]
+}) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <section className="rounded-card border border-line bg-surface">
+      <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+        <div>
+          <h2 className="text-base font-medium text-ink">{title}</h2>
+          <p className="mt-0.5 text-sm text-ink-3">{hint}</p>
+        </div>
+        <Button size="sm" variant="secondary" onClick={() => setOpen((v) => !v)}>
+          {open ? '收起' : '展开'}
+        </Button>
+      </div>
+
+      {open && (
+        <div className="flex flex-col gap-3 border-t border-line px-4 py-3">
+          {sections.map((sec) => (
+            <div key={sec.title}>
+              <h3 className="text-sm font-medium text-ink-2">{sec.title}</h3>
+              {sec.paragraphs.map((p) => (
+                <p key={p} className="mt-1 text-base leading-relaxed text-ink-3">
+                  {p}
+                </p>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   )
 }
 

@@ -1,10 +1,12 @@
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 
+import { alertApi, type AlertItem } from '@/api/alert'
 import { authApi } from '@/api/auth'
 import { Button } from '@/components/common/Button'
 import { CommandPalette } from '@/components/common/CommandPalette'
+import { Icon, type IconName } from '@/components/common/Icon'
 import { RiskVerificationGate } from '@/components/risk/RiskVerificationGate'
 import { TabBar } from '@/components/common/TabBar'
 import { TaskTray } from '@/components/common/TaskTray'
@@ -14,6 +16,8 @@ import { LANGS, t } from '@/locales'
 import { useLocaleStore } from '@/stores/locale'
 import { useTabStore } from '@/stores/tabs'
 import { THEME_LABEL, useTheme } from '@/hooks/useTheme'
+import { taskApi } from '@/api/task'
+import { vmApi } from '@/api/vm'
 import { useSessionStore } from '@/stores/session'
 import type { UserRole } from '@/api/auth'
 import { cn } from '@/utils/cn'
@@ -24,8 +28,14 @@ interface NavItem {
   /** 英文名。语言包只收录通用文案，导航属于"每一处都必须有英文"的那一类：
    *  菜单是进入所有功能的入口，半中半英比全中文更难看。 */
   en: string
+  /** 分组。菜单三十多项，不分组时找一项要扫全表。 */
+  group: NavGroupKey
+  /** 图标名；取不到时按分组兜底。 */
+  icon?: IconName
   /** 不填表示所有角色可见。 */
   roles?: UserRole[]
+  /** 需要数量徽标的项（如进行中的任务数）。 */
+  badge?: 'vm' | 'task' | 'alert'
 }
 
 /**
@@ -34,44 +44,62 @@ interface NavItem {
  * **前端隐藏菜单不构成安全边界**（f-1-06 R-010）：这里只决定「看不看得到」，
  * 「能不能做」由后端对每个接口独立判定。任何依赖前端隐藏来保护的数据都视为缺陷。
  */
+/**
+ * 分组定义。
+ *
+ * 照 QVMConsole 的六组划分：概览 / 计算 / 网络 / 存储 / 系统 / 支持。它不是
+ * 装饰——菜单有三十多项，扁平列表里找一项要扫完整个列表，而"这个菜单属于哪
+ * 一类"是用户扫读时唯一的线索。
+ */
+type NavGroupKey = 'overview' | 'compute' | 'network' | 'storage' | 'system' | 'support'
+
+const NAV_GROUPS: { key: NavGroupKey; label: string; en: string; icon: IconName }[] = [
+  { key: 'overview', label: '概览', en: 'Overview', icon: 'dashboard' },
+  { key: 'compute', label: '计算', en: 'Compute', icon: 'vm' },
+  { key: 'network', label: '网络', en: 'Network', icon: 'network' },
+  { key: 'storage', label: '存储', en: 'Storage', icon: 'storage' },
+  { key: 'system', label: '系统', en: 'System', icon: 'node' },
+  { key: 'support', label: '支持', en: 'Support', icon: 'docs' },
+]
+
 const NAV_ITEMS: NavItem[] = [
-  { to: '/', label: '工作台', en: 'Dashboard'},
-  { to: '/vm', label: '虚拟机', en: 'Virtual Machines'},
-  { to: '/trash', label: '回收站', en: 'Trash'},
-  { to: '/task', label: '任务中心', en: 'Tasks'},
-  { to: '/alerts', label: '告警中心', en: 'Alerts'},
-  { to: '/template', label: '模板', en: 'Templates'},
-  { to: '/import', label: '导入', en: 'Import'},
-  { to: '/public-ip', label: '公网 IP', en: 'Public IPs'},
-  { to: '/security-group', label: '安全组', en: 'Security Groups'},
-  { to: '/port-security', label: '端口安全', en: 'Port Security', roles: ['admin']},
-  { to: '/host-firewall', label: '宿主机防火墙', en: 'Host Firewall', roles: ['admin']},
-  { to: '/host-tuning', label: '宿主机调优', en: 'Host Tuning', roles: ['admin']},
-  { to: '/platform-check', label: '平台自检', en: 'Platform Check', roles: ['admin']},
-  { to: '/access-control', label: '访问控制', en: 'Access Control', roles: ['admin']},
-  { to: '/passthrough', label: '硬件直通', en: 'PCI Passthrough', roles: ['admin']},
-  { to: '/capture', label: '抓包诊断', en: 'Capture'},
+  { to: '/', label: '工作台', en: 'Dashboard', group: 'overview', icon: 'dashboard', },
+  { to: '/vm', label: '虚拟机', en: 'Virtual Machines', group: 'compute', icon: 'vm', },
+  { to: '/trash', label: '回收站', en: 'Trash', group: 'compute', icon: 'trash', },
+  { to: '/task', label: '任务中心', en: 'Tasks', group: 'compute', icon: 'task', },
+  { to: '/alerts', label: '告警中心', en: 'Alerts', group: 'overview', icon: 'alert', },
+  { to: '/template', label: '模板', en: 'Templates', group: 'compute', icon: 'template', },
+  { to: '/import', label: '导入', en: 'Import', group: 'compute', icon: 'docs', },
+  { to: '/public-ip', label: '公网 IP', en: 'Public IPs', group: 'network', icon: 'ip', },
+  { to: '/security-group', label: '安全组', en: 'Security Groups', group: 'network', icon: 'shield', },
+  { to: '/port-security', label: '端口安全', en: 'Port Security', group: 'network', icon: 'shield', roles: ['admin']},
+  { to: '/host-firewall', label: '宿主机防火墙', en: 'Host Firewall', group: 'network', icon: 'firewall', roles: ['admin']},
+  { to: '/host-tuning', label: '宿主机调优', en: 'Host Tuning', group: 'system', icon: 'tuning', roles: ['admin']},
+  { to: '/platform-check', label: '平台自检', en: 'Platform Check', group: 'system', icon: 'diagnostics', roles: ['admin']},
+  { to: '/access-control', label: '访问控制', en: 'Access Control', group: 'system', icon: 'security', roles: ['admin']},
+  { to: '/passthrough', label: '硬件直通', en: 'PCI Passthrough', group: 'system', icon: 'chip', roles: ['admin']},
+  { to: '/capture', label: '抓包诊断', en: 'Capture', group: 'network', icon: 'capture', },
   // 防火墙不在这里列：它是管理员专属的（见下面 admin 分组）。
   // 无角色限制地列出来，普通租户会看到一个点进去 403 的菜单。
-  { to: '/port-mirror', label: '端口镜像', en: 'Port Mirror'},
-  { to: '/api-keys', label: 'API 凭证', en: 'API Keys'},
-  { to: '/node', label: '节点管理', en: 'Nodes', roles: ['admin']},
-  { to: '/storage-pool', label: '存储池', en: 'Storage Pools', roles: ['admin']},
-  { to: '/storage-volume', label: '存储卷', en: 'Storage Volumes', roles: ['admin']},
-  { to: '/scheduler', label: '调度器', en: 'Schedulers', roles: ['admin']},
-  { to: '/diagnostics', label: '诊断导出', en: 'Diagnostics', roles: ['admin']},
-  { to: '/version', label: '版本与关于', en: 'Version'},
-  { to: '/api-docs', label: 'API 文档', en: 'API Docs'},
-  { to: '/logs', label: '日志', en: 'Logs', roles: ['admin']},
-  { to: '/resource-quota', label: '资源配额', en: 'Resource Quotas', roles: ['admin']},
-  { to: '/network', label: '网络中心', en: 'Network', roles: ['admin']},
-  { to: '/network/base', label: '网络底座', en: 'Network Fabric', roles: ['admin']},
-  { to: '/firewall', label: '防火墙', en: 'Firewall', roles: ['admin']},
-  { to: '/user', label: '用户管理', en: 'Users', roles: ['admin']},
-  { to: '/audit', label: '审计日志', en: 'Audit Log', roles: ['admin']},
-  { to: '/quota', label: '存储配额', en: 'Storage Quota', roles: ['admin']},
-  { to: '/settings', label: '系统设置', en: 'Settings', roles: ['admin']},
-  { to: '/security', label: '安全中心', en: 'Security'},
+  { to: '/port-mirror', label: '端口镜像', en: 'Port Mirror', group: 'network', icon: 'mirror', },
+  { to: '/api-keys', label: 'API 凭证', en: 'API Keys', group: 'overview', icon: 'key', },
+  { to: '/node', label: '节点管理', en: 'Nodes', group: 'system', icon: 'node', roles: ['admin']},
+  { to: '/storage-pool', label: '存储池', en: 'Storage Pools', group: 'storage', icon: 'storage', roles: ['admin']},
+  { to: '/storage-volume', label: '存储卷', en: 'Storage Volumes', group: 'storage', icon: 'volume', roles: ['admin']},
+  { to: '/scheduler', label: '调度器', en: 'Schedulers', group: 'system', icon: 'tuning', roles: ['admin']},
+  { to: '/diagnostics', label: '诊断导出', en: 'Diagnostics', group: 'support', icon: 'diagnostics', roles: ['admin']},
+  { to: '/version', label: '版本与关于', en: 'Version', group: 'support', icon: 'info', },
+  { to: '/api-docs', label: 'API 文档', en: 'API Docs', group: 'support', icon: 'docs', },
+  { to: '/logs', label: '日志', en: 'Logs', group: 'system', icon: 'logs', roles: ['admin']},
+  { to: '/resource-quota', label: '资源配额', en: 'Resource Quotas', group: 'system', icon: 'quota', roles: ['admin']},
+  { to: '/network', label: '网络中心', en: 'Network', group: 'network', icon: 'network', roles: ['admin']},
+  { to: '/network/base', label: '网络底座', en: 'Network Fabric', group: 'network', icon: 'network', roles: ['admin']},
+  { to: '/firewall', label: '防火墙', en: 'Firewall', group: 'network', icon: 'firewall', roles: ['admin']},
+  { to: '/user', label: '用户管理', en: 'Users', group: 'system', icon: 'user', roles: ['admin']},
+  { to: '/audit', label: '审计日志', en: 'Audit Log', group: 'system', icon: 'audit', roles: ['admin']},
+  { to: '/quota', label: '存储配额', en: 'Storage Quota', group: 'storage', icon: 'quota', roles: ['admin']},
+  { to: '/settings', label: '系统设置', en: 'Settings', group: 'system', icon: 'setting', roles: ['admin']},
+  { to: '/security', label: '安全中心', en: 'Security', group: 'overview', icon: 'security' },
 ]
 
 /**
@@ -86,6 +114,20 @@ function titleFor(path: string): string {
   if (path.startsWith('/vm/')) return '虚拟机'
   if (path.startsWith('/node/')) return '节点'
   return '页面'
+}
+
+// COLLAPSE_KEY 是侧栏分组折叠状态的本地存储键。
+const COLLAPSE_KEY = 'kc.nav-collapsed'
+
+function readCollapsed(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(COLLAPSE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as Record<string, boolean>
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
 }
 
 export function AppLayout() {
@@ -138,6 +180,61 @@ export function AppLayout() {
     (item) => !item.roles || (user && item.roles.includes(user.role)),
   )
 
+  // 折叠状态按分组记在 localStorage：这是**个人偏好**而不是系统状态，放到
+  // 服务端会让每个人的界面互相影响。
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() =>
+    readCollapsed(),
+  )
+
+  // 数量徽标。三个查询都只取总数（page_size=1），而不是把列表拉回来——
+  // 徽标要的只是"有几个"，为它取一整页数据是浪费。
+  const vmCount = useQuery({
+    queryKey: ['vm-count'],
+    queryFn: () => vmApi.list({ page_size: 1 }),
+    staleTime: 30000,
+    enabled: !!user,
+  })
+  const taskCount = useQuery({
+    queryKey: ['task-count'],
+    queryFn: () => taskApi.list({ status: 'pending,running,unknown', page_size: 1 }),
+    staleTime: 15000,
+    enabled: !!user,
+  })
+  const alertCount = useQuery({
+    queryKey: ['alert-count'],
+    queryFn: () => alertApi.list(),
+    staleTime: 30000,
+    enabled: !!user,
+  })
+
+  const badgeOf = (item: NavItem): number | null => {
+    switch (item.badge) {
+      case 'vm':
+        return vmCount.data?.pagination.total ?? null
+      case 'task':
+        return taskCount.data?.pagination.total ?? null
+      case 'alert':
+        // 未确认（active）的才计数：已确认（acked）的问题仍在，但用户已经
+        // 看过了，继续标红只会变成背景噪声。
+        return (alertCount.data?.items ?? []).filter((a: AlertItem) => a.status === 'active')
+          .length || null
+      default:
+        return null
+    }
+  }
+
+  function toggleGroup(key: string) {
+    setCollapsed((prev) => {
+      const next = { ...prev, [key]: !prev[key] }
+      try {
+        localStorage.setItem(COLLAPSE_KEY, JSON.stringify(next))
+      } catch {
+        // 隐私模式下写不进去，折叠状态丢了即可。
+      }
+      return next
+    })
+  }
+
   return (
     <div className="flex h-full">
       <aside className="flex w-[220px] shrink-0 flex-col border-r border-line bg-surface">
@@ -145,24 +242,68 @@ export function AppLayout() {
           <span className="text-md font-semibold text-ink">K Cockpit</span>
         </div>
 
-        <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-4">
-          {visibleItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === '/'}
-              className={({ isActive }) =>
-                cn(
-                  'rounded-control px-3 py-2 text-base transition-colors',
-                  isActive
-                    ? 'bg-brand/12 font-medium text-brand'
-                    : 'text-ink-2 hover:bg-raised hover:text-ink',
-                )
-              }
-            >
-              {lang === 'en-US' ? item.en : item.label}
-            </NavLink>
-          ))}
+        <nav className="flex flex-1 flex-col overflow-y-auto px-2 pb-4">
+          {NAV_GROUPS.map((group) => {
+            const items = visibleItems.filter((i) => i.group === group.key)
+            if (items.length === 0) return null
+            const isCollapsed = collapsed[group.key] === true
+
+            return (
+              <div key={group.key} className="mb-1">
+                {/*
+                  分组标题可点：菜单三十多项，常驻展开时"存储"这类不常用的组
+                  会把常用项挤到需要滚动的位置。
+                */}
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(group.key)}
+                  className="flex w-full items-center gap-2 rounded-control px-3 py-1.5 text-xs text-ink-3 hover:text-ink-2"
+                  aria-expanded={!isCollapsed}
+                >
+                  <Icon name={group.icon} className="h-3.5 w-3.5 shrink-0" />
+                  <span className="flex-1 text-left">
+                    {lang === 'en-US' ? group.en : group.label}
+                  </span>
+                  <span className="text-ink-3">{isCollapsed ? '▸' : '▾'}</span>
+                </button>
+
+                {!isCollapsed && (
+                  <div className="flex flex-col gap-0.5">
+                    {items.map((item) => {
+                      const badge = badgeOf(item)
+                      return (
+                        <NavLink
+                          key={item.to}
+                          to={item.to}
+                          end={item.to === '/'}
+                          // 收窄或被截断时，title 是唯一还能认出这一项的东西。
+                          title={lang === 'en-US' ? item.en : item.label}
+                          className={({ isActive }) =>
+                            cn(
+                              'flex items-center gap-2 rounded-control py-2 pl-7 pr-2 text-base transition-colors',
+                              isActive
+                                ? 'bg-brand/12 font-medium text-brand'
+                                : 'text-ink-2 hover:bg-raised hover:text-ink',
+                            )
+                          }
+                        >
+                          <Icon name={item.icon ?? group.icon} className="h-3.5 w-3.5 shrink-0" />
+                          <span className="min-w-0 flex-1 truncate">
+                            {lang === 'en-US' ? item.en : item.label}
+                          </span>
+                          {badge != null && badge > 0 && (
+                            <span className="kc-nums rounded-pill bg-ink-3/20 px-1.5 text-xs text-ink-2">
+                              {badge}
+                            </span>
+                          )}
+                        </NavLink>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </nav>
       </aside>
 

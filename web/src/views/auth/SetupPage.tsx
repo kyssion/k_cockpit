@@ -1,6 +1,6 @@
 import { useMutation } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
-import { useNavigate } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 
 import { ApiError, NetworkError } from '@/api/client'
 import { setupApi } from '@/api/setup'
@@ -26,6 +26,9 @@ export function SetupPage() {
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [formError, setFormError] = useState('')
+  // 协议确认。初始化是这个面板的**第一次使用**，因此在这一步确认最合适——
+  // 之后每个账号都是管理员授权的产物，不需要各自再确认一次。
+  const [agreed, setAgreed] = useState(false)
 
   const create = useMutation({
     mutationFn: () => setupApi.createAdmin(token, username, password),
@@ -61,6 +64,10 @@ export function SetupPage() {
     }
     if (password !== confirm) {
       setFormError('两次输入的密码不一致')
+      return
+    }
+    if (!agreed) {
+      setFormError('请先阅读并同意《用户协议》与《公测协议》')
       return
     }
     create.mutate()
@@ -131,7 +138,31 @@ export function SetupPage() {
             </p>
           )}
 
-          <Button type="submit" loading={create.isPending} className="mt-1 w-full">
+          <label className="flex cursor-pointer items-start gap-2 text-sm text-ink-2">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={agreed}
+              onChange={(e) => setAgreed(e.target.checked)}
+            />
+            <span>
+              我已阅读并同意
+              <Link to="/about" target="_blank" className="mx-1 text-brand hover:underline">
+                《用户协议》
+              </Link>
+              与
+              <Link to="/about" target="_blank" className="mx-1 text-brand hover:underline">
+                《公测协议》
+              </Link>
+            </span>
+          </label>
+
+          <Button
+            type="submit"
+            loading={create.isPending}
+            disabled={!agreed}
+            className="mt-1 w-full"
+          >
             {create.isPending ? '创建中…' : '创建管理员并进入'}
           </Button>
         </form>
