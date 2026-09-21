@@ -20,7 +20,10 @@ import {
   TEMPLATE_STATUS_LABEL,
   TEMPLATE_STATUS_TONE,
   templateApi,
+  templateMaintainApi,
+  TEMPLATE_MAINTAIN_LABEL,
   type DeleteStrategy,
+  type TemplateMaintainAction,
   type TemplateExportView,
   type TemplateView,
 } from '@/api/template'
@@ -41,6 +44,10 @@ export function TemplatePage() {
   // 删除派生链的策略。存在派生模板时必须显式选一个——两条出路的结果完全
   // 不同，服务端不替用户决定。
   const [strategy, setStrategy] = useState<DeleteStrategy | ''>('')
+  // 族视图：按族把各版本收在一起。列表视图用于找模板，族视图用于看
+  // "这条链上有几代、谁派生自谁"——这两件事在扁平列表里看不出来。
+  const [view, setView] = useState<'list' | 'family'>('list')
+  const [maintainTarget, setMaintainTarget] = useState<TemplateView | null>(null)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const [exportTarget, setExportTarget] = useState<TemplateView | null>(null)
@@ -176,7 +183,17 @@ export function TemplatePage() {
           <table className="w-full border-collapse text-base">
             <thead>
               <tr className="bg-sunken text-left text-xs text-ink-2">
-                <th className="px-4 py-2.5 font-medium">名称</th>
+                <th className="px-4 py-2.5 font-medium">
+                  <div className="flex items-center gap-2">
+                    <span>名称</span>
+                    <button
+                      className="text-xs font-normal text-brand hover:underline"
+                      onClick={() => setView(view === 'list' ? 'family' : 'list')}
+                    >
+                      {view === 'list' ? '切到族视图' : '切到列表视图'}
+                    </button>
+                  </div>
+                </th>
                 <th className="px-4 py-2.5 font-medium">状态</th>
                 <th className="px-4 py-2.5 font-medium">规格</th>
                 <th className="px-4 py-2.5 font-medium">节点</th>
@@ -273,6 +290,14 @@ export function TemplatePage() {
                       >
                         删除
                       </button>
+                      {/* 派生链维护：改的是这条链本身，与"删除一个模板"
+                          不是同一件事——直接删中间一代会让下游全部失效。 */}
+                      <button
+                        className="text-sm text-ink-2 hover:underline"
+                        onClick={() => setMaintainTarget(t)}
+                      >
+                        维护
+                      </button>
                     </span>
                   </td>
                 </tr>
@@ -322,6 +347,23 @@ export function TemplatePage() {
           </table>
         )}
       </section>
+
+      <MaintainModal
+        template={maintainTarget}
+        candidates={templates.data ?? []}
+        onClose={() => setMaintainTarget(null)}
+        onSubmitted={(m) => {
+          setMaintainTarget(null)
+          setError('')
+          setNotice(m)
+          void queryClient.invalidateQueries({ queryKey: ['templates'] })
+          void queryClient.invalidateQueries({ queryKey: ['tasks'] })
+        }}
+        onError={(m) => {
+          setMaintainTarget(null)
+          setError(m)
+        }}
+      />
 
       <BatchCloneModal
         template={batchTarget}
@@ -839,6 +881,145 @@ function ImportModal({
         )}
 
         {error && <p className="text-base text-danger">{error}</p>}
+      </div>
+    </Modal>
+  )
+}
+
+/**
+ * MaintainModal 派生链维护（F-3-04）。
+ *
+ * 四个动作改的是同一条链，因此放在一个弹窗里选，而不是散在四处——它们的
+ * 共同点是"会影响这条链上的其它模板"，用户需要先看到这一点再决定做哪个。
+ *
+ * 每个动作都要勾选确认：它们会改写数据或影响下游，而"我能不能现在做"
+ * 只有使用者自己知道。
+ */
+function MaintainModal({
+  template,
+  candidates,
+  onClose,
+  onSubmitted,
+  onError,
+}: {
+  template: TemplateView | null
+  candidates: TemplateView[]
+  onClose: () => void
+  onSubmitted: (msg: string) => void
+  onError: (msg: string) => void
+}) {
+  const [action, setAction] = useState<TemplateMaintainAction>('rebase')
+  const [childID, setChildID] = useState(0)
+  const [acknowledged, setAcknowledged] = useState(false)
+  const [seeded, setSeeded] = useState<number | null>(null)
+
+  if (seeded !== (template?.id ?? null)) {
+    setSeeded(template?.id ?? null)
+    setAction('rebase')
+    setChildID(0)
+    setAcknowledged(false)
+  }
+
+  const children = candidates.filter((t) => t.parent_id === template?.id)
+  const derived = candidates.filter((t) => t.family_id !== undefined && t.family_id === template?.family_id && t.id !== template?.id)
+
+  const run = useMutation({
+    mutationFn: () => {
+      switch (action) {
+        case 'rebase':
+          return templateMaintainApi.rebase(template?.id ?? 0, acknowledged)
+        case 'flatten':
+          return templateMaintainApi.flatten(template?.id ?? 0, acknowledged)
+        case 'promote_child':
+          return templateMaintainApi.promoteChild(template?.id ?? 0, childID, acknowledged)
+        case 'promote_delete':
+          return templateMaintainApi.promoteDelete(template?.id ?? 0, acknowledged)
+      }
+    },
+    onSuccess: () => onSubmitted('已提交派生链维护'),
+    onError: (err) => onError(describe(err)),
+  })
+
+  const ready =
+    acknowledged && (action !== 'promote_child' || childID > 0)
+
+  return (
+    <Modal
+      open={template !== null}
+      title={`维护「${template?.name ?? ''}」`}
+      description="这些动作改的是模板的派生链，会影响链上的其它模板。"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            取消
+          </Button>
+          <Button
+            size="sm"
+            loading={run.isPending}
+            disabled={!ready}
+            onClick={() => run.mutate()}
+          >
+            提交
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3">
+        {/* 先说清这条链上有什么：没有这一步，用户无法判断"会影响谁"。 */}
+        <p className="text-sm text-ink-3">
+          同一族共 {derived.length + 1} 个版本，直接派生自它的有 {children.length} 个。
+        </p>
+
+        <label className="flex flex-col gap-1">
+          <span className="text-sm text-ink-2">动作</span>
+          <select
+            value={action}
+            onChange={(e) => setAction(e.target.value as TemplateMaintainAction)}
+            className="h-9 rounded-control border border-line-strong bg-sunken px-2 text-base text-ink"
+          >
+            {(Object.keys(TEMPLATE_MAINTAIN_LABEL) as TemplateMaintainAction[]).map((a) => (
+              <option key={a} value={a}>
+                {TEMPLATE_MAINTAIN_LABEL[a]}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {action === 'promote_child' && (
+          <label className="flex flex-col gap-1">
+            <span className="text-sm text-ink-2">子模板</span>
+            <select
+              value={childID}
+              onChange={(e) => setChildID(Number(e.target.value))}
+              className="h-9 rounded-control border border-line-strong bg-sunken px-2 text-base text-ink"
+            >
+              <option value={0}>请选择…</option>
+              {children.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}（v{c.version}）
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        {action === 'promote_delete' && (
+          <p className="rounded-control bg-warning/10 px-3 py-2 text-sm text-warning">
+            直接删除这一代会让下游模板全部失效，而节点上的表现是"读某个块时才
+            报错"。这个动作先把下游改挂到上级，再删除。
+          </p>
+        )}
+
+        <label className="flex cursor-pointer items-start gap-2 text-sm text-ink-2">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={acknowledged}
+            onChange={(e) => setAcknowledged(e.target.checked)}
+          />
+          <span>我已知悉该动作会影响派生链上的其它模板</span>
+        </label>
       </div>
     </Modal>
   )

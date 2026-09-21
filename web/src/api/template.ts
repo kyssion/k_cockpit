@@ -284,3 +284,29 @@ export const CLONE_MODE_HINT: Record<CloneMode, { label: string; detail: string 
       '只记录与模板的差异，秒级完成、几乎不占空间。但磁盘只是模板之上的一个覆盖层：模板被删除后这台机器的数据会不可用，而且不会立刻报错。',
   },
 }
+
+/** 派生链维护的动作。 */
+export type TemplateMaintainAction = 'rebase' | 'flatten' | 'promote_child' | 'promote_delete'
+
+export const TEMPLATE_MAINTAIN_LABEL: Record<TemplateMaintainAction, string> = {
+  rebase: '把 backing 切到上级',
+  flatten: '在线拉平到上级',
+  promote_child: '提升子模板',
+  promote_delete: '删除这一代（下游改挂上级）',
+}
+
+export const templateMaintainApi = {
+  rebase: (id: number, acknowledge: boolean) =>
+    post<{ task_id: number; status: string }>(`/api/v1/templates/${id}/rebase`, { acknowledge }),
+  flatten: (id: number, acknowledge: boolean) =>
+    post<{ task_id: number; status: string }>(`/api/v1/templates/${id}/flatten`, { acknowledge }),
+  promoteChild: (id: number, childID: number, acknowledge: boolean) =>
+    post<{ task_id: number; status: string }>(`/api/v1/templates/${id}/promote-child`, {
+      child_id: childID,
+      acknowledge,
+    }),
+  promoteDelete: (id: number, acknowledge: boolean) =>
+    post<{ task_id: number; status: string }>(`/api/v1/templates/${id}/promote-delete`, {
+      acknowledge,
+    }),
+}
