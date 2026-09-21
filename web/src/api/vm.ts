@@ -113,6 +113,46 @@ export interface VmView {
   reinstall_at?: string
 }
 
+/** 详情页时间线的一条（合并审计与任务流水）。 */
+export interface VmTimelineItem {
+  at: string
+  kind: 'task' | 'audit'
+  title: string
+  detail?: string
+  success?: boolean
+  task_id?: number
+}
+
+/** PCIe 根端口情况（决定还能不能热插拔）。 */
+export interface VmPcieInfo {
+  vm_id: number
+  total: number
+  free: number
+  used: number
+  machine_type: string
+  hotplug_supported: boolean
+  reason?: string
+  unavailable?: string
+}
+
+/** 邻居表的一条（ARP / NDP）。 */
+export interface VmNeighbor {
+  ip: string
+  mac?: string
+  interface?: string
+  state?: string
+  is_self: boolean
+  vm_id?: number
+  vm_name?: string
+  bridge?: string
+}
+
+export interface VmNeighbors {
+  vm_id: number
+  items: VmNeighbor[]
+  unavailable?: string
+}
+
 /** 创建时要一并建立的一块数据盘。 */
 export interface DataDiskInput {
   size_gb: number
@@ -605,6 +645,10 @@ export const vmApi = {
   migrations: (id: number) => get<{ items: MigrationView[] }>(`/api/v1/vms/${id}/migrations`),
 
   /** 实时运行指标（Hero 资源卡）。只读探测，不入队。 */
+  timeline: (id: number, limit?: number) =>
+    get<{ items: VmTimelineItem[] }>(`/api/v1/vms/${id}/timeline`, { limit }),
+  pcieInfo: (id: number) => get<VmPcieInfo>(`/api/v1/vms/${id}/pcie-info`),
+  neighbors: (id: number) => get<VmNeighbors>(`/api/v1/vms/${id}/neighbors`),
   stats: (id: number) => get<VmStats>(`/api/v1/vms/${id}/stats`),
 
   /**

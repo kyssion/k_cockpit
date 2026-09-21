@@ -102,6 +102,7 @@ type TabKey =
   | 'monitor'
   | 'cdrom'
   | 'share'
+  | 'event'
   | 'schedule'
   | 'export'
   | 'console'
@@ -541,6 +542,9 @@ export function VmDetailPage() {
           <GuestActionsSection vm={vm} />
           {/* 迁移挂在「系统信息」下：它改变的是这台机器**在哪**，
               与「这台机器是什么样」属于同一处上下文。 */}
+          {/* PCIe 槽位：热插拔设备需要空闲根端口，用完的表现是"挂载成功
+              但设备不出现"，而报错里不会提到槽位。 */}
+          <PCIeInfoBlock vmID={vm.id} />
           <MigrateSection vm={vm} />
         </div>
       )}
@@ -563,6 +567,8 @@ export function VmDetailPage() {
       {tab === 'disks' && <DiskTab vmID={vm.id} />}
       {tab === 'cdrom' && <CDROMTab vmID={vm.id} nodeID={vm.node_id} />}
       {tab === 'share' && <ShareTab vmID={vm.id} />}
+      {/* 事件：把审计与任务两条流水合成一条，回答"这台机器发生过什么"。 */}
+      {tab === 'event' && <EventTab vmID={vm.id} />}
       {tab === 'schedule' && <ScheduleTab vmID={vm.id} />}
       {tab === 'export' && <ExportTab vm={vm} />}
       {/* 只读的 libvirt 定义：排查「面板显示的和实际跑的不是一回事」时
@@ -1471,6 +1477,9 @@ function NetworkTab({ vmID }: { vmID: number }) {
         端口转发会把虚拟机的服务暴露到外部网络，请确认「允许来源」符合预期。
       </p>
 
+      {/* 邻居表：排查"虚拟机之间不通"时，先看它比抓包快一个数量级。 */}
+      <NeighborSection vmID={vmID} />
+
       <NicModal
         // key 让「新增」与「编辑某一块」在使用不同状态时重新挂载：
         // 表单的初始值取自 props，切换目标就该拿到新的初始值。
@@ -2148,6 +2157,8 @@ function CreateScheduleModal({
   const [weekdays, setWeekdays] = useState<number[]>([1])
   const [timeOfDay, setTimeOfDay] = useState('03:00')
   const [date, setDate] = useState('')
+  const [snapshotName, setSnapshotName] = useState('')
+  const [includeMemory, setIncludeMemory] = useState(false)
   const [error, setError] = useState('')
 
   const create = useMutation({
@@ -2158,6 +2169,8 @@ function CreateScheduleModal({
         weekdays: kind === 'weekly' ? weekdays : undefined,
         time_of_day: timeOfDay,
         date: kind === 'once' ? date : undefined,
+        snapshot_name: action === 'snapshot' ? snapshotName : undefined,
+        include_memory: action === 'snapshot' ? includeMemory : undefined,
       }),
     onSuccess: () => {
       reset()
@@ -2172,6 +2185,8 @@ function CreateScheduleModal({
     setWeekdays([1])
     setTimeOfDay('03:00')
     setDate('')
+    setSnapshotName('')
+    setIncludeMemory(false)
     setError('')
   }
 
@@ -2185,7 +2200,9 @@ function CreateScheduleModal({
   const ready =
     timeOfDay !== '' &&
     (kind !== 'once' || date !== '') &&
-    (kind !== 'weekly' || weekdays.length > 0)
+    (kind !== 'weekly' || weekdays.length > 0) &&
+    // 周期快照必须带名字模板：它让自动快照在列表里能与手动快照区分。
+    (action !== 'snapshot' || snapshotName.trim() !== '')
 
   return (
     <Modal
@@ -2213,8 +2230,25 @@ function CreateScheduleModal({
           >
             <option value="shutdown">关机</option>
             <option value="start">开机</option>
+            {/* 创建快照与删除相反：快照是累加且可再删的，因此允许周期执行。 */}
+            <option value="snapshot">创建快照</option>
           </select>
         </label>
+
+        {action === 'snapshot' && (
+          <label className="flex flex-col gap-1">
+            <span className="text-sm text-ink-2">快照名模板</span>
+            <input
+              value={snapshotName}
+              onChange={(e) => setSnapshotName(e.target.value)}
+              placeholder="例如 nightly"
+              className="rounded-control border border-line-strong bg-surface px-2.5 py-2 text-base text-ink"
+            />
+            <span className="text-xs text-ink-3">
+              实际名字会追加时间（如 nightly-20260921-0300），因此周期快照不会重名。
+            </span>
+          </label>
+        )}
 
         <label className="flex flex-col gap-1">
           <span className="text-sm text-ink-2">重复方式</span>
@@ -3214,6 +3248,164 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function formatMemory(mb: number): string {
   if (mb >= 1024) return `${(mb / 1024).toFixed(mb % 1024 === 0 ? 0 : 1)} GB`
   return `${mb} MB`
+}
+
+/**
+ * EventTab 这台机器发生过什么。
+ *
+ * 后端把**审计**与**任务**两条流水合成一条返回：用户问的是"发生了什么"，
+ * 而不是"审计里有什么"。让他自己按时间去对两个列表，等于把答案藏起来。
+ */
+function EventTab({ vmID }: { vmID: number }) {
+  const list = useQuery({
+    queryKey: ['vm', vmID, 'timeline'],
+    queryFn: () => vmApi.timeline(vmID, 50),
+  })
+  const items = list.data?.items ?? []
+
+  if (list.isPending) return <PageLoading />
+  if (items.length === 0) {
+    return <EmptyState title="还没有事件" description="创建、电源操作、配置变更等会记录在这里。" />
+  }
+
+  return (
+    <ol className="flex flex-col">
+      {items.map((it, i) => (
+        <li key={`${it.at}-${i}`} className="flex gap-3 border-b border-line py-2.5 last:border-b-0">
+          <span className="kc-nums w-40 shrink-0 text-base text-ink-3">{formatDateTime(it.at)}</span>
+          <span className="min-w-0 flex-1">
+            <span className="flex items-center gap-2">
+              <StatusBadge
+                tone={it.kind === 'task' ? (it.success ? 'success' : 'danger') : 'idle'}
+              >
+                {it.kind === 'task' ? '任务' : '操作'}
+              </StatusBadge>
+              <span className="text-base text-ink">{it.title}</span>
+            </span>
+            {it.detail && <span className="block text-sm text-ink-3">{it.detail}</span>}
+          </span>
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+/**
+ * PCIeInfoBlock PCIe 根端口余量。
+ *
+ * 它回答的是"还能再热插几块设备"。热插一块盘或网卡需要一个空闲的 PCIe
+ * 根端口，槽位用完的表现是"挂载命令成功、设备却没出现"——而那个报错里
+ * 不会提到槽位，因此值不值得单独占一块地方：那是排查时唯一能想到原因的
+ * 地方。
+ *
+ * 「不支持热插拔」与「槽位用完」必须分开显示：前者要换机型，后者只是扩容。
+ */
+function PCIeInfoBlock({ vmID }: { vmID: number }) {
+  const info = useQuery({
+    queryKey: ['vm', vmID, 'pcie'],
+    queryFn: () => vmApi.pcieInfo(vmID),
+    // 按需加载（切到该页才取）：它是一次向节点的请求。
+    staleTime: 30000,
+  })
+
+  if (!info.data) return null
+  const d = info.data
+
+  return (
+    <div className="flex flex-col gap-1.5 rounded-card border border-line px-4 py-3">
+      <div className="flex items-baseline justify-between">
+        <h3 className="text-base font-medium text-ink-2">PCIe 热插槽</h3>
+        <StatusBadge tone={d.hotplug_supported ? (d.free > 0 ? 'success' : 'warning') : 'idle'}>
+          {d.hotplug_supported ? `可用 ${d.free}` : '不支持热插拔'}
+        </StatusBadge>
+      </div>
+      {d.unavailable ? (
+        <p className="text-sm text-ink-3">{d.unavailable}</p>
+      ) : (
+        <p className="kc-nums text-sm text-ink-3">
+          共 {d.total} 个，已用 {d.used} 个，剩 {d.free} 个 · 机型 {d.machine_type}
+          {d.reason && <span className="block">{d.reason}</span>}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * NeighborSection 邻居表（ARP / NDP）。
+ *
+ * 它回答"这台机器现在能看见谁"。排查"虚拟机之间不通"时，先看邻居表能不能
+ * 学到对端 MAC，比直接抓包快一个数量级：邻居表里没有对端说明问题在二层
+ * （交换机、VLAN、端口隔离），有对端则要看三层（安全组、防火墙）。
+ *
+ * MAC 由控制面回填成机器名：让用户拿 MAC 去比对没人名有用。
+ */
+function NeighborSection({ vmID }: { vmID: number }) {
+  const list = useQuery({
+    queryKey: ['vm', vmID, 'neighbors'],
+    queryFn: () => vmApi.neighbors(vmID),
+    staleTime: 15000,
+  })
+  const items = list.data?.items ?? []
+
+  return (
+    <section className="rounded-card border border-line">
+      <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
+        <h2 className="text-sm font-medium text-ink-2">邻居表（网络诊断）</h2>
+        <Button size="sm" variant="secondary" onClick={() => void list.refetch()}>
+          刷新
+        </Button>
+      </div>
+
+      {list.data?.unavailable ? (
+        <p className="px-4 py-3 text-base text-ink-3">{list.data.unavailable}</p>
+      ) : items.length === 0 ? (
+        <p className="px-4 py-3 text-base text-ink-3">还没有学到任何邻居。</p>
+      ) : (
+        <table className="w-full border-collapse text-base">
+          <thead>
+            <tr className="border-b border-line text-xs text-ink-3">
+              <th className="px-4 py-2 text-left font-normal">地址</th>
+              <th className="px-4 py-2 text-left font-normal">MAC</th>
+              <th className="px-4 py-2 text-left font-normal">虚拟机</th>
+              <th className="px-4 py-2 text-left font-normal">网口 / 网桥</th>
+              <th className="px-4 py-2 text-left font-normal">状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((n, i) => (
+              <tr key={`${n.ip}-${i}`} className="border-t border-line">
+                <td className="kc-mono px-4 py-2.5 text-ink">{n.ip}</td>
+                <td className="kc-mono px-4 py-2.5 text-ink-2">{n.mac || '—'}</td>
+                <td className="px-4 py-2.5 text-ink-2">
+                  {n.is_self ? <span className="text-ink-3">（本机）</span> : n.vm_name || '—'}
+                </td>
+                <td className="px-4 py-2.5 text-ink-2">
+                  {[n.interface, n.bridge].filter(Boolean).join(' / ') || '—'}
+                </td>
+                <td className="px-4 py-2.5">
+                  {/* failed 是最值得单独标出来的一种：它意味着"有记录但
+                      解析不到 MAC、二层不通"。 */}
+                  <StatusBadge tone={n.state === 'failed' ? 'danger' : n.state === 'reach' ? 'success' : 'idle'}>
+                    {NEIGHBOR_STATE_LABEL[n.state ?? ''] ?? n.state ?? '—'}
+                  </StatusBadge>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  )
+}
+
+const NEIGHBOR_STATE_LABEL: Record<string, string> = {
+  reach: '可达',
+  stale: '过期',
+  delay: '探测中',
+  probe: '探测中',
+  failed: '不可达',
+  permanent: '固定',
 }
 
 function describe(error: unknown): string {

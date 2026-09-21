@@ -7,7 +7,7 @@
 import { del, get, patch, post } from './client'
 
 /** 定时执行的动作。 */
-export type ScheduleAction = 'start' | 'shutdown' | 'delete'
+export type ScheduleAction = 'start' | 'shutdown' | 'delete' | 'snapshot'
 
 /** 调度类型。 */
 export type ScheduleType = 'once' | 'daily' | 'weekly'
@@ -47,6 +47,15 @@ export interface CreateScheduleInput {
   time_of_day: string
   /** 一次性任务的日期，形如 `2026-09-20`。 */
   date?: string
+  /**
+   * 快照名模板，仅 snapshot 动作使用（服务端要求必填）。
+   *
+   * 它让自动快照在列表里能与手动快照区分：名字里带时间，一眼就能看出
+   * 这批是定时建的。
+   */
+  snapshot_name?: string
+  /** 是否保存运行现场，仅 snapshot 动作使用。 */
+  include_memory?: boolean
 }
 
 export const scheduleApi = {
@@ -67,6 +76,7 @@ export const SCHEDULE_ACTION_LABEL: Record<ScheduleAction, string> = {
   start: '开机',
   shutdown: '关机',
   delete: '删除虚拟机',
+  snapshot: '创建快照',
 }
 
 /** 调度类型的中文名。 */
