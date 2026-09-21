@@ -158,6 +158,12 @@ func stagePlan(op Operation) [][2]string {
 			{"snapshot_remove", "删除快照文件"},
 			{"metadata_remove", "清理元数据"},
 		}
+	case OpVMNVRAMRepair:
+		return [][2]string{
+			{"domain_undefine", "解除域定义（保留磁盘）"},
+			{"nvram_rebuild", "重建 UEFI 启动项"},
+			{"domain_define", "重新定义并校验"},
+		}
 	case OpStoragePoolCreate:
 		return [][2]string{
 			{"device_format", "格式化设备"},
@@ -1257,6 +1263,15 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 		// 给一个非零体积：默认 0 会让界面上的「0 B」看起来像没创建成功，
 		// 而这个模拟值正好用来验证体积的展示与格式化。
 		data["size_bytes"] = float64(256 * 1024 * 1024)
+
+	case OpVMNVRAMRepair:
+		// 回传重建后的启动项：界面要能显示"现在从哪启动"，否则用户只能
+		// 靠开机试一次来验证。
+		data[NVRAMDataKey] = NVRAMRepairInfo{
+			BootEntry: "Boot0001",
+			BootPath:  `\EFI\BOOT\BOOTX64.EFI`,
+			Message:   "已重建 UEFI 启动项，请重新启动虚拟机确认",
+		}
 	}
 
 	return &Result{

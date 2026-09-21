@@ -157,6 +157,13 @@ type View struct {
 	// （f-2-01 R-004）。`stale` 为 true 时界面不应完全依赖它。
 	AvailableActions []string `json:"available_actions"`
 
+	// Firmware 是引导固件（bios / uefi），取值与配置矩阵同源。
+	//
+	// 下发它有两个具体用途：详情页显示"这台机器怎么启动"，以及**快照页
+	// 据此决定是否显示「修复 UEFI 启动项」**——BIOS 机器没有启动项可修，
+	// 给一个点了必然报错的按钮，只会让人以为修复失败了。
+	Firmware string `json:"firmware,omitempty"`
+
 	// HasConsole 表示该虚拟机是否有可用的控制台（display != none）。
 	//
 	// 为 false 时界面应隐藏控制台入口，而不是给一个点了打不开的按钮
@@ -1038,6 +1045,7 @@ func toView(vm *model.VM, lock *model.VMLock, now time.Time, threshold time.Dura
 		// 会以实时探测为准重新校验（f-2-01 R-004）。
 		AvailableActions: AvailableActions(vm.Status),
 		HasConsole:       vm.HasConsole(),
+		Firmware:         vm.Firmware,
 		RescueActive:     vm.RescueActive,
 		RescueSince:      vm.RescueSince,
 		TemplateID:       vm.TemplateID,

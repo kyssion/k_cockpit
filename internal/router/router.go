@@ -862,6 +862,11 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/vms/:id/snapshots", requireAuth, vmHandler.CreateSnapshot)
 		v1.POST("/vms/:id/snapshots/:snapshotID/restore", requireAuth, vmHandler.RestoreSnapshot)
 		v1.DELETE("/vms/:id/snapshots/:snapshotID", requireAuth, vmHandler.DeleteSnapshot)
+		// 删除全部快照（F-2-07）。受**二次验证**保护：丢一个还原点与丢掉
+		// 整条时间线不是同一件事，而点这个按钮的人多半没有逐条确认过。
+		v1.POST("/vms/:id/snapshots/delete-all", requireAuth, vmHandler.DeleteAllSnapshots)
+		// UEFI 启动项修复（F-2-11）。恢复快照之后的典型后果就是它。
+		v1.POST("/vms/:id/nvram/repair", requireAuth, vmHandler.RepairNVRAM)
 
 		// 定时任务（F-7-05）。执行时复用已有的 vm.power / vm.delete 任务，
 		// 因此不需要新的执行器。删除类任务在**创建时**走二次验证——它是

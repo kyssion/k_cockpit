@@ -52,6 +52,15 @@ const (
 	TaskVMSnapshotCreate  = "vm.snapshot.create"
 	TaskVMSnapshotRestore = "vm.snapshot.restore"
 	TaskVMSnapshotDelete  = "vm.snapshot.delete"
+	// TaskVMSnapshotDeleteAll 一次删除一台虚拟机的全部快照。
+	//
+	// 单独一个类型而不是循环调用单条删除：逐个入队会让"删到第三个失败"
+	// 留下一个既删了一部分、又没有任务可跟踪的中间状态。整体一个任务，
+	// 进度与失败点都只有一个地方可看。
+	TaskVMSnapshotDeleteAll = "vm.snapshot.delete_all"
+
+	// TaskVMNVRAMRepair 修复 UEFI 启动项（F-2-11）。
+	TaskVMNVRAMRepair = "vm.nvram.repair"
 
 	// TaskVMConfigUpdate 修改硬件配置（F-2-05）。
 	//

@@ -44,6 +44,15 @@ const (
 	OpVMSnapshotCreate  OpKind = "vm.snapshot.create"
 	OpVMSnapshotRestore OpKind = "vm.snapshot.restore"
 	OpVMSnapshotDelete  OpKind = "vm.snapshot.delete"
+	// OpVMNVRAMRepairResultKey 是 NVRAM 修复结果的键。
+	OpVMNVRAMRepairResultKey = "nvram"
+
+	// OpVMNVRAMRepair 修复 UEFI 启动项（F-2-11）。
+	//
+	// 恢复快照之后，UEFI 固件里记录的启动项可能仍指向已经不存在的磁盘
+	// 或文件路径，表现为"开机进不了系统、直接进 UEFI Shell"。这不是磁盘
+	// 坏了，只是固件里的那一条记录过期了——修的是那一小段，不是整块盘。
+	OpVMNVRAMRepair OpKind = "vm.nvram.repair"
 
 	// OpVMConfigUpdate 修改虚拟机硬件配置（F-2-05）。
 	//

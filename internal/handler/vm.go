@@ -734,6 +734,58 @@ func (h *VM) DeleteSnapshot(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
 }
 
+// DeleteAllSnapshots 删除一台虚拟机的全部快照（F-2-07）。
+//
+// 删除整条时间线属于不可逆操作，因此入口处要求一次二次验证（与恢复快照
+// 同一档）。验证放在这里而不是服务层，是因为**是否验证由清单决定**，
+// 而 handler 是唯一同时持有清单与请求的地方。
+func (h *VM) DeleteAllSnapshots(ctx context.Context, c *app.RequestContext) {
+	if !h.risk.Require(c, risk.ActionVMSnapshotDeleteAll) {
+		return
+	}
+
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	var req struct {
+		SkipCurrent bool `json:"skip_current"`
+	}
+	_ = c.Bind(&req)
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	view, err := h.svc.DeleteAllSnapshots(ctx, id, vm.DeleteAllSnapshotsRequest{
+		SkipCurrent: req.SkipCurrent,
+	}, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, view)
+}
+
+// RepairNVRAM 修复 UEFI 启动项（F-2-11）。
+func (h *VM) RepairNVRAM(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.RepairNVRAM(ctx, id, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
 // --- 网络管理的写操作（API-059 ~ API-064）---
 //
 // 三者都不需要关机（网卡支持热插拔、地址与转发规则是配置层的事），

@@ -172,6 +172,9 @@ func main() {
 	queue.Register(vm.NewSnapshotCreateExecutor(db, mockAgent))
 	queue.Register(vm.NewSnapshotRestoreExecutor(db, mockAgent))
 	queue.Register(vm.NewSnapshotDeleteExecutor(db, mockAgent))
+	// 批量删除快照与 UEFI 启动项修复（F-2-07 / F-2-11）。
+	queue.Register(vm.NewSnapshotDeleteAllExecutor(db, mockAgent))
+	queue.Register(vm.NewNVRAMRepairExecutor(mockAgent))
 	queue.Register(vm.NewConfigUpdateExecutor(db, mockAgent))
 	queue.Register(vm.NewEnterRescueExecutor(db, mockAgent))
 	queue.Register(vm.NewExitRescueExecutor(db, mockAgent))

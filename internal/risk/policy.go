@@ -53,6 +53,13 @@ const (
 	// 而实际发生的是一次不可逆的回滚。
 	ActionVMSnapshotRestore Action = "vm.snapshot.restore"
 
+	// 删除全部快照（F-2-07）。
+	//
+	// 单条删除只丢一个还原点，而"删除全部"丢的是**整条时间线**——它通常
+	// 发生在"快照太多了想清空"这种想法下，而那一刻用户多半没有逐条确认过
+	// 里面有没有还要用的。因此它与恢复快照同级，需要一次明确的验证。
+	ActionVMSnapshotDeleteAll Action = "vm.snapshot.delete_all"
+
 	// 重装系统（F-2-11）。
 	//
 	// 它会**替换整块系统盘**——原系统上的所有配置、安装的软件、没放在数据盘
@@ -119,6 +126,11 @@ var policy = []Entry{
 		Action: ActionVMSnapshotRestore,
 		Label:  "恢复快照",
 		Reason: "快照之后产生的磁盘改动会被丢弃，且无法撤销",
+	},
+	{
+		Action: ActionVMSnapshotDeleteAll,
+		Label:  "删除全部快照",
+		Reason: "这台虚拟机的所有还原点会被一次性删除，无法撤销",
 	},
 	{
 		Action: ActionVMReinstall,
