@@ -158,7 +158,7 @@ export function MyStoragePage() {
       )}
 
       <div className="flex flex-wrap gap-2">
-        {(['', 'iso', 'share', 'disk'] as const).map((c) => (
+        {(['', 'iso', 'share', 'disk', 'template_package'] as const).map((c) => (
           <button
             key={c || 'all'}
             onClick={() => setCategory(c)}
@@ -350,6 +350,8 @@ function UploadModal({
                   {c === 'iso' && '可以挂到虚拟机的光驱上，用于安装系统。'}
                   {c === 'share' && '普通文件，在虚拟机里按需取用。'}
                   {c === 'disk' && '可以作为数据盘挂到虚拟机上。'}
+                  {c === 'template_package' &&
+                    '模板导出的 tar.gz 包，只能在模板页「导入模板包」时使用。'}
                 </span>
               </span>
             </label>

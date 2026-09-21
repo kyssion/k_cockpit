@@ -84,6 +84,46 @@ export interface TemplateListParams {
   only_ready?: boolean
 }
 
+/** 模板导出产物（F-3-05）。 */
+export interface TemplateExportView {
+  id: number
+  node_id: number
+  template_id: number
+  /** 模板名在导出时快照：模板随后可能被删，而包还在。 */
+  template_name: string
+  filename: string
+  size_bytes: number
+  status: 'pending' | 'running' | 'success' | 'failed'
+  error?: string
+  created_at: string
+  finished_at?: string
+}
+
+export const TEMPLATE_EXPORT_STATUS_LABEL: Record<string, string> = {
+  pending: '排队中',
+  running: '打包中',
+  success: '已完成',
+  failed: '失败',
+}
+
+/** 模板包清单（导入预览时由节点解出）。 */
+export interface TemplateManifestView {
+  name: string
+  version: number
+  family_name?: string
+  disk_format: string
+  disk_size_gb: number
+  os_type?: string
+}
+
+export interface ImportPreviewView {
+  source_name: string
+  manifest: TemplateManifestView
+  can_import: boolean
+  reason?: string
+  message?: string
+}
+
 export interface CreateFromVmInput {
   vm_id: number
   name: string
@@ -196,6 +236,23 @@ export const templateApi = {
 
   /** 同一模板族的全部版本（F-3-04）。 */
   family: (id: number) => get<TemplateView[]>(`/api/v1/templates/${id}/family`),
+
+  // --- 导出与导入（F-3-05）---
+
+  /** 导出一个模板。打包几十 GB 的镜像，因此返回任务标识。 */
+  exportTemplate: (id: number) => post<TaskRef>(`/api/v1/templates/${id}/exports`),
+
+  listExports: (nodeID?: number) =>
+    get<{ items: TemplateExportView[] }>('/api/v1/template-exports', { node_id: nodeID }),
+
+  removeExport: (id: number) => del<TaskRef>(`/api/v1/template-exports/${id}`),
+
+  /** 预览模板包。**先验后做**：名字撞了、格式不对、摘要不符都在这里看见。 */
+  previewImport: (fileID: number) =>
+    post<ImportPreviewView>('/api/v1/templates/imports/preview', { file_id: fileID }),
+
+  importTemplate: (fileID: number) =>
+    post<TaskRef>('/api/v1/templates/imports', { file_id: fileID }),
 }
 
 export const TEMPLATE_STATUS_LABEL: Record<TemplateStatus, string> = {

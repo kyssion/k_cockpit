@@ -8,7 +8,13 @@
  */
 import { del, get, post, putRaw } from './client'
 
-export type FileCategory = 'iso' | 'share' | 'disk'
+/**
+ * 文件类别。
+ *
+ * `template_package` 只能被**导入成模板**——把它挂到光驱或当数据盘都不会
+ * 被虚拟机认识。单独一类而不是复用 disk：类别决定"这个文件能被怎么用"。
+ */
+export type FileCategory = 'iso' | 'share' | 'disk' | 'template_package'
 
 export interface StorageView {
   node_id: number
@@ -94,6 +100,7 @@ export const CATEGORY_LABEL: Record<FileCategory, string> = {
   iso: 'ISO 镜像',
   share: '文件共享',
   disk: '虚拟磁盘',
+  template_package: '模板包',
 }
 
 /**

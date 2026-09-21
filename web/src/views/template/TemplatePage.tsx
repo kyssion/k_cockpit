@@ -16,12 +16,15 @@ import { ApiError, NetworkError } from '@/api/client'
 import { nodeApi } from '@/api/node'
 import {
   DELETE_STRATEGY_LABEL,
+  TEMPLATE_EXPORT_STATUS_LABEL,
   TEMPLATE_STATUS_LABEL,
   TEMPLATE_STATUS_TONE,
   templateApi,
   type DeleteStrategy,
+  type TemplateExportView,
   type TemplateView,
 } from '@/api/template'
+import { userStorageApi } from '@/api/userstorage'
 import { vmApi, type VmView } from '@/api/vm'
 import { Button } from '@/components/common/Button'
 import { EmptyState, PageLoading } from '@/components/common/Feedback'
@@ -40,9 +43,48 @@ export function TemplatePage() {
   const [strategy, setStrategy] = useState<DeleteStrategy | ''>('')
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
+  const [exportTarget, setExportTarget] = useState<TemplateView | null>(null)
+  // 导入面板：它要选「我的存储」里的模板包，因此是一个独立的弹窗而不是
+  // 一个按钮直发请求。
+  const [importOpen, setImportOpen] = useState(false)
 
   const nodes = useQuery({ queryKey: ['nodes'], queryFn: nodeApi.list })
   const templates = useQuery({ queryKey: ['templates'], queryFn: () => templateApi.list() })
+  const exports = useQuery({
+    queryKey: ['template-exports'],
+    queryFn: () => templateApi.listExports(),
+    // 打包是耗时操作，跟着刷才看得到状态推进。
+    refetchInterval: (q) =>
+      (q.state.data?.items ?? []).some((e) => e.status === 'pending' || e.status === 'running')
+        ? 5000
+        : false,
+  })
+
+  // 导出与导入都进队列：打包与解包都要读写整块镜像。
+  const startExport = useMutation({
+    mutationFn: (id: number) => templateApi.exportTemplate(id),
+    onSuccess: (r) => {
+      setExportTarget(null)
+      setError('')
+      setNotice(`已提交导出，任务 #${r.task_id} 正在执行`)
+      void queryClient.invalidateQueries({ queryKey: ['template-exports'] })
+      void queryClient.invalidateQueries({ queryKey: ['tasks'] })
+    },
+    onError: (err) => {
+      setExportTarget(null)
+      setError(describe(err))
+    },
+  })
+
+  const removeExport = useMutation({
+    mutationFn: (id: number) => templateApi.removeExport(id),
+    onSuccess: () => {
+      setError('')
+      setNotice('已提交删除导出包')
+      void queryClient.invalidateQueries({ queryKey: ['template-exports'] })
+    },
+    onError: (err) => setError(describe(err))
+  })
 
   const publish = useMutation({
     mutationFn: (vars: { id: number; published: boolean }) =>
@@ -100,9 +142,15 @@ export function TemplatePage() {
             而链式克隆几乎不占空间——代价是克隆体会依赖模板盘。
           </p>
         </div>
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
-          从虚拟机创建模板
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* 导入：模板包是跨节点搬运模板的载体——在一个节点导出、在另一个导入。 */}
+          <Button size="sm" variant="secondary" onClick={() => setImportOpen(true)}>
+            导入模板包
+          </Button>
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            从虚拟机创建模板
+          </Button>
+        </div>
       </header>
 
       {notice && (
@@ -205,6 +253,15 @@ export function TemplatePage() {
                       >
                         批量创建
                       </button>
+                      {/* 导出：把模板打包成 tar.gz，用于在别的节点上导入。 */}
+                      <button
+                        className="text-sm text-brand hover:underline disabled:text-ink-3 disabled:no-underline"
+                        disabled={t.status !== 'ready'}
+                        title={t.status !== 'ready' ? '模板尚未就绪，不能导出' : undefined}
+                        onClick={() => setExportTarget(t)}
+                      >
+                        导出
+                      </button>
                       <button
                         className="text-sm text-danger hover:underline"
                         onClick={() => {
@@ -225,6 +282,47 @@ export function TemplatePage() {
         </div>
       )}
 
+      {/*
+        导出产物列表。放在模板列表**之后**：它是"模板的另一种形态"，
+        而不是模板本身的一部分——模板删掉之后这些包依然存在。
+      */}
+      <section className="rounded-card border border-line">
+        <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
+          <h2 className="text-sm font-medium text-ink-2">模板导出包</h2>
+          <span className="text-xs text-ink-3">
+            在别的节点上「导入模板包」即可把模板搬过去
+          </span>
+        </div>
+
+        {(exports.data?.items ?? []).length === 0 ? (
+          <div className="px-4 py-3 text-base text-ink-3">
+            还没有导出包。在模板上点「导出」即可生成一个。
+          </div>
+        ) : (
+          <table className="w-full border-collapse text-base">
+            <thead>
+              <tr className="border-b border-line text-xs text-ink-3">
+                <th className="px-4 py-2 text-left font-normal">文件</th>
+                <th className="px-4 py-2 text-left font-normal">来源模板</th>
+                <th className="px-4 py-2 text-left font-normal">大小</th>
+                <th className="px-4 py-2 text-left font-normal">状态</th>
+                <th className="px-4 py-2 text-right font-normal">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(exports.data?.items ?? []).map((e) => (
+                <ExportRow
+                  key={e.id}
+                  item={e}
+                  pending={removeExport.isPending}
+                  onDelete={() => removeExport.mutate(e.id)}
+                />
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
       <BatchCloneModal
         template={batchTarget}
         onClose={() => setBatchTarget(null)}
@@ -237,6 +335,26 @@ export function TemplatePage() {
         onError={(m) => {
           setBatchTarget(null)
           setError(m)
+        }}
+      />
+
+      <ExportModal
+        template={exportTarget}
+        pending={startExport.isPending}
+        onClose={() => setExportTarget(null)}
+        onConfirm={() => exportTarget && startExport.mutate(exportTarget.id)}
+      />
+
+      <ImportModal
+        open={importOpen}
+        nodes={nodes.data ?? []}
+        onClose={() => setImportOpen(false)}
+        onDone={(m) => {
+          setImportOpen(false)
+          setError('')
+          setNotice(m)
+          void queryClient.invalidateQueries({ queryKey: ['templates'] })
+          void queryClient.invalidateQueries({ queryKey: ['tasks'] })
         }}
       />
 
@@ -493,6 +611,227 @@ function hardwareOf(t: TemplateView): string {
   if (t.default_machine_type) parts.push(t.default_machine_type)
   if (t.default_firmware) parts.push(t.default_firmware)
   return parts.join(' · ')
+}
+
+function ExportRow({
+  item,
+  pending,
+  onDelete,
+}: {
+  item: TemplateExportView
+  pending: boolean
+  onDelete: () => void
+}) {
+  const done = item.status === 'success'
+  return (
+    <tr className="border-t border-line">
+      <td className="px-4 py-2.5 text-ink">{item.filename}</td>
+      <td className="px-4 py-2.5 text-ink-2">{item.template_name}</td>
+      <td className="kc-nums px-4 py-2.5 text-ink-2">
+        {item.size_bytes > 0 ? formatBytes(item.size_bytes) : '—'}
+      </td>
+      <td className="px-4 py-2.5">
+        <StatusBadge tone={done ? 'success' : item.status === 'failed' ? 'danger' : 'idle'}>
+          {TEMPLATE_EXPORT_STATUS_LABEL[item.status] ?? item.status}
+        </StatusBadge>
+        {item.error && <span className="block text-xs text-danger">{item.error}</span>}
+      </td>
+      <td className="px-4 py-2.5 text-right">
+        <button
+          className="text-sm text-danger hover:underline disabled:text-ink-3 disabled:no-underline"
+          disabled={pending}
+          onClick={onDelete}
+        >
+          删除
+        </button>
+      </td>
+    </tr>
+  )
+}
+
+/**
+ * ExportModal 确认一次导出。
+ *
+ * 说明里必须写清"导出的是模板盘本身"：它会被打包成 tar.gz，几十 GB 的
+ * 模板要花一段时间，而用户需要先知道自己在等什么。
+ */
+function ExportModal({
+  template,
+  pending,
+  onClose,
+  onConfirm,
+}: {
+  template: TemplateView | null
+  pending: boolean
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <Modal
+      open={template !== null}
+      title={`导出模板「${template?.name ?? ''}」`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            取消
+          </Button>
+          <Button size="sm" loading={pending} onClick={onConfirm}>
+            开始导出
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-1.5 text-base text-ink-2">
+        <p>
+          将把这块模板盘打包成一个 tar.gz 包（约 {template?.disk_size_gb ?? 0} GB 的镜像，
+          压缩后通常更小）。
+        </p>
+        <p className="text-sm text-ink-3">
+          导出包会放在「我的存储」里，因此占用你的存储配额。在另一个节点上用
+          「导入模板包」即可把它变成那台机器上的模板。
+        </p>
+      </div>
+    </Modal>
+  )
+}
+
+/**
+ * ImportModal 导入一个模板包。
+ *
+ * 流程强制为**先预览、后导入**：包是别人给的，名字撞了、格式不对、摘要不符
+ * 这三类问题都必须在导入之前被看见——导完之后才发现，用户已经等完了整个
+ * 解包过程。
+ */
+function ImportModal({
+  open,
+  nodes,
+  onClose,
+  onDone,
+}: {
+  open: boolean
+  nodes: { id: number; name: string }[]
+  onClose: () => void
+  onDone: (message: string) => void
+}) {
+  const [nodeID, setNodeID] = useState(0)
+  const [fileID, setFileID] = useState(0)
+  const [error, setError] = useState('')
+
+  const effectiveNodeID = nodeID || nodes[0]?.id || 0
+  const files = useQuery({
+    queryKey: ['storage-files', effectiveNodeID, 'template_package'],
+    queryFn: () => userStorageApi.listFiles(effectiveNodeID, 'template_package'),
+    enabled: open && effectiveNodeID > 0,
+  })
+
+  const preview = useQuery({
+    queryKey: ['template-import-preview', fileID],
+    queryFn: () => templateApi.previewImport(fileID),
+    enabled: open && fileID > 0,
+  })
+
+  const run = useMutation({
+    mutationFn: () => templateApi.importTemplate(fileID),
+    onSuccess: (r) => {
+      setError('')
+      onDone(`已提交导入，任务 #${r.task_id} 正在执行`)
+    },
+    onError: (err) => setError(describe(err)),
+  })
+
+  if (!open) return null
+
+  const items = files.data?.items ?? []
+
+  return (
+    <Modal
+      open={open}
+      title="导入模板包"
+      description="选择一个已上传的模板包（.tar.gz），确认内容后再导入。"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            取消
+          </Button>
+          <Button
+            size="sm"
+            disabled={fileID === 0 || preview.data?.can_import !== true}
+            loading={run.isPending}
+            onClick={() => run.mutate()}
+          >
+            导入
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3 text-base text-ink-2">
+        <div className="flex gap-2">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-ink-3">节点</label>
+            <select
+              value={effectiveNodeID}
+              onChange={(e) => {
+                setNodeID(Number(e.target.value))
+                setFileID(0)
+              }}
+              className="h-8 rounded-control border border-line-strong bg-sunken px-2 text-base text-ink"
+            >
+              {nodes.map((n) => (
+                <option key={n.id} value={n.id}>
+                  {n.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex flex-1 flex-col gap-1">
+            <label className="text-xs text-ink-3">模板包</label>
+            <select
+              value={fileID}
+              onChange={(e) => setFileID(Number(e.target.value))}
+              className="h-8 rounded-control border border-line-strong bg-sunken px-2 text-base text-ink"
+            >
+              <option value={0}>请选择…</option>
+              {items.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.filename}（{formatBytes(f.size_bytes)}）
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {items.length === 0 && !files.isPending && (
+          <p className="text-sm text-ink-3">
+            这个节点上还没有模板包。先到「我的存储」上传一个（类别选「模板包」）。
+          </p>
+        )}
+
+        {preview.data && (
+          <div className="flex flex-col gap-1 rounded-control border border-line bg-sunken px-3 py-2 text-sm">
+            <span className="text-ink">将导入为</span>
+            <span>
+              名称 {preview.data.manifest.name}（v{preview.data.manifest.version}）
+            </span>
+            <span>
+              磁盘 {preview.data.manifest.disk_size_gb} GB ·{' '}
+              {preview.data.manifest.disk_format}
+              {preview.data.manifest.family_name
+                ? ` · 族 ${preview.data.manifest.family_name}`
+                : ''}
+            </span>
+            {!preview.data.can_import && (
+              <span className="text-danger">{preview.data.reason}</span>
+            )}
+          </div>
+        )}
+
+        {error && <p className="text-base text-danger">{error}</p>}
+      </div>
+    </Modal>
+  )
 }
 
 function describe(error: unknown): string {
