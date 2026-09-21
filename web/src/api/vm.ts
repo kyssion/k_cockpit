@@ -113,6 +113,13 @@ export interface VmView {
   reinstall_at?: string
 }
 
+/** 创建时要一并建立的一块数据盘。 */
+export interface DataDiskInput {
+  size_gb: number
+  format?: string
+  bus?: string
+}
+
 /** 最近一次采样的资源占用。 */
 export interface VmUsage {
   cpu_percent: number
@@ -168,6 +175,23 @@ export interface CreateVmInput {
   disk_bus?: string
   nic_model?: string
   os_type?: string
+  /** 具体系统版本（libosinfo short id）。 */
+  os_variant?: string
+  /** 主机名；留空用虚拟机名称。 */
+  hostname?: string
+  /**
+   * 初始登录密码。创建时注入，之后**只写不读**（R-005）。
+   *
+   * 它不进草稿（见向导里的说明）：把凭据留在 localStorage 里等于给它一个
+   * 不出门的泄漏面。
+   */
+  initial_password?: string
+  /** 首次启动初始化方式：none / nocloud / configdrive / openwrt。 */
+  init_mode?: string
+  /** 主网口静态地址；留空由 DHCP 分配。 */
+  static_ip?: string
+  /** 除系统盘之外要一并创建的数据盘。 */
+  data_disks?: DataDiskInput[]
   machine_type?: string
   firmware?: string
   secure_boot?: boolean

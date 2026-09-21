@@ -5,7 +5,7 @@ import { Link } from 'react-router'
 import { ApiError, NetworkError } from '@/api/client'
 import { nodeApi } from '@/api/node'
 import { templateApi, type TemplateView } from '@/api/template'
-import { vmApi, type CreateFormField } from '@/api/vm'
+import { vmApi, type CreateFormField, type DataDiskInput } from '@/api/vm'
 import { Button } from '@/components/common/Button'
 import { Input } from '@/components/common/Input'
 import { Modal } from '@/components/common/Modal'
@@ -38,6 +38,7 @@ interface Draft {
   switchID: number
   groupIDs: number[]
   count: number
+  dataDisks: DataDiskInput[]
   savedAt: number
 }
 
@@ -85,6 +86,8 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
   const [switchID, setSwitchID] = useState(draft?.switchID ?? 0)
   const [groupIDs, setGroupIDs] = useState<number[]>(draft?.groupIDs ?? [])
   const [count, setCount] = useState(draft?.count ?? 1)
+  // 数据盘不在矩阵里（它是一组结构且数量不定），因此单独存一份 state。
+  const [dataDisks, setDataDisks] = useState<DataDiskInput[]>(draft?.dataDisks ?? [])
   const [templateID, setTemplateID] = useState(0)
   const [error, setError] = useState('')
   const [submitted, setSubmitted] = useState<number[] | null>(null)
@@ -119,11 +122,15 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
   useEffect(() => {
     if (!open || submitted) return
     const draft: Draft = {
-      name, nodeID, mode, values,
-      isoFileID, switchID, groupIDs, count, savedAt: Date.now(),
+      name, nodeID, mode,
+      // 初始密码**不进草稿**（R-008）：localStorage 里的凭据是一个不出门
+      // 却能长期存在的泄漏面，而它的价值只是"少打一次字"。
+      values: withoutSensitive(values),
+      isoFileID, switchID, groupIDs, count, dataDisks,
+      savedAt: Date.now(),
     }
     localStorage.setItem(DRAFT_KEY, JSON.stringify(draft))
-  }, [open, submitted, name, nodeID, mode, values, isoFileID, switchID, groupIDs, count])
+  }, [open, submitted, name, nodeID, mode, values, isoFileID, switchID, groupIDs, count, dataDisks])
 
   const steps = useMemo(() => {
     const backend = (form.data?.groups ?? []).filter((g) => !g.planned)
@@ -148,6 +155,12 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
         disk_bus: str(effective.disk_bus),
         nic_model: str(effective.nic_model),
         os_type: str(effective.os_type),
+        os_variant: str(effective.os_variant),
+        hostname: str(effective.hostname),
+        initial_password: str(effective.initial_password),
+        init_mode: str(effective.init_mode),
+        static_ip: str(effective.static_ip),
+        data_disks: dataDisks.length > 0 ? dataDisks : undefined,
         machine_type: str(effective.machine_type),
         firmware: str(effective.firmware),
         secure_boot: bool(effective.secure_boot),
@@ -205,6 +218,10 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
   }
 
   const fieldsOf = (group: string) => (form.data?.fields ?? []).filter((f) => f.group === group)
+  // 数据盘的格式与驱动**复用矩阵的可选值**：它们与系统盘是同一套候选，
+  // 抄一份之后新增格式时数据盘那边会静默拒绝它。
+  const optionsOf = (key: string) =>
+    (form.data?.fields ?? []).find((f) => f.key === key)?.options ?? []
 
   const missing: string[] = []
   if (!name.trim()) missing.push('虚拟机名')
@@ -352,6 +369,15 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
                 </div>
               )}
 
+              {steps[step]?.key === 'disk' && (
+                <DataDiskEditor
+                  items={dataDisks}
+                  onChange={setDataDisks}
+                  formatOptions={optionsOf('disk_format')}
+                  busOptions={optionsOf('disk_bus')}
+                />
+              )}
+
               {mode === 'template' && steps[step]?.key === 'disk' && (
                 <div className="flex flex-col gap-1.5">
                   <label htmlFor="wizard-tpl" className="text-sm font-medium text-ink-2">
@@ -446,6 +472,7 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
                 count={count}
                 mode={mode}
                 values={effective}
+                dataDisks={dataDisks}
                 switchName={(form.data?.switches ?? []).find((s) => s.id === effectiveSwitch)?.name}
                 isoName={(form.data?.iso_files ?? []).find((f) => f.id === isoFileID)?.filename}
                 groups={(form.data?.security_groups ?? [])
@@ -664,6 +691,7 @@ function Summary({
   switchName,
   isoName,
   groups,
+  dataDisks,
 }: {
   name: string
   count: number
@@ -672,6 +700,7 @@ function Summary({
   switchName?: string
   isoName?: string
   groups: string[]
+  dataDisks: DataDiskInput[]
 }) {
   const rows: [string, string][] = [
     ['名称', count > 1 ? `${name}-1 … ${name}-${count}（${count} 台）` : name],
@@ -683,6 +712,19 @@ function Summary({
   ]
   if (mode === 'iso') rows.push(['安装镜像', isoName ?? '未选择'])
   if (groups.length > 0) rows.push(['安全组', groups.join('、')])
+  // 数据盘与"第一次开机"的配置一并列出：它们是最容易在提交后才被发现
+  // 填错了的几项（尤其是静态地址——填错表现为开机后没有网络）。
+  if (dataDisks.length > 0) {
+    rows.push([
+      '数据盘',
+      dataDisks.map((d) => `${d.size_gb} GB${d.bus ? ` · ${d.bus}` : ''}`).join('、'),
+    ])
+  }
+  if (values.hostname) rows.push(['主机名', String(values.hostname)])
+  if (values.static_ip) rows.push(['静态地址', String(values.static_ip)])
+  if (values.init_mode && values.init_mode !== 'none') {
+    rows.push(['首次启动初始化', String(values.init_mode)])
+  }
 
   return (
     <div className="rounded-card border border-line">
@@ -718,6 +760,117 @@ function bool(v: unknown): boolean | undefined {
 function newToken(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
   return `t-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+/**
+ * withoutSensitive 去掉草稿里不该落盘的值。
+ *
+ * 凭据不进 localStorage：它是一个不出门却能长期存在的泄漏面——用户关掉
+ * 浏览器之后它还在，而任何能读到本地存储的脚本都能拿到。
+ */
+function withoutSensitive(values: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...values }
+  delete next.initial_password
+  return next
+}
+
+/**
+ * DataDiskEditor 编辑"除系统盘之外还要建几块盘"。
+ *
+ * 它不在矩阵里（数据盘是一组结构且数量不定），但**格式与驱动的可选值复用
+ * 矩阵**：与系统盘是同一套候选，抄一份之后新增格式时数据盘那边会静默拒绝它。
+ */
+function DataDiskEditor({
+  items,
+  onChange,
+  formatOptions,
+  busOptions,
+}: {
+  items: DataDiskInput[]
+  onChange: (items: DataDiskInput[]) => void
+  formatOptions: { value: string; label: string }[]
+  busOptions: { value: string; label: string }[]
+  }) {
+  return (
+    <div className="flex flex-col gap-2 rounded-control border border-line px-3 py-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-base text-ink">数据盘（可选）</span>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={items.length >= 4}
+          title={items.length >= 4 ? '一次最多附带 4 块' : undefined}
+          onClick={() => onChange([...items, { size_gb: 20 }])}
+        >
+          + 添加
+        </Button>
+      </div>
+
+      {items.length === 0 ? (
+        <p className="text-sm text-ink-3">不附加数据盘。建好之后可在详情页的「磁盘」里逐块挂载。</p>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {items.map((d, i) => (
+            <li key={i} className="flex flex-wrap items-end gap-2">
+              <Input
+                label={`第 ${i + 1} 块大小（GB）`}
+                type="number"
+                value={String(d.size_gb)}
+                onChange={(e) =>
+                  onChange(
+                    items.map((x, j) =>
+                      j === i ? { ...x, size_gb: Math.max(1, Number(e.target.value) || 1) } : x,
+                    ),
+                  )
+                }
+              />
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-medium text-ink-2">格式</label>
+                <select
+                  value={d.format ?? ''}
+                  onChange={(e) =>
+                    onChange(items.map((x, j) => (j === i ? { ...x, format: e.target.value || undefined } : x)))
+                  }
+                  className="h-9 rounded-control border border-line-strong bg-sunken px-2 text-base text-ink"
+                >
+                  <option value="">跟随系统盘</option>
+                  {formatOptions.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-medium text-ink-2">驱动</label>
+                <select
+                  value={d.bus ?? ''}
+                  onChange={(e) =>
+                    onChange(items.map((x, j) => (j === i ? { ...x, bus: e.target.value || undefined } : x)))
+                  }
+                  className="h-9 rounded-control border border-line-strong bg-sunken px-2 text-base text-ink"
+                >
+                  <option value="">跟随系统盘</option>
+                  {busOptions.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onChange(items.filter((_, j) => j !== i))}
+              >
+                移除
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
 }
 
 function describe(error: unknown): string {
