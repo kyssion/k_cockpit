@@ -417,6 +417,12 @@ func Register(h *server.Hertz, deps Deps) {
 		// 模板族：同一条派生链上的全部版本（F-3-04）。放在 :id 通配之后也不会
 		// 被吃掉，因为它多一段路径。
 		v1.GET("/templates/:id/family", requireAuth, templateHandler.Family)
+		// 派生链维护（F-3-04）：改的是同一条链，因此共用一个任务类型，
+		// 下发时再各自映射到不同的 agent 操作。
+		v1.POST("/templates/:id/rebase", requireAuth, templateHandler.RebaseTemplate)
+		v1.POST("/templates/:id/flatten", requireAuth, templateHandler.FlattenTemplate)
+		v1.POST("/templates/:id/promote-child", requireAuth, templateHandler.PromoteChildTemplate)
+		v1.POST("/templates/:id/promote-delete", requireAuth, templateHandler.PromoteDeleteTemplate)
 
 		// 模板导出与导入（F-3-05）：模板包是跨节点搬运模板的载体。
 		//

@@ -202,6 +202,8 @@ func main() {
 	queue.Register(template.NewExportExecutor(db, mockAgent))
 	queue.Register(template.NewExportDeleteExecutor(db, mockAgent))
 	queue.Register(template.NewImportExecutor(db, mockAgent))
+	// 派生链维护（rebase / 拉平 / 提升 / 热提升删除）。
+	queue.Register(template.NewMaintainExecutor(db, mockAgent))
 	// 重装要备份并重建系统盘，同样是磁盘操作。
 	queue.Register(vm.NewReinstallExecutor(db, mockAgent))
 	queue.Register(vm.NewPurgeExecutor(db, mockAgent))

@@ -245,6 +245,30 @@ func stagePlan(op Operation) [][2]string {
 			{"trim_discard", "下发 discard"},
 		}
 
+	case OpTemplateRebase:
+		return [][2]string{
+			{"chain_read", "读取派生链"},
+			{"diff_rewrite", "把差异写回上级"},
+			{"chain_verify", "校验链完整"},
+		}
+	case OpTemplateFlatten:
+		return [][2]string{
+			{"chain_read", "读取派生链"},
+			{"online_copy", "在线拷贝差异"},
+			{"backing_switch", "切换 backing"},
+		}
+	case OpTemplatePromoteChild:
+		return [][2]string{
+			{"child_pick", "定位子模板"},
+			{"backing_switch", "改挂到上一级"},
+		}
+	case OpTemplatePromoteDelete:
+		return [][2]string{
+			{"children_scan", "扫描下游模板"},
+			{"backing_reparent", "把下游改挂到上级"},
+			{"template_remove", "删除这一代"},
+		}
+
 	case OpVpcACLPreview:
 		return [][2]string{
 			{"rules_normalize", "归一化规则"},
@@ -1528,6 +1552,32 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 			Devices:        2,
 			ReclaimedBytes: 8 << 30,
 			Message:        "trim 已完成",
+		}
+
+	case OpTemplateRebase:
+		data[TemplateMaintainDataKey] = TemplateMaintainInfo{
+			Affected:       1,
+			RewrittenBytes: 4 << 30,
+			Message:        "已把 backing 切换到上级",
+		}
+
+	case OpTemplateFlatten:
+		data[TemplateMaintainDataKey] = TemplateMaintainInfo{
+			Affected:       1,
+			RewrittenBytes: 4 << 30,
+			Message:        "已在线拉平到上级",
+		}
+
+	case OpTemplatePromoteChild:
+		data[TemplateMaintainDataKey] = TemplateMaintainInfo{
+			Affected: 1,
+			Message:  "子模板已提升一级",
+		}
+
+	case OpTemplatePromoteDelete:
+		data[TemplateMaintainDataKey] = TemplateMaintainInfo{
+			Affected: 2,
+			Message:  "已删除这一代，下游模板已改挂到上级",
 		}
 
 	case OpVpcACLPreview:
