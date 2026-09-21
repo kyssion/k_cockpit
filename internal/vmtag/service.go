@@ -44,6 +44,33 @@ func NewService(db *gorm.DB, recorder *audit.Recorder) *Service {
 }
 
 // Tags 返回一台虚拟机的标签（已排序）。
+// TagsOf 一次读取多台虚拟机的标签。
+//
+// 存在的理由就是**避免 N+1**：列表一页 20 台，用单台的 Tags 循环调用会把
+// 一次列表请求变成 20 次数据库往返。(vm_id) 上有索引，一次 IN 查询的代价
+// 与查一台几乎相同。
+func (s *Service) TagsOf(ctx context.Context, vmIDs []int64) (map[int64][]string, error) {
+	out := make(map[int64][]string)
+	if len(vmIDs) == 0 {
+		return out, nil
+	}
+
+	var rows []model.VMTag
+	if err := s.db.WithContext(ctx).
+		Where("vm_id IN ?", vmIDs).
+		Order("vm_id, tag").Find(&rows).Error; err != nil {
+		log.Printf("[vmtag] 批量查询标签失败: %v", err)
+		return nil, api.Internal()
+	}
+	// 结果不包含"没有标签"的机器——调用方按 map 缺失处理，而不是塞一个空
+	// 切片：空切片与"没查到"在 JSON 里都是 []，但语义不同。
+
+	for i := range rows {
+		out[rows[i].VMID] = append(out[rows[i].VMID], rows[i].Tag)
+	}
+	return out, nil
+}
+
 func (s *Service) Tags(ctx context.Context, vmID int64, v authz.Viewer) ([]string, error) {
 	if err := s.ensureVM(ctx, vmID, v); err != nil {
 		return nil, err

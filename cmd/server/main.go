@@ -321,6 +321,8 @@ func main() {
 	// 告警中心（F-8-07）。
 	alertSvc := alert.NewService(db)
 	vmSvc.SetComputeQuota(computeQuotaSvc)
+	// 列表要带标签与最近占用，两者都是**一次批量查询**；不装配则列表不带这两列。
+	vmSvc.SetTagProvider(tagSvc)
 	// 公网地址与端口转发的数量同样受计算配额约束：它们都是稀缺资源，
 	// 而"先到先得"通常不是管理员想要的分配策略。
 	publicIPSvc.SetComputeQuota(computeQuotaSvc)

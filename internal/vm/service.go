@@ -55,6 +55,8 @@ type Service struct {
 	quota QuotaChecker
 	// computeQuota 校验计算资源配额（vCPU / 内存 / 实例数）。同为可选。
 	computeQuota ComputeQuotaChecker
+	// tags 批量读取标签，供列表使用。可为 nil。
+	tags TagProvider
 
 	// sessions 是控制台会话注册表。惰性创建：不用控制台的服务实例
 	// 不必为此分配内存。
@@ -169,6 +171,21 @@ type View struct {
 	// 为 false 时界面应隐藏控制台入口，而不是给一个点了打不开的按钮
 	// （f-2-08 R-011）。
 	HasConsole bool `json:"has_console"`
+
+	// Tags 是该虚拟机的标签。**只在列表接口填充**——详情只有一台，由它的
+	// 标签组件按需取更省一次查询。
+	//
+	// 列表里之所以要带它：标签是"这台机器是干什么的"的主要表达（分组之外
+	// 唯一的自由度），看不到标签就无法在列表上筛选与辨认。填充方式是
+	// **一次批量查询**（见 List），不是逐台关联——后者会让每次列表请求
+	// 变成上百次数据库往返。
+	Tags []string `json:"tags,omitempty"`
+
+	// Usage 是最近一次采样的资源占用；没有采样时为 null。
+	//
+	// null 与 0 必须分开：0 看起来像"这台机器很闲"，而实际可能是"还没采
+	// 到"或"机器已关机（采集器只采运行中的）"。
+	Usage *UsageView `json:"usage,omitempty"`
 
 	// Locked 表示该虚拟机被业务软锁保护（F-2-12），此时禁止删除。
 	//
@@ -288,11 +305,110 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]View, int64, error)
 		return nil, 0, api.Internal()
 	}
 
+	// 标签与最近占用**同样一次查完**，理由与锁定状态一致：列表页可能有
+	// 上百台，逐个查会把一次请求变成上百次往返。
+	//
+	// 两者都只在**列表**里填：详情页由它自己的标签组件按需取，而详情
+	// 只有一台，为它多一次查询没有意义。
+	tags := map[int64][]string{}
+	if s.tags != nil && len(ids) > 0 {
+		if tags, err = s.tags.TagsOf(ctx, ids); err != nil {
+			log.Printf("[vm] 查询标签失败: %v", err)
+			return nil, 0, api.Internal()
+		}
+	}
+	// 占用是**锦上添花**的一列，取不到就整列不显示，而不是让整个列表
+	// 失败：列表是找机器的入口，为一行显示不出百分比而拒绝它，代价不对等。
+	usage := map[int64]UsageView{}
+	if len(ids) > 0 {
+		var uerr error
+		if usage, uerr = s.latestUsage(ctx, ids); uerr != nil {
+			log.Printf("[vm] 查询最近占用失败（列表将不显示该列）: %v", uerr)
+			usage = map[int64]UsageView{}
+		}
+	}
+
 	views := make([]View, 0, len(vms))
 	for i := range vms {
-		views = append(views, toView(&vms[i], locks[vms[i].ID], now, threshold))
+		view := toView(&vms[i], locks[vms[i].ID], now, threshold)
+		if t, ok := tags[vms[i].ID]; ok && len(t) > 0 {
+			view.Tags = t
+		}
+		if u, ok := usage[vms[i].ID]; ok {
+			latest := u
+			view.Usage = &latest
+		}
+		views = append(views, view)
 	}
 	return views, total, nil
+}
+
+// TagProvider 批量读取虚拟机的标签。
+//
+// 声明成接口而不是直接依赖 vmtag 包：列表只需要"给我这几台的标签"，
+// 换出去之后测试不必构造一整套标签服务。
+type TagProvider interface {
+	TagsOf(ctx context.Context, vmIDs []int64) (map[int64][]string, error)
+}
+
+// SetTagProvider 装配标签来源。不调用时列表不带标签（详情页仍可编辑）。
+func (s *Service) SetTagProvider(p TagProvider) { s.tags = p }
+
+// UsageView 是一台虚拟机的**最近一次采样**占用。
+//
+// 它刻意**不来自实时探测**：列表一页 20 台，逐台探测就是 20 次跨节点往返
+// ——那是真正意义的 N+1，而且是最贵的那种。采样最旧 60 秒，对一个"路过
+// 看一眼"的列表来说完全够用；真要看此刻的数字，进详情页的监控。
+type UsageView struct {
+	CPUPercent float64 `json:"cpu_percent"`
+	MemPercent float64 `json:"mem_percent"`
+	MemUsedMB  int64   `json:"mem_used_mb"`
+	// At 是采样时刻。没有它的百分比与"现在"无法区分，而列表上恰恰需要
+	// 说明这一点——这是采样与实时的唯一区别。
+	At string `json:"at"`
+}
+
+// latestUsage 一次取多台虚拟机的最近一条采样。
+//
+// 只查采样表而**不下发探测**：这里的目标是在列表上给出"大致在用什么"，
+// 60 秒的延迟换掉 N 次网络往返是划算的。停机机器没有采样（采集器只采
+// 运行中），因此结果里没有它——调用方按"缺失"处理，而不是当作 0%。
+func (s *Service) latestUsage(ctx context.Context, vmIDs []int64) (map[int64]UsageView, error) {
+	out := make(map[int64]UsageView, len(vmIDs))
+	if len(vmIDs) == 0 {
+		return out, nil
+	}
+
+	var rows []struct {
+		VMID       int64     `gorm:"column:vm_id"`
+		CPUPercent float64   `gorm:"column:cpu_percent"`
+		MemPercent float64   `gorm:"column:mem_percent"`
+		MemUsedMB  int64     `gorm:"column:mem_used_mb"`
+		At         time.Time `gorm:"column:at"`
+	}
+	// 先取每台的最新时刻，再按 (vm_id, at) 取回那一条。
+	//
+	// 两步而不是窗口函数：ROW_NUMBER() 在 SQLite 与 PostgreSQL 上的可用
+	// 版本不同，而这条查询是列表页的关键路径——用两种数据库都支持的写法
+	// 比省一次查询重要。vm_id IN (...) 与 (vm_id, at) 索引都在。
+	err := s.db.WithContext(ctx).Raw(`
+		SELECT r.vm_id, r.cpu_percent, r.mem_percent, r.mem_used_mb, r.at
+		FROM vm_stats_record r
+		JOIN (
+			SELECT vm_id, MAX(at) AS at FROM vm_stats_record WHERE vm_id IN ? GROUP BY vm_id
+		) m ON r.vm_id = m.vm_id AND r.at = m.at`, vmIDs).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		out[rows[i].VMID] = UsageView{
+			CPUPercent: rows[i].CPUPercent,
+			MemPercent: rows[i].MemPercent,
+			MemUsedMB:  rows[i].MemUsedMB,
+			At:         rows[i].At.Format("2006-01-02T15:04:05Z07:00"),
+		}
+	}
+	return out, nil
 }
 
 // Get 返回虚拟机详情；不属于当前视角的返回 404（不泄漏其是否存在）。
