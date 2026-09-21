@@ -20,6 +20,7 @@ import {
   PUBLIC_IP_STATUS_TONE,
   RUNTIME_STATUS_LABEL,
   publicIPApi,
+  publicIPExtraApi,
   type PublicIPMode,
   type PublicIPView,
   type BatchResult,
@@ -44,6 +45,7 @@ export function PublicIPPage() {
   // 批量结果单独放：它可能**部分成功**，而那种情况不能用一句 notice 说完
   // ——用户需要看到哪几条失败了、为什么。
   const [batchResult, setBatchResult] = useState<BatchResult | null>(null)
+  const [prefixOpen, setPrefixOpen] = useState(false)
 
   const nodes = useQuery({ queryKey: ['nodes'], queryFn: nodeApi.list })
   const effectiveNodeID = nodeID || nodes.data?.[0]?.id || 0
@@ -58,6 +60,19 @@ export function PublicIPPage() {
     void queryClient.invalidateQueries({ queryKey: ['public-ips'] })
     void queryClient.invalidateQueries({ queryKey: ['tasks'] })
   }
+
+  const reload = useMutation({
+    mutationFn: () => publicIPExtraApi.reloadRules(effectiveNodeID),
+    onSuccess: (r) => {
+      setError('')
+      setNotice(
+        r.failed > 0
+          ? `已重载 ${r.applied} 条，${r.failed} 条失败${r.detail ? `：${r.detail}` : ''}`
+          : `已重载 ${r.applied} 条规则`,
+      )
+    },
+    onError: (err) => setError(describe(err)),
+  })
 
   const unbind = useMutation({
     mutationFn: (ip: PublicIPView) => publicIPApi.unbind(ip.id),
@@ -142,6 +157,26 @@ export function PublicIPPage() {
               ))}
             </select>
           </div>
+          {/* 前缀检测：一个 /64 有 2^64 个地址，手填既容易错、也回答不了
+              「还剩多少能分」。 */}
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={effectiveNodeID === 0}
+            onClick={() => setPrefixOpen(true)}
+          >
+            检测 IPv6 前缀
+          </Button>
+          {/* 重载：记录是对的、节点上漂了时用的。它按记录重新下发，因此不需要参数。 */}
+          <Button
+            size="sm"
+            variant="secondary"
+            loading={reload.isPending}
+            disabled={effectiveNodeID === 0}
+            onClick={() => reload.mutate()}
+          >
+            重载规则
+          </Button>
           <Button size="sm" disabled={effectiveNodeID === 0} onClick={() => setCreateOpen(true)}>
             录入地址
           </Button>
@@ -288,6 +323,12 @@ export function PublicIPPage() {
           </div>
         </div>
       )}
+
+      <IPv6PrefixModal
+        open={prefixOpen}
+        nodeID={effectiveNodeID}
+        onClose={() => setPrefixOpen(false)}
+      />
 
       <CreateIPModal
         open={createOpen}
@@ -673,6 +714,69 @@ function DiffList({
         ))}
       </ul>
     </div>
+  )
+}
+
+/**
+ * IPv6PrefixModal 展示节点上检测到的 IPv6 前缀。
+ *
+ * **未授信的前缀也要列出来**：过滤掉它们会让人以为"检测到的都能用"，而那
+ * 恰恰是需要用户自己判断的部分——能不能用取决于本地路由与上游通告，只有
+ * 节点能给出这个判断。
+ */
+function IPv6PrefixModal({
+  open,
+  nodeID,
+  onClose,
+}: {
+  open: boolean
+  nodeID: number
+  onClose: () => void
+}) {
+  const list = useQuery({
+    queryKey: ['ipv6-prefixes', nodeID],
+    queryFn: () => publicIPExtraApi.detectIPv6Prefixes(nodeID),
+    enabled: open && nodeID > 0,
+  })
+
+  const items = list.data?.items ?? []
+
+  return (
+    <Modal
+      open={open}
+      title="IPv6 前缀"
+      description="来自宿主机外网网卡的实际配置，而不是手动录入的值。"
+      onClose={onClose}
+      footer={
+        <Button size="sm" onClick={onClose}>
+          关闭
+        </Button>
+      }
+    >
+      {items.length === 0 ? (
+        <p className="text-base text-ink-3">没有检测到 IPv6 前缀。</p>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {items.map((p) => (
+            <li
+              key={p.prefix}
+              className="flex flex-wrap items-center justify-between gap-2 rounded-control border border-line px-3 py-2"
+            >
+              <span className="kc-mono text-ink">{p.prefix}</span>
+              <span className="flex items-center gap-2">
+                {p.egress_if && <span className="text-xs text-ink-3">{p.egress_if}</span>}
+                <StatusBadge tone={p.trusted ? 'success' : 'warning'}>
+                  {p.trusted ? '可用' : '不可用'}
+                </StatusBadge>
+                {p.assignable >= 0 && (
+                  <span className="kc-nums text-xs text-ink-3">可分配 {p.assignable}</span>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Modal>
   )
 }
 

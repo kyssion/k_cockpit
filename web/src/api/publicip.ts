@@ -182,3 +182,42 @@ export const RUNTIME_STATUS_LABEL: Record<RuntimeStatus, string> = {
   active: '已生效',
   failed: '生效失败',
 }
+
+/** 检测到的一个 IPv6 前缀。 */
+export interface IPv6PrefixView {
+  prefix: string
+  egress_if?: string
+  /** 节点认为它可用（已通过可达性检查）。 */
+  trusted: boolean
+  /** 还能分配的地址数估算；-1 表示未知。 */
+  assignable: number
+}
+
+/** 规则重载的结果。 */
+export interface ReloadResultView {
+  applied: number
+  failed: number
+  detail?: string
+  message: string
+}
+
+/** 来宾里实际配置的一个公网地址。 */
+export interface GuestIPView {
+  address: string
+  family: string
+  /** 来宾里真的配上了。绑定成功 ≠ 配好了。 */
+  configured: boolean
+  reachable: boolean
+  detail?: string
+}
+
+export const publicIPExtraApi = {
+  detectIPv6Prefixes: (nodeID: number) =>
+    get<{ items: IPv6PrefixView[] }>('/api/v1/public-ips/ipv6-prefixes', { node_id: nodeID }),
+
+  reloadRules: (nodeID: number) =>
+    post<ReloadResultView>('/api/v1/public-ips/reload', { node_id: nodeID }),
+
+  guestStatus: (vmID: number) =>
+    get<{ items: GuestIPView[] }>(`/api/v1/vms/${vmID}/public-ips/guest-status`),
+}
