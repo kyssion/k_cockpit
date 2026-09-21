@@ -637,8 +637,18 @@ function ExportRow({
         {item.error && <span className="block text-xs text-danger">{item.error}</span>}
       </td>
       <td className="px-4 py-2.5 text-right">
+        {/* 下载用链接而不是按钮：导出包是文件，走浏览器的下载通道即可，
+            不必先读进 JS 内存。 */}
+        {done && (
+          <a
+            className="text-sm text-brand hover:underline"
+            href={`/api/v1/template-exports/${item.id}/download`}
+          >
+            下载
+          </a>
+        )}
         <button
-          className="text-sm text-danger hover:underline disabled:text-ink-3 disabled:no-underline"
+          className="ml-3 text-sm text-danger hover:underline disabled:text-ink-3 disabled:no-underline"
           disabled={pending}
           onClick={onDelete}
         >

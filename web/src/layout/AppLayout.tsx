@@ -8,6 +8,7 @@ import { CommandPalette } from '@/components/common/CommandPalette'
 import { RiskVerificationGate } from '@/components/risk/RiskVerificationGate'
 import { TabBar } from '@/components/common/TabBar'
 import { TaskTray } from '@/components/common/TaskTray'
+import { rememberVisit } from '@/utils/recentVisits'
 import { useTaskStream } from '@/hooks/useTaskStream'
 import { LANGS, t } from '@/locales'
 import { useLocaleStore } from '@/stores/locale'
@@ -99,7 +100,12 @@ export function AppLayout() {
   const location = useLocation()
   const openTab = useTabStore((s) => s.open)
   useEffect(() => {
-    openTab(location.pathname, titleFor(location.pathname))
+    const title = titleFor(location.pathname)
+    openTab(location.pathname, title)
+    // 最近访问：它只是"我刚才看了哪几台机器"这一层便利，放在本地即可。
+    // 详情页拿到机器名后会用 setTabTitle 改成真名，这里只能是类名，
+    // 因此 RecentVisits 展示的是「虚拟机 / 节点」这一类标题加路径。
+    rememberVisit(location.pathname, title)
   }, [location.pathname, openTab])
 
   // ⌘K / Ctrl+K 唤起全局搜索。阻止默认行为是必要的：浏览器把这个组合键

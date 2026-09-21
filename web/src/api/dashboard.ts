@@ -90,6 +90,77 @@ export interface DashboardSummary {
   recent_vms: DashboardRecentVM[]
 }
 
+/** KSM / zRAM 状态（取自宿主机调优，与调优页同一份口径）。 */
+export interface TuningStateView {
+  enabled?: boolean
+  /** KSM 省下的内存（字节）。 */
+  saved_bytes?: number
+  shared_pages?: number
+  scan_rounds?: number
+  /** 挡位：保守 / 均衡 / 极致。 */
+  level?: string
+  supported?: boolean
+}
+
+export interface TuningView {
+  node_id: number
+  ksm: TuningStateView
+  zram: TuningStateView
+}
+
+/** 一个内存插槽。 */
+export interface MemSlotView {
+  index: number
+  size_mb: number
+  populated: boolean
+  label?: string
+}
+
+export interface HostHardwareView {
+  cpu_model?: string
+  sockets: number
+  cores_per_socket: number
+  threads_per_core: number
+  /** 每个逻辑核心的占用百分比，顺序即核心编号。 */
+  core_percent: number[]
+  mem_slots: MemSlotView[]
+  /** 非空表示**探测不到**，而不是"这台机器没有内存"。 */
+  unavailable?: string
+}
+
+export interface BridgeStatView {
+  name: string
+  rx_bytes: number
+  tx_bytes: number
+  rx_packets: number
+  tx_packets: number
+}
+
+export interface HostNetStatsView {
+  nat_rules: number
+  switch_ingress_bytes: number
+  switch_egress_bytes: number
+  dnat_rules: number
+  bridges: BridgeStatView[]
+  unavailable?: string
+}
+
+/** 某个节点的宿主机细节。三块各自独立失败，因此都可能带 unavailable。 */
+export interface HostDetailView {
+  node_id: number
+  node_name: string
+  tuning?: TuningView
+  hardware?: HostHardwareView
+  netstats?: HostNetStatsView
+}
+
 export const dashboardApi = {
   summary: () => get<DashboardSummary>('/api/v1/dashboard/summary'),
+
+  /**
+   * 宿主机细节。**按节点**查询：它需要向节点发请求，因此不并进概览——
+   * 否则首页会变成一次探测风暴。
+   */
+  hostDetail: (nodeID: number) =>
+    get<HostDetailView>('/api/v1/dashboard/host-detail', { node_id: nodeID }),
 }

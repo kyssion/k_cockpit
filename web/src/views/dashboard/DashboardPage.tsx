@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 
 import { ApiError, NetworkError } from '@/api/client'
@@ -7,14 +8,19 @@ import {
   type DashboardAllocation,
   type DashboardHost,
   type DashboardSummary,
+  type HostHardwareView,
+  type HostNetStatsView,
+  type TuningStateView,
+  type TuningView,
 } from '@/api/dashboard'
+import { nodeApi } from '@/api/node'
 import { Button } from '@/components/common/Button'
 import { EmptyState, PageLoading } from '@/components/common/Feedback'
-import { Meter } from '@/components/common/Meter'
 import { StatusBadge } from '@/components/common/StatusBadge'
 import { useSessionStore } from '@/stores/session'
 import { cn } from '@/utils/cn'
 import { formatBytes, relativeTime } from '@/utils/format'
+import { readRecentVisits } from '@/utils/recentVisits'
 import { VM_STATUS_LABEL, VM_STATUS_TONE } from '@/utils/labels'
 import type { VmStatus } from '@/api/vm'
 
@@ -97,9 +103,15 @@ export function DashboardPage() {
             />
           </div>
 
-          {user?.role === 'admin' && <HostCard host={summary.data.host} />}
+          {user?.role === 'admin' && (
+            <HostCard host={summary.data.host} allocation={summary.data.allocation} />
+          )}
 
           <CommitCard allocation={summary.data.allocation} host={summary.data.host} />
+
+          {user?.role === 'admin' && <HostDetailSection />}
+
+          <RecentVisits />
 
           <section className="rounded-card border border-line bg-surface">
             <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
@@ -263,7 +275,23 @@ function StatCard({
  * 它去逐节点探测等于把探测频率交给用户的刷新行为。采样时间因此必须显示
  * 出来——一个没有时刻的百分比，用户无法判断它是刚才的还是一小时前的。
  */
-function HostCard({ host }: { host?: DashboardHost | null }) {
+/**
+ * HostCard 宿主机资源。
+ *
+ * 每条都是**双进度条**：上面是此刻实际用了多少，下面是"理论最大"——
+ * 即运行中的虚拟机全部跑满时最多会占多少。
+ *
+ * 两条必须同时给：只看实际用量，用户不知道还剩多少余量能再开一台；
+ * 只看理论最大，他又会以为那些余量已经被用掉了。两者叠在一条上会出现
+ * 无法解释的百分比，因此各占一条。
+ */
+function HostCard({
+  host,
+  allocation,
+}: {
+  host?: DashboardHost | null
+  allocation: DashboardAllocation
+}) {
   if (!host) {
     return (
       <section className="rounded-card border border-dashed border-line-strong px-4 py-4">
@@ -288,19 +316,79 @@ function HostCard({ host }: { host?: DashboardHost | null }) {
         </p>
       </div>
       <div className="mt-3 grid gap-4 sm:grid-cols-3">
-        <Meter label="CPU" detail={`${host.cpu_cores} 核`} percent={host.cpu_percent} />
-        <Meter
+        <DualMeter
+          label="CPU"
+          detail={`${host.cpu_cores} 核`}
+          current={host.cpu_percent}
+          ceiling={host.cpu_cores > 0 ? (allocation.running_vcpu / host.cpu_cores) * 100 : null}
+        />
+        <DualMeter
           label="内存"
           detail={`${formatBytes(host.mem_used_mb * 1024 * 1024)} / ${formatBytes(host.mem_total_mb * 1024 * 1024)}`}
-          percent={memPercent}
+          current={memPercent}
+          ceiling={
+            host.mem_total_mb > 0 ? (allocation.running_memory_mb / host.mem_total_mb) * 100 : null
+          }
         />
-        <Meter
+        <DualMeter
           label="存储池"
           detail={`${formatBytes(host.disk_used_bytes)} / ${formatBytes(host.disk_total_bytes)}`}
-          percent={diskPercent}
+          current={diskPercent}
+          ceiling={
+            host.disk_total_bytes > 0
+              ? ((allocation.disk_gb * 1024 * 1024 * 1024) / host.disk_total_bytes) * 100
+              : null
+          }
         />
       </div>
+      <p className="mt-3 text-xs text-ink-3">
+        每条的上栏是此刻的实际占用，下栏是<strong className="font-normal text-ink-2">理论最大</strong>
+        ——即运行中的虚拟机同时满载时的占用。
+      </p>
     </section>
+  )
+}
+
+/** 单条细进度条。放在双进度条里用，因此不带标签。 */
+function Bar({ percent, tone }: { percent: number; tone: 'current' | 'ceiling' }) {
+  const width = Math.max(0, Math.min(100, percent))
+  return (
+    <div className="h-1.5 w-full overflow-hidden rounded-pill bg-sunken">
+      <div
+        className={cn('h-full rounded-pill', tone === 'current' ? 'bg-brand' : 'bg-ink-3/50')}
+        style={{ width: `${width}%` }}
+      />
+    </div>
+  )
+}
+
+function DualMeter({
+  label,
+  detail,
+  current,
+  ceiling,
+}: {
+  label: string
+  detail: string
+  current: number
+  /** 理论最大占比；宿主总量未知时为 null，此时只画实际那条。 */
+  ceiling: number | null
+}) {
+  return (
+    <div>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-base text-ink-3">{label}</span>
+        <span className="kc-nums text-xs text-ink-2">{detail}</span>
+      </div>
+      <div className="mt-1.5 flex flex-col gap-1">
+        <Bar percent={current} tone="current" />
+        {ceiling !== null && <Bar percent={ceiling} tone="ceiling" />}
+      </div>
+      <p className="kc-nums mt-1 text-xs text-ink-3">
+        实际 {current.toFixed(0)}%
+        {ceiling !== null && ` · 理论最大 ${ceiling.toFixed(0)}%`}
+      </p>
+    </div>
   )
 }
 
@@ -370,6 +458,233 @@ function CommitItem({
         {percent !== null && percent !== undefined && ` · 占宿主 ${percent.toFixed(0)}%`}
       </p>
     </div>
+  )
+}
+
+/**
+ * HostDetailSection 宿主机细节：调优（KSM / zRAM）、硬件构成、网络统计。
+ *
+ * **按节点**加载而不是随概览一起返回：这三块都要向节点发请求，放进概览
+ * 会让首页在节点多时变慢，且某个节点不支持探测时会把整页拖成错误。
+ *
+ * 节点下拉是必须的：多节点部署里，"内存插了几条""网桥转发了多少"没有
+ * 主语就没有任何意义。
+ */
+function HostDetailSection() {
+  const nodes = useQuery({ queryKey: ['nodes'], queryFn: nodeApi.list })
+  const [nodeID, setNodeID] = useState(0)
+
+  const effectiveNodeID = nodeID || nodes.data?.[0]?.id || 0
+  const detail = useQuery({
+    queryKey: ['dashboard-host-detail', effectiveNodeID],
+    queryFn: () => dashboardApi.hostDetail(effectiveNodeID),
+    enabled: effectiveNodeID > 0,
+    // 这些是"查看一次"的信息，不跟着概览刷新。
+    refetchInterval: 30000,
+  })
+
+  if (nodes.isPending) return null
+
+  return (
+    <section className="rounded-card border border-line bg-surface">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
+        <h2 className="text-md font-medium text-ink">宿主机细节</h2>
+        <div className="flex items-center gap-2">
+          <select
+            value={effectiveNodeID}
+            onChange={(e) => setNodeID(Number(e.target.value))}
+            className="h-8 rounded-control border border-line-strong bg-sunken px-2 text-base text-ink"
+          >
+            {(nodes.data ?? []).map((n) => (
+              <option key={n.id} value={n.id}>
+                {n.name}
+              </option>
+            ))}
+          </select>
+          <Link to="/host-tuning" className="text-base text-brand hover:underline">
+            调优设置 →
+          </Link>
+        </div>
+      </div>
+
+      {detail.isError ? (
+        <p className="px-4 py-3 text-base text-danger">{describe(detail.error)}</p>
+      ) : (
+        <div className="grid gap-4 px-4 py-3.5 lg:grid-cols-3">
+          <TuningBlock tuning={detail.data?.tuning} />
+          <HardwareBlock hardware={detail.data?.hardware} />
+          <NetStatsBlock stats={detail.data?.netstats} />
+        </div>
+      )}
+    </section>
+  )
+}
+
+/** KSM / zRAM。数据来自调优服务，因此与调优页是同一份口径。 */
+function TuningBlock({ tuning }: { tuning?: TuningView }) {
+  return (
+    <div>
+      <h3 className="text-base text-ink">KSM / zRAM</h3>
+      {!tuning ? (
+        <p className="mt-1 text-sm text-ink-3">暂无数据</p>
+      ) : (
+        <dl className="mt-1.5 flex flex-col gap-1 text-sm">
+          <TuningRow label="KSM 去重" state={tuning.ksm} />
+          <TuningRow label="zRAM 压缩" state={tuning.zram} />
+        </dl>
+      )}
+    </div>
+  )
+}
+
+function TuningRow({ label, state }: { label: string; state?: TuningStateView }) {
+  if (!state) return null
+  return (
+    <div className="flex items-baseline justify-between gap-2">
+      <dt className="text-ink-2">{label}</dt>
+      <dd className="kc-nums text-ink-3">
+        <StatusBadge tone={state.enabled ? 'success' : 'idle'}>
+          {state.enabled ? '已启用' : '未启用'}
+        </StatusBadge>
+        {state.enabled && state.saved_bytes ? (
+          <span className="ml-1.5">省 {formatBytes(state.saved_bytes)}</span>
+        ) : null}
+      </dd>
+    </div>
+  )
+}
+
+/**
+ * 硬件构成：CPU 拓扑与每核占用、内存插槽。
+ *
+ * "探测不到"要如实说：一个空列表会被读成"这台机器没有内存条"，而实际
+ * 只是节点还没实现这个能力。
+ */
+function HardwareBlock({ hardware }: { hardware?: HostHardwareView }) {
+  if (!hardware) return <p className="text-sm text-ink-3">硬件信息加载中…</p>
+  if (hardware.unavailable) {
+    return (
+      <div>
+        <h3 className="text-base text-ink">硬件</h3>
+        <p className="mt-1 text-sm text-ink-3">{hardware.unavailable}</p>
+      </div>
+    )
+  }
+
+  const cores = hardware.core_percent ?? []
+  return (
+    <div>
+      <h3 className="text-base text-ink">硬件</h3>
+      <p className="mt-1 text-sm text-ink-2">
+        {hardware.cpu_model || 'CPU'} · {hardware.sockets} 路 × {hardware.cores_per_socket} 核 ×{' '}
+        {hardware.threads_per_core} 线程
+      </p>
+
+      {/* 每核一个色块：一眼看出是不是某几个核被打满（那是绑核或中断集中
+          的典型表现，只给一个平均值看不出来）。 */}
+      {cores.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-0.5">
+          {cores.map((p, i) => (
+            <span
+              key={i}
+              title={`核心 ${i + 1}：${p.toFixed(1)}%`}
+              className={cn(
+                'h-3 w-3 rounded-[2px]',
+                p >= 80 ? 'bg-danger' : p >= 50 ? 'bg-warning' : p >= 20 ? 'bg-brand/70' : 'bg-sunken',
+              )}
+            />
+          ))}
+        </div>
+      )}
+
+      <ul className="mt-2 flex flex-col gap-0.5 text-sm">
+        {hardware.mem_slots.map((s) => (
+          <li key={s.index} className="flex items-baseline justify-between gap-2">
+            <span className="text-ink-2">插槽 {s.index}</span>
+            <span className={cn('kc-nums', s.populated ? 'text-ink-3' : 'text-ink-3/60')}>
+              {s.populated ? `${formatBytes(s.size_mb * 1024 * 1024)}${s.label ? ` · ${s.label}` : ''}` : '空闲'}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+/** 网络统计：规则条数与交换机/网桥计数。 */
+function NetStatsBlock({ stats }: { stats?: HostNetStatsView }) {
+  if (!stats) return <p className="text-sm text-ink-3">网络统计加载中…</p>
+  if (stats.unavailable) {
+    return (
+      <div>
+        <h3 className="text-base text-ink">网络统计</h3>
+        <p className="mt-1 text-sm text-ink-3">{stats.unavailable}</p>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <h3 className="text-base text-ink">网络统计</h3>
+      <dl className="mt-1.5 flex flex-col gap-1 text-sm">
+        <Row label="NAT 网关规则" value={`${stats.nat_rules} 条`} />
+        <Row label="iptables DNAT" value={`${stats.dnat_rules} 条`} />
+        <Row label="交换机入口" value={formatBytes(stats.switch_ingress_bytes)} />
+        <Row label="交换机出口" value={formatBytes(stats.switch_egress_bytes)} />
+      </dl>
+      {stats.bridges.length > 0 && (
+        <ul className="mt-2 flex flex-col gap-0.5 text-xs">
+          {stats.bridges.map((b) => (
+            <li key={b.name} className="flex items-baseline justify-between gap-2">
+              <span className="text-ink-2">{b.name}</span>
+              <span className="kc-nums text-ink-3">
+                ↓{formatBytes(b.rx_bytes)} ↑{formatBytes(b.tx_bytes)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-2">
+      <dt className="text-ink-2">{label}</dt>
+      <dd className="kc-nums text-ink-3">{value}</dd>
+    </div>
+  )
+}
+
+/**
+ * RecentVisits 最近访问。
+ *
+ * 用 localStorage 而不是后端：它只是"我刚才看了哪几台机器"这一层便利，
+ * 为它建一张表并让每次打开详情页都写一次库并不划算。
+ */
+function RecentVisits() {
+  const visits = readRecentVisits()
+  if (visits.length === 0) return null
+
+  return (
+    <section className="rounded-card border border-line bg-surface">
+      <div className="border-b border-line px-4 py-2.5">
+        <h2 className="text-base font-medium text-ink">最近访问</h2>
+      </div>
+      <ul className="flex flex-wrap gap-2 px-4 py-3">
+        {visits.map((v) => (
+          <li key={v.path}>
+            <Link
+              to={v.path}
+              className="rounded-pill border border-line px-3 py-1 text-sm text-ink-2 hover:border-brand/40 hover:text-ink"
+            >
+              {v.title}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }
 
