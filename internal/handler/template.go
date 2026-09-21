@@ -62,6 +62,8 @@ type createTemplateRequest struct {
 	OSVariant string `json:"os_variant"`
 	Remark    string `json:"remark"`
 	Published bool   `json:"published"`
+	// ParentID 非空表示制备的是**某个模板的新版本**（F-3-04）。
+	ParentID *int64 `json:"parent_id"`
 }
 
 // CreateFromVM 从一台虚拟机的系统盘制备模板（API-076）。
@@ -78,6 +80,7 @@ func (h *Template) CreateFromVM(ctx context.Context, c *app.RequestContext) {
 	t, err := h.svc.CreateFromVM(ctx, template.CreateFromVMRequest{
 		VMID: req.VMID, Name: req.Name, OSType: req.OSType,
 		OSVariant: req.OSVariant, Remark: req.Remark, Published: req.Published,
+		ParentID: req.ParentID,
 	}, authz.ViewerOf(c), user.Username, info.IP)
 	if err != nil {
 		api.Fail(c, err)
@@ -148,20 +151,51 @@ func (h *Template) DeletePreview(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, view)
 }
 
+// deleteTemplateRequest 是删除请求。
+//
+// Strategy 只在**存在派生模板**时才有意义；链式克隆没有任何策略可以绕过
+// （任何策略都意味着接受数据丢失）。
+type deleteTemplateRequest struct {
+	Strategy string `json:"strategy"`
+}
+
 func (h *Template) Delete(ctx context.Context, c *app.RequestContext) {
 	id, err := namedPathID(c, "id", "模板 ID")
 	if err != nil {
 		api.Fail(c, err)
 		return
 	}
+	var req deleteTemplateRequest
+	// 删除策略在查询串里也接受：DELETE 携带 body 并非所有客户端都支持，
+	// 与虚拟机删除那里保持同一做法。
+	_ = c.Bind(&req)
+	if req.Strategy == "" {
+		req.Strategy = c.Query("strategy")
+	}
 
 	user := auth.CurrentUser(c)
 	info := auth.ClientInfoOf(c)
 
-	t, err := h.svc.Delete(ctx, id, authz.ViewerOf(c), user.Username, info.IP)
+	t, err := h.svc.Delete(ctx, id, template.DeleteRequest{Strategy: req.Strategy},
+		authz.ViewerOf(c), user.Username, info.IP)
 	if err != nil {
 		api.Fail(c, err)
 		return
 	}
 	api.OK(c, map[string]any{"task_id": t.ID, "status": t.Status})
+}
+
+// Family 返回同一个模板族的全部版本（F-3-04）。
+func (h *Template) Family(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "模板 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	items, err := h.svc.Family(ctx, id, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"items": items})
 }

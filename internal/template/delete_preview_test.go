@@ -8,6 +8,7 @@ import (
 
 	"k_cockpit/internal/authz"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/template"
 )
 
 func adminViewer() authz.Viewer {
@@ -166,7 +167,7 @@ func TestDeletePreviewMatchesDelete(t *testing.T) {
 				t.Fatalf("预览失败: %v", err)
 			}
 
-			_, delErr := tsvc.Delete(ctx, 10, adminViewer(), "root", "")
+			_, delErr := tsvc.Delete(ctx, 10, template.DeleteRequest{}, adminViewer(), "root", "")
 			if (delErr != nil) != tc.wantErr {
 				t.Fatalf("删除结果与预期不符: err=%v", delErr)
 			}

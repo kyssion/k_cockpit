@@ -68,6 +68,13 @@ type View struct {
 
 	DefaultCPU      int `json:"default_cpu"`
 	DefaultMemoryMB int `json:"default_memory_mb"`
+	// 默认硬件：克隆时的默认值，取自源虚拟机。为空表示沿用系统默认。
+	DefaultDiskBus     string `json:"default_disk_bus,omitempty"`
+	DefaultNicModel    string `json:"default_nic_model,omitempty"`
+	DefaultMachineType string `json:"default_machine_type,omitempty"`
+	DefaultFirmware    string `json:"default_firmware,omitempty"`
+	// DefaultVideoModel 取自源虚拟机的显示设备类型。
+	DefaultVideoModel string `json:"default_video_model,omitempty"`
 
 	Published  bool   `json:"published"`
 	Visibility string `json:"visibility"`
@@ -78,6 +85,9 @@ type View struct {
 
 	// ParentID 非空表示它是从另一个模板派生的（链式克隆的父级）。
 	ParentID *int64 `json:"parent_id,omitempty"`
+	// FamilyID 是这条派生链的**根模板 ID**。它与 version 一起回答"这是第
+	// 几代、和谁是同一族"，界面据此把同一族的多个版本收在一起。
+	FamilyID *int64 `json:"family_id,omitempty"`
 	// Error 仅在制备失败时有值。
 	Error string `json:"error,omitempty"`
 
@@ -151,6 +161,13 @@ type CreateFromVMRequest struct {
 	Remark    string
 	// Published 表示制备完成后立即发布给其他用户。
 	Published bool
+	// ParentID 非空表示这是**某个模板的新版本**（F-3-04）：新模板会挂到
+	// 同一族上，版本号在该族内自增。
+	//
+	// 它不改变制备动作本身（仍然是复制这台机器的系统盘），只改变新模板在
+	// 族里的位置——同一个模板可以有 v1（基础系统）与 v2（装好了运行时），
+	// 而用户要能看出后者是从前者来的。
+	ParentID *int64
 }
 
 // CreateFromVM 从一台虚拟机的系统盘制备模板（F-3-01）。
@@ -230,6 +247,33 @@ func (s *Service) CreateFromVM(
 		}
 	}
 
+	// 派生制备：确定族与版本号。
+	var familyID *int64
+	version := 1
+	if req.ParentID != nil {
+		parent, err := s.load(ctx, *req.ParentID, v)
+		if err != nil {
+			return nil, err
+		}
+		// 派生必须同节点：模板盘就在那个节点的存储池里，跨节点的"新版本"
+		// 无法复用它的 backing 链，也无从保证内容真的来自那个父模板。
+		if parent.NodeID != vmRow.NodeID {
+			return nil, api.ValidationFailed("父模板不在同一节点上，无法作为新版本的来源")
+		}
+		if parent.Status != model.TemplateReady {
+			return nil, api.ValidationFailed("父模板尚未就绪，不能派生新版本")
+		}
+		fid := parent.ID
+		if parent.FamilyID != nil {
+			fid = *parent.FamilyID
+		}
+		familyID = &fid
+		version, err = s.nextVersion(ctx, fid)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	t, err := s.queue.Enqueue(ctx, task.Spec{
 		Type: model.TaskTemplatePrepare,
 		// 资源锁键是 vm:<id>：制备要读系统盘，必须与电源操作、快照串行，
@@ -251,9 +295,18 @@ func (s *Service) CreateFromVM(
 			"published":  req.Published,
 			// 默认硬件参数取自源虚拟机——这是最合理的猜测，用户可以在
 			// 克隆时覆盖。不取的话每次克隆都要重新填一遍。
-			"default_cpu":       vmRow.VCPU,
-			"default_memory_mb": vmRow.MemoryMB,
-			"disk_size_gb":      vmRow.DiskGB,
+			"default_cpu":          vmRow.VCPU,
+			"default_memory_mb":    vmRow.MemoryMB,
+			"disk_size_gb":         vmRow.DiskGB,
+			"default_disk_bus":     vmRow.DiskBus,
+			"default_nic_model":    vmRow.NicModel,
+			"default_machine_type": vmRow.MachineType,
+			"default_firmware":     vmRow.Firmware,
+			"default_display":      vmRow.DisplayDevice,
+			// 族与版本：只有派生制备才有值，独立制备时留空（version 仍为 1）。
+			"parent_id": req.ParentID,
+			"family_id": familyID,
+			"version":   version,
 		},
 	})
 	if err != nil {
@@ -262,6 +315,51 @@ func (s *Service) CreateFromVM(
 
 	s.record(ctx, v.UserID, operatorName, clientIP, "template.prepare", vmRow.NodeID, req.Name, t.ID)
 	return t, nil
+}
+
+// nextVersion 返回该族的下一个版本号。
+//
+// 取**族内最大值 + 1**而不是"父版本 + 1"：同一个父下派生两次应当得到
+// v2 与 v3；按父版本算则两者都叫 v2，而名字唯一约束会让第二次制备以一个
+// 看不懂的冲突失败。
+func (s *Service) nextVersion(ctx context.Context, familyID int64) (int, error) {
+	var maxVersion int
+	if err := s.db.WithContext(ctx).Model(&model.Template{}).
+		Where("family_id = ?", familyID).
+		Select("COALESCE(MAX(version), 0)").Scan(&maxVersion).Error; err != nil {
+		log.Printf("[template] 计算版本号失败 family=%d: %v", familyID, err)
+		return 0, api.Internal()
+	}
+	return maxVersion + 1, nil
+}
+
+// Family 返回同一个模板族里的全部模板（按版本排序）。
+//
+// 前端用它渲染"这一族有几个版本"，删除策略用它预览会波及哪些。排序按
+// version 而不是 created_at：版本号才是"第几代"，而制备时间可能因为重试
+// 而倒挂。
+func (s *Service) Family(ctx context.Context, id int64, v authz.Viewer) ([]View, error) {
+	tpl, err := s.load(ctx, id, v)
+	if err != nil {
+		return nil, err
+	}
+	fid := tpl.ID
+	if tpl.FamilyID != nil {
+		fid = *tpl.FamilyID
+	}
+
+	var rows []model.Template
+	if err := s.db.WithContext(ctx).
+		Where("id = ? OR family_id = ?", fid, fid).
+		Order("version ASC, id ASC").Find(&rows).Error; err != nil {
+		log.Printf("[template] 查询模板族失败 family=%d: %v", fid, err)
+		return nil, api.Internal()
+	}
+	out := make([]View, 0, len(rows))
+	for i := range rows {
+		out = append(out, toView(&rows[i]))
+	}
+	return out, nil
 }
 
 // UpdateRequest 修改模板的展示属性。
@@ -318,16 +416,35 @@ func (s *Service) Update(
 	return updated, nil
 }
 
+// 删除派生链的策略。
+const (
+	// DeleteStrategyCascade 连同整条派生链一起删除。
+	DeleteStrategyCascade = "cascade"
+	// DeleteStrategyPromote 把下一级提升为独立模板（挂到自己的父级上），
+	// 只删这一个。
+	//
+	// 它对应一个真实需求：v1 已经过时，但 v2 / v3 还在被使用——此时"删掉
+	// 整条链"是错的，而"因为下游还在就不能删"同样不对。
+	DeleteStrategyPromote = "promote"
+)
+
+// DeleteRequest 是一次删除请求。
+type DeleteRequest struct {
+	// Strategy 仅在存在派生模板时有效，取值见 DeleteStrategy*。
+	Strategy string
+}
+
 // Delete 删除模板。
 //
 // **链式克隆的存在会阻止删除**：linked 克隆体的磁盘只是一个 overlay，
 // 父盘一删，那些虚拟机的数据就不可用了——而且不会立刻报错，要等到下次
-// 开机或读某个未缓存的数据块时才暴露。
+// 开机或读某个未缓存的数据块时才暴露。这类依赖**没有策略可以绕过**：
+// 任何策略都意味着接受数据丢失，那不该由一次点击决定。
 //
-// 因此这里同步检查并拒绝，同时告诉用户有几个克隆体、以及可以先做什么
-// （把那些克隆体转为独立虚拟机，f-3-02）。
+// 派生模板则不同：它是一条版本链，删掉中间一代有两种合理做法（级联、提
+// 升），因此把选择交给用户，并由 Strategy 显式表达。
 func (s *Service) Delete(
-	ctx context.Context, id int64, v authz.Viewer, operatorName, clientIP string,
+	ctx context.Context, id int64, req DeleteRequest, v authz.Viewer, operatorName, clientIP string,
 ) (*model.Task, error) {
 	tpl, err := s.load(ctx, id, v)
 	if err != nil {
@@ -341,8 +458,35 @@ func (s *Service) Delete(
 	if err != nil {
 		return nil, err
 	}
+
+	ids := []int64{tpl.ID}
+	paths := []string{tpl.DiskPathOf()}
+
+	for _, b := range blockers {
+		if b.Kind == "linked_vm" {
+			return nil, api.Conflict(b.message())
+		}
+	}
 	if len(blockers) > 0 {
-		return nil, api.Conflict(blockers[0].message())
+		switch req.Strategy {
+		case DeleteStrategyCascade:
+			children, err := s.descendants(ctx, tpl.ID)
+			if err != nil {
+				return nil, err
+			}
+			for i := range children {
+				ids = append(ids, children[i].ID)
+				if children[i].DiskPath != nil && *children[i].DiskPath != "" {
+					paths = append(paths, *children[i].DiskPath)
+				}
+			}
+		case DeleteStrategyPromote:
+			if err := s.promoteChildren(ctx, tpl); err != nil {
+				return nil, err
+			}
+		default:
+			return nil, api.Conflict(blockers[0].message())
+		}
 	}
 
 	t, err := s.queue.Enqueue(ctx, task.Spec{
@@ -354,9 +498,12 @@ func (s *Service) Delete(
 		OwnerID:      v.UserID,
 		CreatedBy:    v.UserID,
 		Params: map[string]any{
-			"template_id": tpl.ID,
-			"name":        tpl.Name,
-			"disk_path":   tpl.DiskPathOf(),
+			"template_id":  tpl.ID,
+			"name":         tpl.Name,
+			"disk_path":    tpl.DiskPathOf(),
+			"template_ids": ids,
+			"disk_paths":   paths,
+			"strategy":     req.Strategy,
 		},
 	})
 	if err != nil {
@@ -365,6 +512,21 @@ func (s *Service) Delete(
 
 	s.record(ctx, v.UserID, operatorName, clientIP, "template.delete", tpl.NodeID, tpl.Name, t.ID)
 	return t, nil
+}
+
+// promoteChildren 把直接子级挂到自己的父级上，让它们成为独立的一支。
+//
+// 族不变：它们仍然是"同一个模板的后代"，只是不再依赖被删掉的这一代。
+// 把族也拆开会丢失"这些版本同源"这条信息，而那正是族存在的意义。
+func (s *Service) promoteChildren(ctx context.Context, tpl *model.Template) error {
+	res := s.db.WithContext(ctx).Model(&model.Template{}).
+		Where("parent_id = ?", tpl.ID).
+		Updates(map[string]any{"parent_id": tpl.ParentID})
+	if res.Error != nil {
+		log.Printf("[template] 提升子模板失败 id=%d: %v", tpl.ID, res.Error)
+		return api.Internal()
+	}
+	return nil
 }
 
 // load 读取模板并做可见性检查。
@@ -403,6 +565,12 @@ type DeletePreviewView struct {
 	// ——那时预览里仍要说明「没有依赖，删掉只是释放磁盘」。
 	LinkedVMCount int `json:"linked_vm_count"`
 	ChildCount    int `json:"child_template_count"`
+	// Strategies 是存在派生模板时可选的删除策略。
+	//
+	// 由服务端下发而不是前端按 blocker 猜：策略能不能用取决于依赖的
+	// **种类**（链式克隆不可绕过、派生链可以级联或提升），而这个判断只有
+	// 服务端做得完整。
+	Strategies []string `json:"strategies"`
 }
 
 // DeletePreview 返回删除前的检查结果（API-033）。
@@ -431,6 +599,7 @@ func (s *Service) DeletePreview(ctx context.Context, id int64, v authz.Viewer) (
 			view.LinkedVMCount = b.Count
 		case "child_template":
 			view.ChildCount = b.Count
+			view.Strategies = []string{DeleteStrategyCascade, DeleteStrategyPromote}
 		}
 	}
 	return view, nil
@@ -468,28 +637,63 @@ func (s *Service) deleteBlockers(ctx context.Context, tpl *model.Template) ([]Bl
 	}
 
 	// 派生模板：链断在中间同样会让下游失效。
-	var children []model.Template
-	if err := s.db.WithContext(ctx).
-		Select("id", "name").
-		Where("parent_id = ?", tpl.ID).
-		Limit(nameListLimit).
-		Find(&children).Error; err != nil {
-		log.Printf("[template] 统计派生模板失败: %v", err)
-		return nil, api.Internal()
+	//
+	// 统计的是**整棵子树**而不只是直接子级：v2 是从 v1 派生的、v3 又从
+	// v2 派生，删掉 v1 时只提示"v2 依赖它"会让用户在处理完 v2 之后才
+	// 发现还有 v3——那正是"撞到第一个就返回"的坏处。
+	children, err := s.descendants(ctx, tpl.ID)
+	if err != nil {
+		return nil, err
 	}
 	if len(children) > 0 {
 		names := make([]string, 0, len(children))
 		for i := range children {
+			if len(names) >= nameListLimit {
+				break
+			}
 			names = append(names, children[i].Name)
 		}
 		blockers = append(blockers, Blocker{
-			Kind: "child_template", Label: "以它为父级的模板", Unit: "个",
+			Kind: "child_template", Label: "派生自它的模板（含间接派生）", Unit: "个",
 			Count: len(children), Names: names,
-			Fix: "请先处理这些派生模板（删除或改为独立）。",
+			Fix: "可级联删除整条派生链，或把它的下一级提升为独立模板后再删。",
 		})
 	}
 
 	return blockers, nil
+}
+
+// descendants 返回以某模板为根的全部派生模板（含间接），不含它自己。
+//
+// 逐层展开而不是递归查询：一次 SQL 递归（WITH RECURSIVE）在两种数据库上
+// 写法不同，而这条链的深度实际上是**个位数**——模板是人工制备的，不会有
+// 几百层。用几次简单查询换一个两种数据库都能跑的实现更划算。
+func (s *Service) descendants(ctx context.Context, rootID int64) ([]model.Template, error) {
+	out := []model.Template{}
+	level := []int64{rootID}
+	seen := map[int64]bool{rootID: true}
+
+	for len(level) > 0 {
+		var rows []model.Template
+		if err := s.db.WithContext(ctx).
+			Select("id", "name", "disk_path", "parent_id").
+			Where("parent_id IN ?", level).
+			Find(&rows).Error; err != nil {
+			log.Printf("[template] 查询派生模板失败: %v", err)
+			return nil, api.Internal()
+		}
+		next := make([]int64, 0, len(rows))
+		for i := range rows {
+			if seen[rows[i].ID] {
+				continue // 数据异常导致的环：宁可停下，也不无限展开
+			}
+			seen[rows[i].ID] = true
+			out = append(out, rows[i])
+			next = append(next, rows[i].ID)
+		}
+		level = next
+	}
+	return out, nil
 }
 
 // nameListLimit 限制预览里列出的名字条数。
@@ -538,6 +742,22 @@ func toView(tpl *model.Template) View {
 	}
 	if tpl.Remark != nil {
 		view.Remark = *tpl.Remark
+	}
+	view.FamilyID = tpl.FamilyID
+	if tpl.DefaultDiskBus != nil {
+		view.DefaultDiskBus = *tpl.DefaultDiskBus
+	}
+	if tpl.DefaultNicModel != nil {
+		view.DefaultNicModel = *tpl.DefaultNicModel
+	}
+	if tpl.DefaultMachineType != nil {
+		view.DefaultMachineType = *tpl.DefaultMachineType
+	}
+	if tpl.DefaultFirmware != nil {
+		view.DefaultFirmware = *tpl.DefaultFirmware
+	}
+	if tpl.DefaultVideoModel != nil {
+		view.DefaultVideoModel = *tpl.DefaultVideoModel
 	}
 	return view
 }

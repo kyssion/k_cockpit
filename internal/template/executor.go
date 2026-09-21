@@ -31,6 +31,18 @@ type prepareParams struct {
 	DefaultCPU      int `json:"default_cpu"`
 	DefaultMemoryMB int `json:"default_memory_mb"`
 	DiskSizeGB      int `json:"disk_size_gb"`
+
+	// 默认硬件：取自源虚拟机，克隆时作为默认值下发。
+	DefaultDiskBus     string `json:"default_disk_bus"`
+	DefaultNicModel    string `json:"default_nic_model"`
+	DefaultMachineType string `json:"default_machine_type"`
+	DefaultFirmware    string `json:"default_firmware"`
+	DefaultDisplay     string `json:"default_display"`
+
+	// 族与版本（F-3-04）：仅派生制备时有值。
+	ParentID *int64 `json:"parent_id"`
+	FamilyID *int64 `json:"family_id"`
+	Version  int    `json:"version"`
 }
 
 // PrepareExecutor 执行 template.prepare 任务。
@@ -105,6 +117,32 @@ func (e *PrepareExecutor) Run(ctx context.Context, t *model.Task) error {
 	if p.Remark != "" {
 		tpl.Remark = &p.Remark
 	}
+	if p.DefaultDiskBus != "" {
+		tpl.DefaultDiskBus = &p.DefaultDiskBus
+	}
+	if p.DefaultNicModel != "" {
+		tpl.DefaultNicModel = &p.DefaultNicModel
+	}
+	if p.DefaultMachineType != "" {
+		tpl.DefaultMachineType = &p.DefaultMachineType
+	}
+	if p.DefaultFirmware != "" {
+		tpl.DefaultFirmware = &p.DefaultFirmware
+	}
+	if p.DefaultDisplay != "" {
+		tpl.DefaultVideoModel = &p.DefaultDisplay
+	}
+	// 族与版本：只有派生制备才写。独立制备的模板 family_id 留空——它的族
+	// 会在第一次派生时才成形（那时把自己当成根）。
+	if p.ParentID != nil && *p.ParentID > 0 {
+		tpl.ParentID = p.ParentID
+	}
+	if p.FamilyID != nil && *p.FamilyID > 0 {
+		tpl.FamilyID = p.FamilyID
+	}
+	if p.Version > 1 {
+		tpl.Version = p.Version
+	}
 
 	if err := e.db.WithContext(ctx).Create(&tpl).Error; err != nil {
 		if isDuplicateKey(err) {
@@ -124,6 +162,14 @@ type deleteParams struct {
 	TemplateID int64  `json:"template_id"`
 	Name       string `json:"name"`
 	DiskPath   string `json:"disk_path"`
+	// TemplateIDs / DiskPaths 在**级联删除**时带上整条派生链。
+	//
+	// 列表而不是单值：级联的本质是"这一批一起没了"，让执行器自己再去查
+	// 一遍子树等于把已经算好的结果重算一次，而两处算法不一致时会出现
+	// "删了磁盘但记录还在"这类半吊子状态。
+	TemplateIDs []int64  `json:"template_ids"`
+	DiskPaths   []string `json:"disk_paths"`
+	Strategy    string   `json:"strategy"`
 }
 
 // DeleteExecutor 执行 template.delete 任务。
@@ -150,11 +196,17 @@ func (e *DeleteExecutor) Run(ctx context.Context, t *model.Task) error {
 		return api.Internal()
 	}
 
+	// 级联时一次下发全部路径：逐个下发会让"删到一半失败"留下一个既删了
+	// 一部分、又查不到另一部分的中间状态。
+	paths := p.DiskPaths
+	if len(paths) == 0 {
+		paths = []string{p.DiskPath}
+	}
 	result, err := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, agent.Operation{
 		Kind:   agent.OpTemplateDelete,
 		NodeID: *t.NodeID,
 		Target: p.Name,
-		Params: map[string]any{"disk_path": p.DiskPath},
+		Params: map[string]any{"disk_path": p.DiskPath, "disk_paths": paths},
 	})
 	if err != nil {
 		return api.Unavailable("节点不可达，删除指令未送达")
@@ -166,13 +218,18 @@ func (e *DeleteExecutor) Run(ctx context.Context, t *model.Task) error {
 	// 软删除：克隆出去的虚拟机记着 template_id，物理删除会让这个引用悬空，
 	// 事后追查「这台机器的模板是什么」就无从谈起。
 	now := time.Now()
+	ids := p.TemplateIDs
+	if len(ids) == 0 {
+		ids = []int64{p.TemplateID}
+	}
 	if err := e.db.WithContext(ctx).Model(&model.Template{}).
-		Where("id = ?", p.TemplateID).
+		Where("id IN ?", ids).
 		Updates(map[string]any{"deleted_at": now}).Error; err != nil {
-		log.Printf("[template] 标记模板已删除失败 id=%d: %v", p.TemplateID, err)
+		log.Printf("[template] 标记模板已删除失败 ids=%v: %v", ids, err)
 	}
 
-	log.Printf("[template] 已删除模板 id=%d name=%s task=%d", p.TemplateID, p.Name, t.ID)
+	log.Printf("[template] 已删除模板 ids=%v name=%s strategy=%s task=%d",
+		ids, p.Name, p.Strategy, t.ID)
 	return nil
 }
 

@@ -363,6 +363,9 @@ func Register(h *server.Hertz, deps Deps) {
 		// 删除前的检查。**只读**，且与 Delete 共用同一段判定——两处各写一遍
 		// 迟早分叉，而分叉的表现是「预览说可以删、点下去却报冲突」。
 		v1.GET("/templates/:id/delete-preview", requireAuth, templateHandler.DeletePreview)
+		// 模板族：同一条派生链上的全部版本（F-3-04）。放在 :id 通配之后也不会
+		// 被吃掉，因为它多一段路径。
+		v1.GET("/templates/:id/family", requireAuth, templateHandler.Family)
 		v1.DELETE("/templates/:id", requireAuth, templateHandler.Delete)
 
 		// 跨节点迁移（F-2-09）。前置条件在受理时同步判定——每一个条件

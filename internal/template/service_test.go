@@ -198,7 +198,7 @@ func TestDeleteRejectedWhenLinkedClonesExist(t *testing.T) {
 		t.Fatalf("创建克隆体失败: %v", err)
 	}
 
-	_, err := svc.Delete(ctx, tpl.ID, authz.Viewer{UserID: 7}, "alice", "")
+	_, err := svc.Delete(ctx, tpl.ID, template.DeleteRequest{Strategy: ""}, authz.Viewer{UserID: 7}, "alice", "")
 	assertStatus(t, err, 409)
 
 	// 完整克隆**不**阻止删除：它与模板完全独立，模板删了也不影响。
@@ -206,7 +206,7 @@ func TestDeleteRejectedWhenLinkedClonesExist(t *testing.T) {
 		Update("clone_mode", model.CloneFull).Error; err != nil {
 		t.Fatalf("改为完整克隆失败: %v", err)
 	}
-	if _, err := svc.Delete(ctx, tpl.ID, authz.Viewer{UserID: 7}, "alice", ""); err != nil {
+	if _, err := svc.Delete(ctx, tpl.ID, template.DeleteRequest{Strategy: ""}, authz.Viewer{UserID: 7}, "alice", ""); err != nil {
 		t.Errorf("没有链式依赖时应可删除: %v", err)
 	}
 }

@@ -56,6 +56,11 @@ type Template struct {
 	// 以及在父模板被删时**拒绝**而不是留下一条静默失效的链。
 	ParentID *int64 `gorm:"index:idx_template_parent_id"`
 	Version  int    `gorm:"not null;default:1"`
+	// FamilyID 是**根模板的 ID**，同一条派生链上的全部版本共享它。
+	//
+	// 有了它，"这一族有几个版本""删掉中间一个会波及哪些"都是一次
+	// 相等比较就能回答的问题，而不是沿着 parent_id 递归。
+	FamilyID *int64 `gorm:"index:idx_template_family"`
 
 	Status string `gorm:"size:16;not null;default:preparing"`
 
@@ -77,6 +82,18 @@ type Template struct {
 	DefaultCPU      int     `gorm:"not null;default:0"`
 	DefaultMemoryMB int     `gorm:"not null;default:0"`
 	DefaultSpec     *string `gorm:"type:text"`
+
+	// 默认硬件配置：从源虚拟机采集，克隆时作为默认值。
+	//
+	// 此前克隆只能继承 CPU 与内存——磁盘驱动会退回 VirtIO、机型退回默认，
+	// 而一台本来用 SATA 的 Windows 模板克隆出来可能根本起不来。取值与
+	// 虚拟机的配置矩阵同源（disk_bus / nic_model / machine_type /
+	// firmware），因此用独立列而不是塞进 default_spec。
+	DefaultDiskBus     *string `gorm:"size:16"`
+	DefaultNicModel    *string `gorm:"size:32"`
+	DefaultVideoModel  *string `gorm:"size:32"`
+	DefaultMachineType *string `gorm:"size:64"`
+	DefaultFirmware    *string `gorm:"size:16"`
 
 	// Published 表示已发布给其他用户使用。
 	Published bool `gorm:"not null;default:false;index:idx_template_node_published,priority:2"`
