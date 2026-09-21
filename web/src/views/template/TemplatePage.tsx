@@ -150,6 +150,17 @@ export function TemplatePage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/*
+            视图切换：列表视图用于"找某个模板"，族视图用于"看这条链上有几代、
+            谁派生自谁"。后者在扁平列表里看不出来——只能看到一句"派生自 #N"。
+          */}
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => setView(view === 'list' ? 'family' : 'list')}
+          >
+            {view === 'list' ? '族视图' : '列表视图'}
+          </Button>
           {/* 导入：模板包是跨节点搬运模板的载体——在一个节点导出、在另一个导入。 */}
           <Button size="sm" variant="secondary" onClick={() => setImportOpen(true)}>
             导入模板包
@@ -178,22 +189,21 @@ export function TemplatePage() {
           title="还没有模板"
           description="从一台已关机的虚拟机创建模板，之后就能快速克隆出新的虚拟机。"
         />
+      ) : view === 'family' ? (
+        <FamilyTree
+          items={templates.data ?? []}
+          onMaintain={(t) => setMaintainTarget(t)}
+          onDelete={(t) => {
+            setStrategy('')
+            setDeleteTarget(t)
+          }}
+        />
       ) : (
         <div className="overflow-x-auto rounded-card border border-line">
           <table className="w-full border-collapse text-base">
             <thead>
               <tr className="bg-sunken text-left text-xs text-ink-2">
-                <th className="px-4 py-2.5 font-medium">
-                  <div className="flex items-center gap-2">
-                    <span>名称</span>
-                    <button
-                      className="text-xs font-normal text-brand hover:underline"
-                      onClick={() => setView(view === 'list' ? 'family' : 'list')}
-                    >
-                      {view === 'list' ? '切到族视图' : '切到列表视图'}
-                    </button>
-                  </div>
-                </th>
+                <th className="px-4 py-2.5 font-medium">名称</th>
                 <th className="px-4 py-2.5 font-medium">状态</th>
                 <th className="px-4 py-2.5 font-medium">规格</th>
                 <th className="px-4 py-2.5 font-medium">节点</th>
@@ -1023,6 +1033,140 @@ function MaintainModal({
       </div>
     </Modal>
   )
+}
+
+/**
+ * FamilyTree 按族把各版本收在一起（F-3-04）。
+ *
+ * 它回答的是列表视图回答不了的两个问题：**这一族有几个版本**、**谁派生自
+ * 谁**。列表里只能看到一句"派生自 #N"，而要看清整条链得逐个点进去。
+ *
+ * 缩进层级由 parent_id 推出；同一层按 version 排序——版本号才是"第几代"，
+ * 而制备时间可能因重试而倒挂。
+ */
+function FamilyTree({
+  items,
+  onMaintain,
+  onDelete,
+}: {
+  items: TemplateView[]
+  onMaintain: (t: TemplateView) => void
+  onDelete: (t: TemplateView) => void
+}) {
+  const byID = new Map(items.map((t) => [t.id, t]))
+  const childrenOf = new Map<number, TemplateView[]>()
+  for (const t of items) {
+    if (t.parent_id != null && byID.has(t.parent_id)) {
+      const list = childrenOf.get(t.parent_id) ?? []
+      list.push(t)
+      childrenOf.set(t.parent_id, list)
+    }
+  }
+  for (const list of childrenOf.values()) {
+    list.sort((a, b) => a.version - b.version || a.id - b.id)
+  }
+
+  // 根是"父不在本列表里"的那些：父被删了或不在当前筛选结果里时，剩下的这
+  // 一代就是这条链可见的起点。
+  const roots = items.filter((t) => !(t.parent_id != null && byID.has(t.parent_id)))
+    .sort((a, b) => a.name.localeCompare(b.name))
+
+  return (
+    <div className="flex flex-col gap-3">
+      {roots.map((root) => (
+        <section key={root.id} className="rounded-card border border-line">
+          <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-line px-4 py-2.5">
+            <div>
+              <span className="text-base font-medium text-ink">{root.name}</span>
+              <span className="ml-2 text-xs text-ink-3">
+                共 {countDescendants(root.id, childrenOf) + 1} 个版本
+              </span>
+            </div>
+            <span className="text-xs text-ink-3">族 #{root.family_id ?? root.id}</span>
+          </div>
+
+          <ul className="px-2 py-2">
+            <FamilyNode
+              item={root}
+              depth={0}
+              childrenOf={childrenOf}
+              onMaintain={onMaintain}
+              onDelete={onDelete}
+            />
+          </ul>
+        </section>
+      ))}
+    </div>
+  )
+}
+
+function FamilyNode({
+  item,
+  depth,
+  childrenOf,
+  onMaintain,
+  onDelete,
+}: {
+  item: TemplateView
+  depth: number
+  childrenOf: Map<number, TemplateView[]>
+  onMaintain: (t: TemplateView) => void
+  onDelete: (t: TemplateView) => void
+}) {
+  const children = childrenOf.get(item.id) ?? []
+
+  return (
+    <li className="flex flex-col">
+      <div
+        className="flex flex-wrap items-center justify-between gap-2 rounded-control px-2 py-1.5 hover:bg-raised"
+        style={{ marginLeft: depth * 16 }}
+      >
+        <span className="flex flex-wrap items-center gap-2">
+          {/* 有子代时给一个连接符：纯缩进在层级深了之后看不出谁是谁的子代。 */}
+          {depth > 0 && <span className="text-ink-3">└</span>}
+          <span className="text-ink">{item.name}</span>
+          <span className="text-xs text-ink-3">v{item.version}</span>
+          <StatusBadge tone={TEMPLATE_STATUS_TONE[item.status] ?? 'idle'}>
+            {TEMPLATE_STATUS_LABEL[item.status] ?? item.status}
+          </StatusBadge>
+          <span className="text-xs text-ink-3">{item.disk_size_gb} GB</span>
+        </span>
+
+        <span className="flex gap-2">
+          <button className="text-sm text-ink-2 hover:underline" onClick={() => onMaintain(item)}>
+            维护
+          </button>
+          <button className="text-sm text-danger hover:underline" onClick={() => onDelete(item)}>
+            删除
+          </button>
+        </span>
+      </div>
+
+      {children.length > 0 && (
+        <ul>
+          {children.map((c) => (
+            <FamilyNode
+              key={c.id}
+              item={c}
+              depth={depth + 1}
+              childrenOf={childrenOf}
+              onMaintain={onMaintain}
+              onDelete={onDelete}
+            />
+          ))}
+        </ul>
+      )}
+    </li>
+  )
+}
+
+/** countDescendants 统计整棵子树的大小，用于在族标题上写清"有几个版本"。 */
+function countDescendants(id: number, childrenOf: Map<number, TemplateView[]>): number {
+  let n = 0
+  for (const c of childrenOf.get(id) ?? []) {
+    n += 1 + countDescendants(c.id, childrenOf)
+  }
+  return n
 }
 
 function describe(error: unknown): string {
