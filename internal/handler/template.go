@@ -216,6 +216,34 @@ func (h *Template) ListExports(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, map[string]any{"items": items})
 }
 
+// DownloadExport 下载一个导出产物。
+//
+// 它走的是用户存储的下载通道：导出包本来就在**用户存储**里（这样它能被
+// 当作导入来源选中、也受存储配额约束），因此不必为它另开一条读文件的路。
+//
+// 文件名由服务端决定而不是沿用请求里的名字：Content-Disposition 会被写进
+// 响应头，让客户端指定文件名等于给它一个注入响应头的入口。
+func (h *Template) DownloadExport(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "导出 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	name, data, mime, err := h.svc.ExportFile(ctx, id, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	// 产物一旦生成就不再变化，因此允许浏览器缓存（与控制台截帧相反）。
+	c.Header("Cache-Control", "private, max-age=3600")
+	// 文件名必须由服务端决定，且用 RFC 5987 的形式处理非 ASCII。
+	c.Header("Content-Disposition", contentDisposition(name))
+	c.SetContentType(mime)
+	c.Response.SetBody(data)
+}
+
 // DeleteExport 删除一个导出产物。
 func (h *Template) DeleteExport(ctx context.Context, c *app.RequestContext) {
 	id, err := namedPathID(c, "id", "导出 ID")

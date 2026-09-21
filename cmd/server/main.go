@@ -285,8 +285,16 @@ func main() {
 	schedRecorder := sched.NewRecorder(db, schedRegistry)
 
 	monitorSvc := monitor.NewService(db)
+	// 宿主机调优（KSM / zRAM / 嵌套虚拟化）。工作台要复用它读一次状态，
+	// 因此先建出来而不是塞进 Deps 里现造——两个实例意味着两份缓存口径。
+	hostTuningSvc := hosttuning.NewService(db, queue, mockAgent, recorder)
+
 	// 工作台概览（F-8-03 / F-8-04）：只读聚合，节点运行态复用节点服务。
 	dashboardSvc := dashboard.NewService(db, nodeSvc)
+	// 工作台上的 KSM / zRAM 直接读调优服务（同一份口径），硬件与网络统计
+	// 走 agent 的两个按需操作。
+	dashboardSvc.SetTuning(hostTuningSvc)
+	dashboardSvc.SetAgent(mockAgent)
 	schedulerSvc := sched.NewService(db, schedRegistry)
 	portSecuritySvc := portsecurity.NewService(db, mockAgent, recorder, queue)
 	captureSvc := capture.NewService(db, mockAgent, recorder, queue)
@@ -362,7 +370,7 @@ func main() {
 		QuotaEnforce:  quotaEnforceSvc,
 		HostFirewall:  hostFirewallSvc,
 		Passthrough:   passthrough.NewService(db, queue, mockAgent, recorder),
-		HostTuning:    hosttuning.NewService(db, queue, mockAgent, recorder),
+		HostTuning:    hostTuningSvc,
 		PlatformCheck: platformcheck.NewService(db, queue, mockAgent, recorder),
 		AccessControl: accesscontrol.NewService(db, recorder, accesscontrol.Options{}),
 		Diagnostics:   diagnosticsSvc,

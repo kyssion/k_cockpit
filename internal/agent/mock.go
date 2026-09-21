@@ -164,6 +164,19 @@ func stagePlan(op Operation) [][2]string {
 			{"nvram_rebuild", "重建 UEFI 启动项"},
 			{"domain_define", "重新定义并校验"},
 		}
+	case OpHostHardware:
+		return [][2]string{
+			{"capabilities_read", "读取宿主机能力"},
+			{"cpu_topology", "解析 CPU 拓扑"},
+			{"memory_scan", "读取内存条信息"},
+		}
+	case OpHostNetStats:
+		return [][2]string{
+			{"rules_count", "统计 NAT 与 DNAT 规则"},
+			{"switch_counters", "读取交换机计数"},
+			{"bridge_counters", "读取网桥计数"},
+		}
+
 	case OpTemplateExport:
 		return [][2]string{
 			{"manifest_build", "生成清单"},
@@ -1295,6 +1308,45 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 			BootEntry: "Boot0001",
 			BootPath:  `\EFI\BOOT\BOOTX64.EFI`,
 			Message:   "已重建 UEFI 启动项，请重新启动虚拟机确认",
+		}
+
+	case OpTemplateExportFetch:
+		// 与虚拟机导出同一个理由：返回一眼能看出是占位的内容，而不是伪造
+		// 一个像真的 tar.gz。看起来像真包会让人以为链路已经打通了。
+		data[ExportContentKey] = ExportContent{
+			Data: []byte("k_cockpit mock template export placeholder\n" +
+				"节点侧会由节点流式返回导出包。\n" +
+				"target=" + op.Target + "\n"),
+			MIME: "application/gzip",
+		}
+
+	case OpHostHardware:
+		// 每核占用给一组不同的值：全 0 或全相同的曲线在界面上看起来
+		// 像"数据没采到"，而实际上这正是要展示的东西。
+		data[HostHardwareDataKey] = HostHardware{
+			CPUModel:       "Mock CPU",
+			Sockets:        2,
+			CoresPerSocket: 8,
+			ThreadsPerCore: 2,
+			CorePercent:    []float64{12, 30, 8, 44, 21, 17, 60, 5, 33, 27, 9, 14, 41, 22, 18, 36, 25, 11, 47, 13, 29, 6, 38, 20, 16, 34, 24, 10, 51, 15, 28, 7},
+			MemSlots: []MemSlot{
+				{Index: 1, SizeMB: 16384, Populated: true, Label: "DIMM_A1"},
+				{Index: 2, SizeMB: 16384, Populated: true, Label: "DIMM_A2"},
+				{Index: 3, SizeMB: 0, Populated: false, Label: "DIMM_B1"},
+				{Index: 4, SizeMB: 0, Populated: false, Label: "DIMM_B2"},
+			},
+		}
+
+	case OpHostNetStats:
+		data[HostNetStatsDataKey] = HostNetStats{
+			NATRules:           12,
+			SwitchIngressBytes: 48 << 30,
+			SwitchEgressBytes:  31 << 30,
+			DNATRules:          7,
+			Bridges: []BridgeStat{
+				{Name: "br-lan", RxBytes: 22 << 30, TxBytes: 18 << 30, RxPackets: 4_200_000, TxPackets: 3_100_000},
+				{Name: "br-wan", RxBytes: 9 << 30, TxBytes: 14 << 30, RxPackets: 1_800_000, TxPackets: 2_400_000},
+			},
 		}
 
 	case OpTemplateExport:

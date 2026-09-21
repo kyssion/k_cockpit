@@ -32,3 +32,22 @@ func (h *Dashboard) Summary(ctx context.Context, c *app.RequestContext) {
 	}
 	api.OK(c, summary)
 }
+
+// HostDetail 返回某个节点的宿主机细节（KSM / zRAM / 硬件 / 网络统计）。
+//
+// 单独一个接口而不是塞进 Summary：Summary 是"打开首页就要的"，而这些
+// 细节需要向节点发请求。混在一起会让首页在节点多时变慢，并且在某个节点
+// 不支持探测时把整页拖成错误。
+func (h *Dashboard) HostDetail(ctx context.Context, c *app.RequestContext) {
+	nodeID := int64(queryInt(c, "node_id"))
+	if nodeID <= 0 {
+		api.Fail(c, api.InvalidParameter("必须指定 node_id"))
+		return
+	}
+	detail, err := h.svc.HostDetail(ctx, nodeID, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, detail)
+}

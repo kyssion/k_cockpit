@@ -126,8 +126,50 @@ func (s *Service) ListExports(ctx context.Context, nodeID int64, v authz.Viewer)
 	return out, nil
 }
 
-// ExportFile 返回一个可下载的产物，供 handler 读文件路径。
-func (s *Service) ExportFile(ctx context.Context, id int64, v authz.Viewer) (*model.TemplateExport, error) {
+// ExportFile 取回一个导出产物的字节。
+//
+// 转发而不是给一个节点直链：直链意味着要把节点的访问凭据或一个匿名可访问
+// 的地址暴露出去，而包里是一块模板盘。控制面转发多花一次带宽，但权限判断
+// 留在了一处。
+func (s *Service) ExportFile(
+	ctx context.Context, id int64, v authz.Viewer,
+) (fileName string, data []byte, mime string, err error) {
+	row, err := s.loadExport(ctx, id, v)
+	if err != nil {
+		return "", nil, "", err
+	}
+	if row.Status != model.TemplateExportSuccess {
+		return "", nil, "", api.ValidationFailed("该导出尚未完成，暂时无法下载")
+	}
+	if row.RelPath == "" {
+		return "", nil, "", api.NotFound("该导出的产物已不在节点上")
+	}
+
+	result, err := s.agent.Execute(ctx, agent.Operation{
+		Kind:   agent.OpTemplateExportFetch,
+		NodeID: row.NodeID,
+		Target: row.RelPath,
+		Params: map[string]any{"rel_path": row.RelPath},
+	})
+	if err != nil {
+		return "", nil, "", api.Unavailable("节点不可达，无法获取导出包")
+	}
+	if !result.Success {
+		return "", nil, "", api.ValidationFailed(result.Message)
+	}
+	content := decodeExportContent(result.Data)
+	if len(content.Data) == 0 {
+		return "", nil, "", api.Unavailable("节点未返回导出包内容")
+	}
+	mimeType := content.MIME
+	if mimeType == "" {
+		mimeType = "application/gzip"
+	}
+	return row.Filename, content.Data, mimeType, nil
+}
+
+// loadExport 读取一条导出记录并做归属校验。
+func (s *Service) loadExport(ctx context.Context, id int64, v authz.Viewer) (*model.TemplateExport, error) {
 	var row model.TemplateExport
 	if err := s.db.WithContext(ctx).Where("id = ?", id).First(&row).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -139,28 +181,34 @@ func (s *Service) ExportFile(ctx context.Context, id int64, v authz.Viewer) (*mo
 	if !v.IsAdmin && (row.CreatedBy == nil || *row.CreatedBy != v.UserID) {
 		return nil, api.NotFound("导出记录不存在")
 	}
-	if !row.IsReady() {
-		return nil, api.Conflict("导出尚未完成，暂不能下载")
-	}
 	return &row, nil
+}
+
+// decodeExportContent 从结果里取出字节内容。
+func decodeExportContent(data map[string]any) agent.ExportContent {
+	raw, ok := data[agent.ExportContentKey]
+	if !ok {
+		return agent.ExportContent{}
+	}
+	blob, err := json.Marshal(raw)
+	if err != nil {
+		return agent.ExportContent{}
+	}
+	var content agent.ExportContent
+	_ = json.Unmarshal(blob, &content)
+	return content
 }
 
 // DeleteExport 删除一个导出产物。
 func (s *Service) DeleteExport(
 	ctx context.Context, id int64, v authz.Viewer, operatorName, clientIP string,
 ) (*model.Task, error) {
-	row, err := s.ExportFile(ctx, id, v)
+	// 删除只要求"存在且属于自己"：未完成的导出也要能清掉——那通常是上一次
+	// 失败的残留。用 loadExport 而不是 ExportFile，后者会要求产物已就绪
+	// 并去节点取字节，而删一条残留不需要那些。
+	row, err := s.loadExport(ctx, id, v)
 	if err != nil {
-		// 已完成的才能删，但"未完成"也要能清掉——那通常是上一次失败的
-		// 残留。因此这里放宽到"只要存在且属于自己"。
-		var any model.TemplateExport
-		if e := s.db.WithContext(ctx).Where("id = ?", id).First(&any).Error; e != nil {
-			return nil, api.NotFound("导出记录不存在")
-		}
-		if !v.IsAdmin && (any.CreatedBy == nil || *any.CreatedBy != v.UserID) {
-			return nil, api.NotFound("导出记录不存在")
-		}
-		row = &any
+		return nil, err
 	}
 
 	t, err := s.queue.Enqueue(ctx, task.Spec{

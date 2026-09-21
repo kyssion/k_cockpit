@@ -23,6 +23,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"k_cockpit/internal/agent"
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/authz"
 	"k_cockpit/internal/model"
@@ -52,7 +53,16 @@ type Service struct {
 	// 未接入即未知）只有一份是对的，抄一份到这里的那天起，两块界面就会
 	// 对同一台节点给出不同的状态。
 	node *node.Service
+	// tuning 提供 KSM / zRAM 状态；agent 用于读取硬件与网络统计。
+	//
+	// 两者都可为 nil：工作台主体（计数、配额、告警）不依赖它们，缺了
+	// 只是少了两块展示，不该让整个首页失败。
+	tuning TuningProvider
+	agent  agent.Client
 }
+
+// SetAgent 装配 agent 客户端；不调用时硬件与网络统计两区块不显示。
+func (s *Service) SetAgent(c agent.Client) { s.agent = c }
 
 // NewService 构造服务。
 func NewService(db *gorm.DB, nodes *node.Service) *Service {

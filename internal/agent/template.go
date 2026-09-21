@@ -32,6 +32,12 @@ const (
 	OpTemplateExportDelete  OpKind = "template.export.delete"
 	OpTemplateImportPreview OpKind = "template.import.preview"
 	OpTemplateImport        OpKind = "template.import"
+	// OpTemplateExportFetch 取回导出包的字节。
+	//
+	// 与虚拟机导出同一个做法：控制面转发而不是给一个节点直链——直链意味着
+	// 要把节点的访问凭据或一个匿名可访问的地址暴露出去，而包里是一块模板盘。
+	// 控制面转发多花一次带宽，但权限判断留在一处。
+	OpTemplateExportFetch OpKind = "template.export.fetch"
 )
 
 // TemplateDataKey 是模板制备结果中承载磁盘信息的键。

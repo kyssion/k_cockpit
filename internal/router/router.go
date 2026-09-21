@@ -377,6 +377,7 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/templates/:id/exports", requireAuth, templateHandler.Export)
 		v1.GET("/template-exports", requireAuth, templateHandler.ListExports)
 		v1.DELETE("/template-exports/:id", requireAuth, templateHandler.DeleteExport)
+		v1.GET("/template-exports/:id/download", requireAuth, templateHandler.DownloadExport)
 		v1.POST("/templates/imports/preview", requireAuth, templateHandler.ImportPreview)
 		v1.POST("/templates/imports", requireAuth, templateHandler.Import)
 		v1.DELETE("/templates/:id", requireAuth, templateHandler.Delete)
@@ -421,6 +422,9 @@ func Register(h *server.Hertz, deps Deps) {
 		// 而不是靠路由层切断——后者的结果是租户打开首页就 403，而首页是
 		// 登录后第一个到达的页面。
 		v1.GET("/dashboard/summary", requireAuth, dashboardHandler.Summary)
+		// 宿主机细节（调优 / 硬件 / 网络统计）。它需要**按节点**向节点发请求，
+		// 因此不并进 Summary——否则首页会变成一次探测风暴。
+		v1.GET("/dashboard/host-detail", requireAuth, dashboardHandler.HostDetail)
 
 		// 虚拟机标签（F-2-16）。
 		//
