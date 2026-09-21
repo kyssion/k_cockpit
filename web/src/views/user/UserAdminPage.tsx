@@ -12,11 +12,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 
 import { ApiError, NetworkError } from '@/api/client'
+import { vmApi, vmOwnerApi } from '@/api/vm'
 import {
   ROLE_LABEL,
   STATUS_LABEL,
   STATUS_TONE,
   userApi,
+  userExtraApi,
   type SetStatusResult,
   type UserView,
 } from '@/api/useradmin'
@@ -33,6 +35,7 @@ export function UserAdminPage() {
   const [query, setQuery] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
   const [editing, setEditing] = useState<UserView | null>(null)
+  const [assignTarget, setAssignTarget] = useState<UserView | null>(null)
   const [confirmBan, setConfirmBan] = useState<UserView | null>(null)
   const [banResult, setBanResult] = useState<SetStatusResult | null>(null)
   const [error, setError] = useState('')
@@ -66,6 +69,22 @@ export function UserAdminPage() {
       setConfirmBan(null)
       setError(describe(err))
     },
+  })
+
+  const ssh = useMutation({
+    mutationFn: (vars: { id: number; enabled: boolean }) => userExtraApi.setSSHAccess(vars.id, vars.enabled),
+    onSuccess: (r) => {
+      setError('')
+      setNotice(
+        r.unavailable
+          ? `已记录，但${r.unavailable}`
+          : r.killed_sessions > 0
+            ? `已生效，并结束了 ${r.killed_sessions} 个在线会话`
+            : '已生效',
+      )
+      void queryClient.invalidateQueries({ queryKey: ['users'] })
+    },
+    onError: (err) => setError(describe(err)),
   })
 
   const remove = useMutation({
@@ -142,6 +161,8 @@ export function UserAdminPage() {
                 <th className="px-4 py-2.5 font-medium">角色</th>
                 <th className="px-4 py-2.5 font-medium">状态</th>
                 <th className="px-4 py-2.5 font-medium">最后登录</th>
+                <th className="px-4 py-2.5 font-medium">带宽</th>
+                <th className="px-4 py-2.5 font-medium">SSH</th>
                 <th className="px-4 py-2.5 font-medium">操作</th>
               </tr>
             </thead>
@@ -167,6 +188,21 @@ export function UserAdminPage() {
                     {/* 「从没用过」是一个有用的信号：这个账号大概可以删了。 */}
                     {u.last_login_at ? relativeTime(u.last_login_at) : '从未登录'}
                   </td>
+                  {/* 带宽是**速率型**配额：0 显示为「不限」而不是空白——
+                      空白会被读成"没设置"，而不限是一个明确的选择。 */}
+                  <td className="kc-nums px-4 py-2.5 text-ink-2">
+                    {u.max_bandwidth_mbps > 0 ? `${u.max_bandwidth_mbps} Mbps` : '不限'}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <button
+                      className="text-sm text-ink-2 hover:underline disabled:text-ink-3 disabled:no-underline"
+                      disabled={ssh.isPending}
+                      title={u.ssh_access_enabled ? '关闭后会把在线会话一并结束' : '允许该用户 SSH 登录宿主机'}
+                      onClick={() => ssh.mutate({ id: u.id, enabled: !u.ssh_access_enabled })}
+                    >
+                      {u.ssh_access_enabled ? '已允许' : '已禁止'}
+                    </button>
+                  </td>
                   <td className="px-4 py-2.5">
                     <span className="flex flex-wrap gap-2">
                       <button
@@ -191,6 +227,14 @@ export function UserAdminPage() {
                           封禁
                         </button>
                       )}
+                      {/* 分配 VM：删除用户时"请先转移虚拟机"这个提示，
+                          此前一直没有对应的动作可以点。 */}
+                      <button
+                        className="text-sm text-ink-2 hover:underline"
+                        onClick={() => setAssignTarget(u)}
+                      >
+                        分配 VM
+                      </button>
                       <button
                         className="text-sm text-danger hover:underline"
                         disabled={remove.isPending}
@@ -219,6 +263,16 @@ export function UserAdminPage() {
         onError={(msg) => {
           setCreateOpen(false)
           setError(msg)
+        }}
+      />
+
+      <AssignVMModal
+        user={assignTarget}
+        onClose={() => setAssignTarget(null)}
+        onDone={(m) => {
+          setAssignTarget(null)
+          setError('')
+          setNotice(m)
         }}
       />
 
@@ -455,6 +509,106 @@ function EditUserModal({
             不能修改自己的角色；也不能把最后一个可用的管理员降级——那之后就再也没人能进管理界面了。
           </p>
         </div>
+      </div>
+    </Modal>
+  )
+}
+
+/**
+ * AssignVMModal 把一台已有虚拟机指派给这个用户。
+ *
+ * 它补的是一个具体欠账：管理员删除用户时，如果该用户名下还有虚拟机，只能
+ * 拒绝并提示"请先转移"——而"转移"这个动作此前没有入口可以点。
+ *
+ * 只列**未分配或属于别人的机器**：已经在这个用户名下的机器再分配一次是
+ * 一个空操作，把它列出来只会让人以为那也是一个可选项。
+ */
+function AssignVMModal({
+  user,
+  onClose,
+  onDone,
+}: {
+  user: UserView | null
+  onClose: () => void
+  onDone: (msg: string) => void
+}) {
+  const queryClient = useQueryClient()
+  const [vmID, setVMID] = useState(0)
+  const [error, setError] = useState('')
+
+  const vms = useQuery({
+    queryKey: ['vms'],
+    queryFn: () => vmApi.list({ page_size: 100 }),
+    enabled: user !== null,
+  })
+  const users = useQuery({
+    queryKey: ['users'],
+    queryFn: () => userApi.list({ page_size: 100 }),
+    enabled: user !== null,
+  })
+
+  const assign = useMutation({
+    mutationFn: () => vmOwnerApi.assignOwner(vmID, user?.id ?? 0),
+    onSuccess: () => {
+      setError('')
+      void queryClient.invalidateQueries({ queryKey: ['vms'] })
+      onDone(`已将虚拟机分配给「${user?.username ?? ''}」`)
+    },
+    onError: (err) => setError(describe(err)),
+  })
+
+  const items = (vms.data?.items ?? []).filter((v) => v.owner_id !== user?.id)
+
+  return (
+    <Modal
+      open={user !== null}
+      title={`分配给「${user?.username ?? ''}」`}
+      description="指派后，这台机器会出现在该用户的虚拟机列表里，并计入他的配额。"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            取消
+          </Button>
+          <Button
+            size="sm"
+            loading={assign.isPending}
+            disabled={vmID === 0}
+            onClick={() => assign.mutate()}
+          >
+            分配
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3">
+        <label className="flex flex-col gap-1">
+          <span className="text-sm text-ink-2">虚拟机</span>
+          <select
+            value={vmID}
+            onChange={(e) => setVMID(Number(e.target.value))}
+            className="h-9 rounded-control border border-line-strong bg-sunken px-2 text-base text-ink"
+          >
+            <option value={0}>请选择…</option>
+            {items.map((v) => (
+              <option key={v.id} value={v.id}>
+                {v.name}（节点 #{v.node_id}）
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {items.length === 0 && !vms.isPending && (
+          <p className="text-sm text-ink-3">没有可分配的虚拟机（它们都已属于这个用户）。</p>
+        )}
+
+        {/* 封禁中的用户不该再拿到机器：那会让"封禁"只生效在界面上。 */}
+        {user?.status === 'banned' && (
+          <p className="text-sm text-warning">该用户已被封禁，分配会被服务端拒绝。</p>
+        )}
+
+        {error && <p className="text-sm text-danger">{error}</p>}
+        {users.isError && <p className="text-sm text-ink-3">用户列表加载失败，不影响分配。</p>}
       </div>
     </Modal>
   )

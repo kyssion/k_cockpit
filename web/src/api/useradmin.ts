@@ -25,6 +25,10 @@ export interface UserView {
   created_at: string
   /** 为空表示从未登录——通常说明这个账号已经不需要了。 */
   last_login_at?: string
+  /** 带宽上限（Mbps），0 表示不限。**速率型**，不按月累计。 */
+  max_bandwidth_mbps: number
+  /** 是否允许该用户 SSH 登录宿主机。 */
+  ssh_access_enabled: boolean
 }
 
 export interface UserPage {
@@ -53,7 +57,10 @@ export const userApi = {
     post<UserView>('/api/v1/users', input),
 
   /** 编辑资料。**不含密码**——改密是独立且更敏感的动作。 */
-  update: (id: number, input: { email?: string; remark?: string; role?: UserRole }) =>
+  update: (
+    id: number,
+    input: { email?: string; remark?: string; role?: UserRole; max_bandwidth_mbps?: number },
+  ) =>
     patch<UserView>(`/api/v1/users/${id}`, input),
 
   /** 封禁 / 解封。级联失败在 `warnings` 里，不算操作失败。 */
@@ -79,4 +86,19 @@ export const STATUS_TONE: Record<UserStatus, 'success' | 'warning' | 'danger'> =
   active: 'success',
   pending: 'warning',
   banned: 'danger',
+}
+
+/** SSH 访问设置的结果。 */
+export interface SSHAccessResult {
+  user: UserView
+  /** 被结束的在线会话数——关掉权限而人还在里面等于没关。 */
+  killed_sessions: number
+  message?: string
+  /** 非空表示节点没实现，宿主机上尚未生效（控制面记录已改）。 */
+  unavailable?: string
+}
+
+export const userExtraApi = {
+  setSSHAccess: (id: number, enabled: boolean) =>
+    put<SSHAccessResult>(`/api/v1/users/${id}/ssh`, { enabled }),
 }

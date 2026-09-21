@@ -943,3 +943,14 @@ export const NIC_MODEL_LABEL: Record<NICModel, string> = {
   e1000: 'e1000（Intel 千兆，兼容性最好）',
   rtl8139: 'rtl8139（老旧系统兼容）',
 }
+
+/**
+ * 分配虚拟机归属（管理员）。
+ *
+ * 它补的是一个已知欠账：管理员删除用户时若该用户名下还有虚拟机，只能拒绝
+ * 并提示"请先转移"——而"转移"此前没有实现。
+ */
+export const vmOwnerApi = {
+  assignOwner: (vmID: number, userID: number) =>
+    put<VmView>(`/api/v1/vms/${vmID}/owner`, { user_id: userID }),
+}
