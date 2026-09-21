@@ -15,9 +15,11 @@ import { useState, type FormEvent } from 'react'
 import { ApiError, NetworkError } from '@/api/client'
 import { nodeApi } from '@/api/node'
 import {
+  DELETE_STRATEGY_LABEL,
   TEMPLATE_STATUS_LABEL,
   TEMPLATE_STATUS_TONE,
   templateApi,
+  type DeleteStrategy,
   type TemplateView,
 } from '@/api/template'
 import { vmApi, type VmView } from '@/api/vm'
@@ -33,6 +35,9 @@ export function TemplatePage() {
   const [createOpen, setCreateOpen] = useState(false)
   const [batchTarget, setBatchTarget] = useState<TemplateView | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<TemplateView | null>(null)
+  // 删除派生链的策略。存在派生模板时必须显式选一个——两条出路的结果完全
+  // 不同，服务端不替用户决定。
+  const [strategy, setStrategy] = useState<DeleteStrategy | ''>('')
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
 
@@ -62,7 +67,8 @@ export function TemplatePage() {
   })
 
   const remove = useMutation({
-    mutationFn: (tpl: TemplateView) => templateApi.remove(tpl.id),
+    mutationFn: (vars: { tpl: TemplateView; strategy: DeleteStrategy | '' }) =>
+      templateApi.remove(vars.tpl.id, vars.strategy || undefined),
     onSuccess: () => {
       setDeleteTarget(null)
       setError('')
@@ -135,6 +141,9 @@ export function TemplatePage() {
                 <tr key={t.id} className="border-t border-line">
                   <td className="px-4 py-2.5">
                     <span className="font-medium text-ink">{t.name}</span>
+                    {/* 版本与族：v1/v2/v3 是"第几代"，比一句"派生自 #N"更能
+                        说清这条链上发生过什么。 */}
+                    <span className="ml-2 text-xs text-ink-3">v{t.version}</span>
                     {t.parent_id != null && (
                       <span className="ml-2 text-xs text-ink-3">派生自 #{t.parent_id}</span>
                     )}
@@ -153,6 +162,12 @@ export function TemplatePage() {
                     <span className="block text-xs text-ink-3">
                       最小磁盘 {t.min_disk_gb} GB
                     </span>
+                    {/* 默认硬件来自源虚拟机。显示出来是因为"克隆出来的机器
+                        为什么起不来"往往就差这一行——一台 SATA 的 Windows
+                        模板按 VirtIO 克隆，开机就是蓝屏。 */}
+                    {hardwareOf(t) && (
+                      <span className="block text-xs text-ink-3">{hardwareOf(t)}</span>
+                    )}
                   </td>
                   <td className="px-4 py-2.5 text-ink-2">{nodeName(t.node_id)}</td>
                   <td className="px-4 py-2.5">
@@ -192,7 +207,12 @@ export function TemplatePage() {
                       </button>
                       <button
                         className="text-sm text-danger hover:underline"
-                        onClick={() => setDeleteTarget(t)}
+                        onClick={() => {
+                          // 每次打开都重置策略：上一次的选择留在那里会让
+                          // 用户误以为"还是按上次那样删"。
+                          setStrategy('')
+                          setDeleteTarget(t)
+                        }}
                       >
                         删除
                       </button>
@@ -253,10 +273,11 @@ export function TemplatePage() {
               variant="danger"
               size="sm"
               loading={remove.isPending}
-              // 有依赖时**直接禁用**：让用户点一次再收到一个错误，等于把
-              // 上面那份清单白给了——他刚刚才看过它。
-              disabled={deleteCheck.data?.can_delete === false}
-              onClick={() => deleteTarget && remove.mutate(deleteTarget)}
+              // 链式克隆之类的依赖**直接禁用**：那份清单他刚刚才看过，再让
+              // 他点一次收到一个错误等于把清单白给了。派生模板则不同——它
+              // 有两条出路（级联 / 提升），必须让用户选一个才能提交。
+              disabled={deleteCheck.data?.can_delete === false && strategy === ''}
+              onClick={() => deleteTarget && remove.mutate({ tpl: deleteTarget, strategy })}
             >
               确认删除
             </Button>
@@ -292,6 +313,32 @@ export function TemplatePage() {
                 </p>
               )}
               <p className="mt-1 text-xs text-ink-3">{b.fix}</p>
+
+              {/* 派生模板有两条出路，必须由用户选一条：服务端不替他决定，
+                  因为"删掉整条链"和"只删这一代"是完全不同的结果。 */}
+              {b.kind === 'child_template' && (deleteCheck.data?.strategies ?? []).length > 0 && (
+                <div className="mt-2 flex flex-col gap-1.5">
+                  {(deleteCheck.data?.strategies ?? []).map((s) => (
+                    <label key={s} className="flex cursor-pointer items-start gap-2">
+                      <input
+                        type="radio"
+                        className="mt-1"
+                        name="delete-strategy"
+                        checked={strategy === s}
+                        onChange={() => setStrategy(s)}
+                      />
+                      <span>
+                        <span className="block text-sm text-ink">
+                          {DELETE_STRATEGY_LABEL[s]?.label ?? s}
+                        </span>
+                        <span className="block text-xs text-ink-3">
+                          {DELETE_STRATEGY_LABEL[s]?.detail ?? ''}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
 
@@ -436,6 +483,16 @@ function CreateTemplateModal({
       </form>
     </Modal>
   )
+}
+
+/** 默认硬件的一句话摘要。没有采集到就返回空串——那时不显示这一行。 */
+function hardwareOf(t: TemplateView): string {
+  const parts: string[] = []
+  if (t.default_disk_bus) parts.push(`磁盘 ${t.default_disk_bus}`)
+  if (t.default_nic_model) parts.push(`网卡 ${t.default_nic_model}`)
+  if (t.default_machine_type) parts.push(t.default_machine_type)
+  if (t.default_firmware) parts.push(t.default_firmware)
+  return parts.join(' · ')
 }
 
 function describe(error: unknown): string {

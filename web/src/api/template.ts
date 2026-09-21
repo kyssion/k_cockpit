@@ -42,9 +42,39 @@ export interface TemplateView {
 
   /** 非空表示它是从另一个模板派生的。 */
   parent_id?: number
+  /**
+   * 族：同一条派生链的**根**模板 ID。
+   *
+   * 它与 version 一起回答"这是第几代、和哪些模板同源"，界面据此把同一族
+   * 的多个版本收在一起，而不是只显示一个扁平的"派生自 #N"。
+   */
+  family_id?: number
+
+  /** 默认硬件，取自源虚拟机，克隆时作为默认值。 */
+  default_disk_bus?: string
+  default_nic_model?: string
+  default_machine_type?: string
+  default_firmware?: string
+  default_video_model?: string
+
   error?: string
   remark?: string
   created_at: string
+}
+
+/** 删除派生链的策略。由服务端下发，前端不猜能不能用。 */
+export type DeleteStrategy = 'cascade' | 'promote'
+
+export const DELETE_STRATEGY_LABEL: Record<DeleteStrategy, { label: string; detail: string }> = {
+  cascade: {
+    label: '级联删除整条链',
+    detail: '连同所有派生自它的版本一起删除。适合这一整条链都不再使用。',
+  },
+  promote: {
+    label: '提升后只删这一个',
+    detail:
+      '把它的下一级改挂到自己的父级上，只删除这一个版本。适合中间一代已过时、而更新的版本还在用。',
+  },
 }
 
 export interface TemplateListParams {
@@ -61,6 +91,8 @@ export interface CreateFromVmInput {
   os_variant?: string
   remark?: string
   published?: boolean
+  /** 非空表示制备的是**某个模板的新版本**（同一族，版本自增）。 */
+  parent_id?: number
 }
 
 export interface DeleteBlocker {
@@ -80,6 +112,8 @@ export interface DeletePreview {
   disk_path: string
   linked_vm_count: number
   child_template_count: number
+  /** 存在派生模板时可选的删除策略；为空表示没有策略可用。 */
+  strategies: DeleteStrategy[]
 }
 
 export const templateApi = {
@@ -151,7 +185,17 @@ export const templateApi = {
   deletePreview: (id: number) =>
     get<DeletePreview>(`/api/v1/templates/${id}/delete-preview`),
 
-  remove: (id: number) => del<TaskRef>(`/api/v1/templates/${id}`),
+  /**
+   * 删除模板。
+   *
+   * 链式克隆会**同步拒绝**且没有策略可绕过（任何策略都意味着接受数据丢失）；
+   * 派生模板则要在 `strategy` 里显式选择级联或提升——服务端不替用户决定。
+   */
+  remove: (id: number, strategy?: DeleteStrategy) =>
+    del<TaskRef>(`/api/v1/templates/${id}${strategy ? `?strategy=${strategy}` : ''}`),
+
+  /** 同一模板族的全部版本（F-3-04）。 */
+  family: (id: number) => get<TemplateView[]>(`/api/v1/templates/${id}/family`),
 }
 
 export const TEMPLATE_STATUS_LABEL: Record<TemplateStatus, string> = {
