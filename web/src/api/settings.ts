@@ -139,3 +139,18 @@ export const securityApi = {
   runPasswordAudit: () => post<PasswordAuditResult>('/api/v1/security/password-audit'),
   passwordAuditStatus: () => get<{ hits: number }>('/api/v1/security/password-audit'),
 }
+
+/** 会话签名密钥的状态（F-1-09，不含密钥本身）。 */
+export interface AuthKeyStatus {
+  key_id: string
+  rotated_at: string
+  /** 距离上次轮换的天数。 */
+  age_days: number
+  /** 0 表示未开启自动轮换。 */
+  auto_rotate_days: number
+}
+
+export const authKeyApi = {
+  status: () => get<AuthKeyStatus>('/api/v1/settings/auth-key'),
+  rotate: () => post<AuthKeyStatus>('/api/v1/settings/auth-key/rotate'),
+}

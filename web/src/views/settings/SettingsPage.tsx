@@ -5,6 +5,7 @@ import { ApiError, NetworkError } from '@/api/client'
 import {
   SOURCE_LABEL,
   UPDATE_STATUS_LABEL,
+  authKeyApi,
   requestLogApi,
   settingsApi,
   type RequestLogItem,
@@ -110,6 +111,11 @@ export function SettingsPage() {
               放在这一组下面，而不是塞进某个折叠区。
             */}
             {group.key === 'notification' && <MailTestPanel />}
+            {/*
+              会话密钥是安全组里唯一一个「点了就全员登出」的动作，因此把它
+              放在这一组下面，而不是塞进某个折叠区：它需要和自己的说明在一起。
+            */}
+            {group.key === 'security' && <AuthKeyPanel />}
           </section>
         )
       })}
@@ -457,6 +463,71 @@ function RequestLogPanel() {
         </div>
       )}
     </section>
+  )
+}
+
+/**
+ * AuthKeyPanel 会话签名密钥的轮换（F-1-09）。
+ *
+ * 必须说清的一件事：**轮换等于全员登出**。轮换之后所有旧令牌立即失效，
+ * 包括正在点这个按钮的人自己——所以按钮不是"改个配置"，而是一次需要
+ * 二次验证的、影响所有人的动作。
+ */
+function AuthKeyPanel() {
+  const queryClient = useQueryClient()
+
+  const status = useQuery({
+    queryKey: ['auth-key'],
+    queryFn: authKeyApi.status,
+  })
+
+  const rotate = useMutation({
+    mutationFn: authKeyApi.rotate,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['auth-key'] })
+    },
+  })
+
+  const st = status.data
+
+  return (
+    <div className="flex flex-col gap-2 rounded-card border border-line bg-raised px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <span className="text-base text-ink">会话签名密钥</span>
+          <span className="ml-2 text-sm text-ink-3">
+            {st ? `上次轮换 ${relativeTime(st.rotated_at)}` : '读取中…'}
+          </span>
+        </div>
+        <Button
+          size="sm"
+          variant="secondary"
+          loading={rotate.isPending}
+          disabled={!st}
+          onClick={() => rotate.mutate()}
+        >
+          立即轮换
+        </Button>
+      </div>
+
+      <p className="text-sm text-ink-3">
+        轮换会更换会话令牌的签名密钥，**所有人（包括你自己）都会被立即登出**，
+        因此需要二次验证。自动轮换的间隔是上面的「会话密钥自动轮换间隔」，
+        填 0 表示不自动轮换。
+      </p>
+
+      {st && st.auto_rotate_days > 0 && st.age_days >= st.auto_rotate_days && (
+        <p className="text-sm text-warning">
+          已超过自动轮换间隔（{st.auto_rotate_days} 天），下次检查时会自动轮换。
+        </p>
+      )}
+
+      {rotate.isError && (
+        <p role="alert" className="text-sm text-danger">
+          {describe(rotate.error)}
+        </p>
+      )}
+    </div>
   )
 }
 
