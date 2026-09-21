@@ -37,6 +37,11 @@ func RegisterBuiltins(r *Registry, opts BuiltinOptions) {
 		IntervalSeconds: int(opts.QuotaEvalInterval.Seconds()),
 	})
 	r.Register(Info{
+		Key: KeyPasswordAudit, Name: "口令安全检查", Group: GroupSecurity,
+		Description:     "检查账号口令是否属于弱口令或已知泄露口令，命中只做标记、不自动改密。判定由节点完成——控制面只有哈希，无从比对。",
+		IntervalSeconds: int(opts.PasswordAuditInterval.Seconds()),
+	})
+	r.Register(Info{
 		Key: KeyTaskQueue, Name: "任务队列派发", Group: GroupTasks,
 		Description:     "把待执行任务派发给执行器，受并发上限与资源锁约束。**它不产生调度事件**——它执行的每个动作本身都已经是一条任务记录，在这里再记一遍只是把同一件事说两次。",
 		IntervalSeconds: int(opts.QueuePollInterval.Seconds()),
@@ -45,6 +50,7 @@ func RegisterBuiltins(r *Registry, opts BuiltinOptions) {
 
 // BuiltinOptions 是登记时需要的各组件周期。
 type BuiltinOptions struct {
+	PasswordAuditInterval  time.Duration
 	MetricsInterval        time.Duration
 	MetricsCleanupInterval time.Duration
 	ScheduleInterval       time.Duration

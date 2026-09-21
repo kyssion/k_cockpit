@@ -38,6 +38,7 @@ import (
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/networkbridge"
 	"k_cockpit/internal/node"
+	"k_cockpit/internal/passaudit"
 	"k_cockpit/internal/passthrough"
 	"k_cockpit/internal/platformcheck"
 	"k_cockpit/internal/portmirror"
@@ -46,6 +47,7 @@ import (
 	"k_cockpit/internal/quota"
 	"k_cockpit/internal/quotaenforce"
 	"k_cockpit/internal/realtime"
+	"k_cockpit/internal/reqlog"
 	"k_cockpit/internal/risk"
 	"k_cockpit/internal/router"
 	"k_cockpit/internal/schedule"
@@ -248,6 +250,15 @@ func main() {
 	queue.Start(context.Background())
 
 	settingsSvc := settings.NewService(db, recorder)
+	// 请求日志的开关来自设置项：每次写入前读取，因此改了设置立即生效，
+	// 不需要重启（重启才能生效会让人以为开关坏了）。
+	reqLogSvc := reqlog.NewService(db, func(ctx context.Context) bool {
+		return settingsSvc.Bool("security.request_log_enabled", false)
+	})
+	// 口令检查：判定在节点侧，这里只做开关、定时与结果落地。
+	passAuditSvc := passaudit.NewService(db, mockAgent, func() bool {
+		return settingsSvc.Bool("security.password_breach_check", false)
+	}, recorder)
 	// 邮件（F-1-08）：配置来自系统设置，因此管理员保存 SMTP 后**立即**生效，
 	// 无需重启——"测试邮件"按钮是验证配置是否正确的唯一手段，重启才能生效
 	// 会让那个按钮看起来一直是坏的。
@@ -289,6 +300,7 @@ func main() {
 		ScheduleInterval:       schedule.DefaultOptions().Interval,
 		QueuePollInterval:      task.DefaultOptions().PollInterval,
 		QuotaEvalInterval:      quotaenforce.DefaultOptions().Interval,
+		PasswordAuditInterval:  24 * time.Hour,
 	})
 	// 记录器在这里声明（在**所有**周期组件之前）：定时任务扫描器在构造之后
 	// 马上就要接上它，而采集器要到下面才构造。声明点取两者的最早者，省得
@@ -359,6 +371,11 @@ func main() {
 	alertLoop.Start(context.Background())
 	defer alertLoop.Stop()
 
+	// 口令安全检查循环（F-10-06）：一天一次，判定在节点侧完成。
+	passAuditLoop := passaudit.NewLoop(passAuditSvc, passaudit.DefaultOptions())
+	passAuditLoop.Observe(schedRecorder)
+	go passAuditLoop.Start(context.Background())
+
 	// 控制台密码需要可逆加密（f-2-08 R-005）：它要交给 agent 参与 VNC 认证，
 	// 因此不能用单向哈希。用途标签与会话签名分开派生。
 	// 控制台密码与初始登录密码共用同一把派生密钥：它们都是"交给节点或展示
@@ -401,6 +418,8 @@ func main() {
 		AuditLog:      auditLogSvc,
 		AuditRecorder: recorder,
 		Logging:       logger,
+		ReqLog:        reqLogSvc,
+		PassAudit:     passAuditSvc,
 		UserAdmin:     userAdminSvc,
 		VMTag:         tagSvc,
 		Monitor:       monitorSvc,

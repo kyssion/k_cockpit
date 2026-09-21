@@ -202,6 +202,12 @@ func stagePlan(op Operation) [][2]string {
 			{"policy_apply", "下发 IPv6 保护"},
 		}
 
+	case OpSecurityPasswordAudit:
+		return [][2]string{
+			{"account_scan", "读取系统账号"},
+			{"breach_compare", "与弱口令 / 泄露清单比对"},
+		}
+
 	case OpUserSSHAccess:
 		return [][2]string{
 			{"shell_update", "更新登录 shell"},
@@ -1450,6 +1456,17 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 			Applied: true,
 			Message: "IPv6 保护策略已下发",
 			Trusted: []string{"2001:db8::/32"},
+		}
+
+	case OpSecurityPasswordAudit:
+		data[PasswordAuditDataKey] = PasswordAuditInfo{
+			Checked: 3,
+			// 命中一条：否则界面上永远看不到"命中"是什么样子，而那正是这个
+			// 功能唯一要传达的信息。
+			Hits: []PasswordHit{
+				{Username: "demo", Reason: "出现在常见弱口令清单中"},
+			},
+			Message: "口令检查完成",
 		}
 
 	case OpUserSSHAccess:

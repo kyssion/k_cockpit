@@ -238,6 +238,107 @@ var specs = []Spec{
 		Unit:         "分钟",
 	},
 
+	// --- 安全与审计 ---
+	//
+	// 请求日志默认**关闭**：它记录每一次接口调用，量级与审计不在一个数量级，
+	// 默认打开会把磁盘用在一堆"健康检查"上。它是排查问题时才需要的东西，
+	// 因此默认关、按需开、并且能一键清掉。
+	{
+		Key:          "security.request_log_enabled",
+		Group:        GroupSecurity,
+		Label:        "记录请求日志",
+		Description:  "记录每一次接口调用（方法、路径、状态码、耗时）。默认关闭——它的量级远大于审计日志，且多数时候用不上。",
+		Kind:         KindBool,
+		Default:      "false",
+		EnvVar:       "SECURITY_REQUEST_LOG_ENABLED",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+	},
+	{
+		Key:          "security.request_log_keep_days",
+		Group:        GroupSecurity,
+		Label:        "请求日志保留天数",
+		Description:  "超过这个天数的请求日志会在清理时被删除。",
+		Kind:         KindInt,
+		Default:      "7",
+		EnvVar:       "SECURITY_REQUEST_LOG_KEEP_DAYS",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+		MinValue:     intPtr(1),
+		MaxValue:     intPtr(90),
+		Unit:         "天",
+	},
+	{
+		// 定时弱口令检查。
+		//
+		// 真正的"泄露"判定（比对泄露库）需要外部数据，控制面不联网也不持有
+		// 明文密码；这里做的是**弱口令与已知泄露口令**的周期检查，判定由
+		// 节点侧完成（见 agent 的 security.password_audit），控制面只负责
+		// 开关、定时与结果。
+		Key:          "security.password_breach_check",
+		Group:        GroupSecurity,
+		Label:        "定时检查弱口令与泄露口令",
+		Description:  "按天检查账号口令是否出现在弱口令 / 已知泄露口令清单中。命中不自动改密，只在安全中心标出，由用户自己改。",
+		Kind:         KindBool,
+		Default:      "false",
+		EnvVar:       "SECURITY_PASSWORD_BREACH_CHECK",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+	},
+
+	// --- 路径 ---
+	//
+	// 这一组存在的理由很具体：默认的目录布局（ISO 放在哪、模板放哪、
+	// 临时文件放哪）在多数部署里够用，但只要有人的数据盘挂在别处，
+	// 它就变成了一个必须能改的配置——而改不了的结果是把数据盘塞进
+	// 系统盘，直到某天写满。
+	//
+	// 留空表示用内置默认目录，而不是"关掉这个功能"。
+	{
+		Key:          "storage.iso_dir",
+		Group:        GroupStorage,
+		Label:        "ISO 存放目录",
+		Description:  "「我的存储」里 ISO 类文件在宿主机上的存放位置。留空用内置默认目录。",
+		Kind:         KindString,
+		Default:      "",
+		EnvVar:       "STORAGE_ISO_DIR",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+	},
+	{
+		Key:          "storage.disk_dir",
+		Group:        GroupStorage,
+		Label:        "虚拟磁盘目录",
+		Description:  "「我的存储」里虚拟磁盘类文件的存放位置。留空用内置默认目录。",
+		Kind:         KindString,
+		Default:      "",
+		EnvVar:       "STORAGE_DISK_DIR",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+	},
+	{
+		Key:          "storage.template_dir",
+		Group:        GroupStorage,
+		Label:        "模板目录",
+		Description:  "模板与模板包在宿主机上的存放位置。留空用内置默认目录。",
+		Kind:         KindString,
+		Default:      "",
+		EnvVar:       "STORAGE_TEMPLATE_DIR",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+	},
+	{
+		Key:          "storage.temp_dir",
+		Group:        GroupStorage,
+		Label:        "临时目录",
+		Description:  "导入、导出与打包过程中的临时文件位置。它需要有足够的空间容纳整块镜像。留空用内置默认目录。",
+		Kind:         KindString,
+		Default:      "",
+		EnvVar:       "STORAGE_TEMP_DIR",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+	},
+
 	// --- 网络 ---
 	{
 		Key:          "network.default_mode",

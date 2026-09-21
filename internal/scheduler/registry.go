@@ -28,6 +28,7 @@ const (
 	GroupScheduled = "定时任务"
 	GroupMaintain  = "数据维护"
 	GroupQuota     = "配额与计量"
+	GroupSecurity  = "安全检查"
 )
 
 // 内置调度器的标识。
@@ -44,6 +45,7 @@ const (
 	KeyRiskCleanup   = "risk.grant.cleanup"
 	KeyQuotaEvaluate = "quota.evaluate"
 	KeyAlertEvaluate = "alert.evaluate"
+	KeyPasswordAudit = "security.password_audit"
 )
 
 // Info 描述一个已注册的调度器。

@@ -34,6 +34,7 @@ import (
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/networkbridge"
 	"k_cockpit/internal/node"
+	"k_cockpit/internal/passaudit"
 	"k_cockpit/internal/passthrough"
 	"k_cockpit/internal/platformcheck"
 	"k_cockpit/internal/portmirror"
@@ -42,6 +43,7 @@ import (
 	"k_cockpit/internal/quota"
 	"k_cockpit/internal/quotaenforce"
 	"k_cockpit/internal/realtime"
+	"k_cockpit/internal/reqlog"
 	"k_cockpit/internal/risk"
 	"k_cockpit/internal/schedule"
 	"k_cockpit/internal/scheduler"
@@ -78,6 +80,10 @@ type Deps struct {
 	Bus *realtime.Bus
 	// VpcACL 提供 VPC 网络的访问控制（F-4-05）。为 nil 时 ACL 接口不可用。
 	VpcACL *vpcacl.Service
+	// ReqLog 记录与查询接口调用日志（F-10-07）。为 nil 时不记录、接口不可用。
+	ReqLog *reqlog.Service
+	// PassAudit 提供弱口令 / 泄露口令检查（F-10-06）。为 nil 时接口不可用。
+	PassAudit *passaudit.Service
 	// Risk 强制高风险操作的二次验证（f-10-01）。受保护的操作在 handler
 	// 入口调用它，清单本身集中在 internal/risk。
 	Risk *risk.Guard
@@ -158,6 +164,12 @@ type Deps struct {
 func Register(h *server.Hertz, deps Deps) {
 	// 顺序：RequestID 最先（后续都要用它）；Recover 包裹业务处理，
 	// 保证 panic 也被记录 request_id；AccessLog 在最内层以准确统计耗时。
+	//
+	// RequestLogger 放在**最外层**：这样连 401 也能记到，而"为什么一直 401"
+	// 恰恰是最需要看请求日志的场景。它内部按开关决定是否落库。
+	if deps.ReqLog != nil {
+		h.Use(handler.RequestLogger(deps.ReqLog))
+	}
 	h.Use(api.RequestID(), api.Recover(), api.AccessLog())
 
 	h.GET("/health", handler.Health(deps.DB))
@@ -180,6 +192,8 @@ func Register(h *server.Hertz, deps Deps) {
 	storageHandler := handler.NewStorage(deps.Storage, deps.Risk)
 	networkHandler := handler.NewNetwork(deps.Network)
 	vpcACLHandler := handler.NewVpcACL(deps.VpcACL)
+	reqLogHandler := handler.NewReqLog(deps.ReqLog)
+	passAuditHandler := handler.NewPassAudit(deps.PassAudit)
 	settingsHandler := handler.NewSettings(deps.Settings, deps.Mailer)
 	consoleHandler := handler.NewConsole(deps.VM, deps.Risk)
 	templateHandler := handler.NewTemplate(deps.Template)
@@ -653,6 +667,13 @@ func Register(h *server.Hertz, deps Deps) {
 		// 调级别与清理都记审计：把级别调到 DEBUG 会让日志量显著上升，
 		// 而清理之后就无法回溯了——两者事后都要能回答「是谁在什么时候做的」。
 		v1.GET("/settings/log/status", requireAuth, adminOnly, loggingHandler.Status)
+		// 请求日志（F-10-07）：与审计分开，默认关闭。
+		v1.GET("/request-logs", requireAuth, adminOnly, reqLogHandler.List)
+		v1.DELETE("/request-logs", requireAuth, adminOnly, reqLogHandler.Clear)
+		// 弱口令 / 泄露口令检查（F-10-06）。判定在节点侧完成：控制面只有
+		// argon2 哈希，无从比对。
+		v1.POST("/security/password-audit", requireAuth, adminOnly, passAuditHandler.RunNow)
+		v1.GET("/security/password-audit", requireAuth, adminOnly, passAuditHandler.Status)
 		v1.GET("/settings/log/read", requireAuth, adminOnly, loggingHandler.Read)
 		v1.PUT("/settings/log/level", requireAuth, adminOnly, loggingHandler.SetLevel)
 		v1.GET("/settings/log/export", requireAuth, adminOnly, loggingHandler.Export)
