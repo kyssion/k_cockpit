@@ -12,6 +12,7 @@ import (
 
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/api"
+	"k_cockpit/internal/cryptoutil"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/task"
 )
@@ -36,24 +37,34 @@ type createParams struct {
 	// 键名与矩阵（editFields）一致：这份参数是「那一次创建填了什么」，
 	// 而矩阵是「允许填什么」，两者对齐之后校验才能复用同一套规则。
 
-	DiskFormat      string `json:"disk_format,omitempty"`
-	DiskBus         string `json:"disk_bus,omitempty"`
-	NicModel        string `json:"nic_model,omitempty"`
-	OSType          string `json:"os_type,omitempty"`
-	MachineType     string `json:"machine_type,omitempty"`
-	Firmware        string `json:"firmware,omitempty"`
-	SecureBoot      bool   `json:"secure_boot"`
-	BootOrder       string `json:"boot_order,omitempty"`
-	AutoStart       bool   `json:"auto_start"`
-	Watchdog        string `json:"watchdog,omitempty"`
-	CPUType         string `json:"cpu_type,omitempty"`
-	CPULimitPercent int    `json:"cpu_limit_percent"`
-	APIC            bool   `json:"apic"`
-	PAE             bool   `json:"pae"`
-	FreezeOnStart   bool   `json:"freeze_on_start"`
-	DiskIOPSTotal   int    `json:"disk_iops_total"`
-	DiskIOPSRead    int    `json:"disk_iops_read"`
-	DiskIOPSWrite   int    `json:"disk_iops_write"`
+	DiskFormat string `json:"disk_format,omitempty"`
+	DiskBus    string `json:"disk_bus,omitempty"`
+	NicModel   string `json:"nic_model,omitempty"`
+	OSType     string `json:"os_type,omitempty"`
+	OSVariant  string `json:"os_variant,omitempty"`
+	// Hostname / InitialPassword / InitMode / StaticIP：第一次开机就该是
+	// 什么样。建好再设要走来宾自动化，而那要求 Guest Agent 已在运行——
+	// 对一个刚装好的系统不成立，因此随创建一起下发。
+	Hostname        string `json:"hostname,omitempty"`
+	InitialPassword string `json:"initial_password,omitempty"`
+	InitMode        string `json:"init_mode,omitempty"`
+	StaticIP        string `json:"static_ip,omitempty"`
+	// DataDisks 是除系统盘之外要一并建立的磁盘。
+	DataDisks       []DataDiskSpec `json:"data_disks,omitempty"`
+	MachineType     string         `json:"machine_type,omitempty"`
+	Firmware        string         `json:"firmware,omitempty"`
+	SecureBoot      bool           `json:"secure_boot"`
+	BootOrder       string         `json:"boot_order,omitempty"`
+	AutoStart       bool           `json:"auto_start"`
+	Watchdog        string         `json:"watchdog,omitempty"`
+	CPUType         string         `json:"cpu_type,omitempty"`
+	CPULimitPercent int            `json:"cpu_limit_percent"`
+	APIC            bool           `json:"apic"`
+	PAE             bool           `json:"pae"`
+	FreezeOnStart   bool           `json:"freeze_on_start"`
+	DiskIOPSTotal   int            `json:"disk_iops_total"`
+	DiskIOPSRead    int            `json:"disk_iops_read"`
+	DiskIOPSWrite   int            `json:"disk_iops_write"`
 
 	// ISOFileID 非零表示创建后把该镜像挂到光驱（ISO 安装路径）。
 	ISOFileID int64 `json:"iso_file_id,omitempty"`
@@ -89,8 +100,16 @@ func newCreateParams(
 		Remark: req.Remark, GroupName: req.GroupName, OwnerID: ownerID,
 
 		DiskFormat: req.DiskFormat, DiskBus: req.DiskBus, NicModel: req.NicModel,
-		OSType: req.OSType, MachineType: req.MachineType, Firmware: req.Firmware,
-		SecureBoot: req.SecureBoot, BootOrder: req.BootOrder, AutoStart: req.AutoStart,
+		OSType: req.OSType, OSVariant: req.OSVariant,
+		MachineType: req.MachineType, Firmware: req.Firmware,
+		// 第一次开机就该是什么样：随创建一起下发，建好再设要走来宾自动化，
+		// 而那要求 Guest Agent 已在运行——对刚装好的系统不成立。
+		Hostname:        req.Hostname,
+		InitialPassword: req.InitialPassword,
+		InitMode:        req.InitMode,
+		StaticIP:        req.StaticIP,
+		DataDisks:       req.DataDisks,
+		SecureBoot:      req.SecureBoot, BootOrder: req.BootOrder, AutoStart: req.AutoStart,
 		Watchdog: req.Watchdog, CPUType: req.CPUType, CPULimitPercent: req.CPULimitPercent,
 		// 未提交时取 true：它们默认是开着的，而 bool 的零值无法区分
 		// 「用户关掉了」与「用户没填」。用指针表达三态是这个字段唯一
@@ -123,12 +142,17 @@ func newCreateParams(
 type CreateExecutor struct {
 	db    *gorm.DB
 	agent agent.Client
+	// encKey 用于加密保存创建时给定的初始登录密码（R-005：只写不读）。
+	encKey []byte
 }
 
 // NewCreateExecutor 构造创建执行器。
 func NewCreateExecutor(db *gorm.DB, client agent.Client) *CreateExecutor {
 	return &CreateExecutor{db: db, agent: client}
 }
+
+// SetEncryptionKey 设置凭据加密密钥；不设置时初始凭据不落库（虚拟机照常创建）。
+func (e *CreateExecutor) SetEncryptionKey(key []byte) { e.encKey = key }
 
 // Type 返回处理的任务类型。
 func (e *CreateExecutor) Type() string { return model.TaskVMCreate }
@@ -167,9 +191,16 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 			// 下发而不是创建后再逐项改：后者会产生一条「先按默认建好、再改」
 			// 的中间态，而那台机器在中间态里是**可以被引导的**——用户看到
 			// 它起来了，进去装系统，然后配置被后续改动覆盖。
-			"disk_format":       p.DiskFormat,
-			"disk_bus":          p.DiskBus,
-			"os_type":           p.OSType,
+			"disk_format": p.DiskFormat,
+			"disk_bus":    p.DiskBus,
+			"os_type":     p.OSType,
+			"os_variant":  p.OSVariant,
+			// 首次开机的样子：主机名、初始凭据、初始化方式、静态地址。
+			"hostname":          p.Hostname,
+			"initial_password":  p.InitialPassword,
+			"init_mode":         p.InitMode,
+			"static_ip":         p.StaticIP,
+			"data_disks":        p.DataDisks,
 			"machine_type":      p.MachineType,
 			"firmware":          p.Firmware,
 			"secure_boot":       p.SecureBoot,
@@ -222,10 +253,12 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 
 		// 创建向导选定的配置（f-2-02）。留空的项由数据库默认值兜底，
 		// 与矩阵里的 Default 保持一致。
-		DiskFormat:      orDefault(p.DiskFormat, "qcow2"),
-		DiskBus:         orDefault(p.DiskBus, "virtio"),
-		NicModel:        orDefault(p.NicModel, "virtio"),
-		OSType:          orDefault(p.OSType, "linux"),
+		DiskFormat: orDefault(p.DiskFormat, "qcow2"),
+		DiskBus:    orDefault(p.DiskBus, "virtio"),
+		NicModel:   orDefault(p.NicModel, "virtio"),
+		OSType:     orDefault(p.OSType, "linux"),
+		// 具体版本可为空：多数机器是从镜像装的，只有识别过或手选才有值。
+		OSVariant:       p.OSVariant,
 		MachineType:     orDefault(p.MachineType, "q35"),
 		Firmware:        orDefault(p.Firmware, "bios"),
 		BootOrder:       orDefault(p.BootOrder, "disk,cdrom,network"),
@@ -289,8 +322,40 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 		}
 	}
 
+	// 初始凭据：随创建一起写下来宾记录，详情页才能展示"这台机器的登录
+	// 凭据是什么"。与控制台密码一样**只写不读**（R-005）——接口不返回
+	// 明文，只能重设。
+	if p.InitialPassword != "" {
+		e.saveInitialCredential(ctx, &vm, p)
+	}
+
 	log.Printf("[vm] 已创建虚拟机 id=%d name=%s node=%d task=%d", vm.ID, vm.Name, vm.NodeID, t.ID)
 	return nil
+}
+
+// saveInitialCredential 加密保存创建时给定的初始登录密码。
+//
+// 失败只记日志：虚拟机已经建好了，为"凭据没记下来"把整个任务判失败会让
+// 用户以为创建没成功，而那恰恰是他最不该误判的一件事。
+func (e *CreateExecutor) saveInitialCredential(ctx context.Context, vm *model.VM, p createParams) {
+	if e.encKey == nil {
+		log.Printf("[vm] 未配置加密密钥，跳过初始凭据 vm=%d", vm.ID)
+		return
+	}
+	sealed, err := cryptoutil.Seal(e.encKey, p.InitialPassword)
+	if err != nil {
+		log.Printf("[vm] 加密初始密码失败 vm=%d: %v", vm.ID, err)
+		return
+	}
+	username := initialUsername(orDefault(p.OSType, "linux"))
+	row := model.VMCredential{
+		VMID:        vm.ID,
+		Username:    &username,
+		PasswordEnc: sealed,
+	}
+	if err := e.db.WithContext(ctx).Create(&row).Error; err != nil {
+		log.Printf("[vm] 写入初始凭据失败 vm=%d: %v", vm.ID, err)
+	}
 }
 
 // createPrimaryInterface 写入主网口与安全组关联。

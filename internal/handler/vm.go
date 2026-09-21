@@ -91,18 +91,27 @@ type createVMRequest struct {
 	//
 	// 键名与后端矩阵（editFields）一致，取值与范围由后端校验。
 
-	DiskFormat      string `json:"disk_format"`
-	DiskBus         string `json:"disk_bus"`
-	NicModel        string `json:"nic_model"`
-	OSType          string `json:"os_type"`
-	MachineType     string `json:"machine_type"`
-	Firmware        string `json:"firmware"`
-	SecureBoot      bool   `json:"secure_boot"`
-	BootOrder       string `json:"boot_order"`
-	AutoStart       bool   `json:"auto_start"`
-	Watchdog        string `json:"watchdog"`
-	CPUType         string `json:"cpu_type"`
-	CPULimitPercent int    `json:"cpu_limit_percent"`
+	DiskFormat string `json:"disk_format"`
+	DiskBus    string `json:"disk_bus"`
+	NicModel   string `json:"nic_model"`
+	OSType     string `json:"os_type"`
+	// OSVariant 是具体系统版本（libosinfo short id）；Hostname、
+	// InitialPassword、InitMode、StaticIP 是"第一次开机就该是什么样"。
+	OSVariant       string `json:"os_variant"`
+	Hostname        string `json:"hostname"`
+	InitialPassword string `json:"initial_password"`
+	InitMode        string `json:"init_mode"`
+	StaticIP        string `json:"static_ip"`
+	// DataDisks 是除系统盘之外要一并创建的磁盘。
+	DataDisks       []vm.DataDiskSpec `json:"data_disks"`
+	MachineType     string            `json:"machine_type"`
+	Firmware        string            `json:"firmware"`
+	SecureBoot      bool              `json:"secure_boot"`
+	BootOrder       string            `json:"boot_order"`
+	AutoStart       bool              `json:"auto_start"`
+	Watchdog        string            `json:"watchdog"`
+	CPUType         string            `json:"cpu_type"`
+	CPULimitPercent int               `json:"cpu_limit_percent"`
 	// APIC / PAE 用指针：它们的默认值是 true，而 bool 的零值无法区分
 	// 「用户关掉了」与「用户没填」。
 	APIC          *bool `json:"apic"`
@@ -156,6 +165,12 @@ func (h *VM) Create(ctx context.Context, c *app.RequestContext) {
 		DiskBus:         req.DiskBus,
 		NicModel:        req.NicModel,
 		OSType:          req.OSType,
+		OSVariant:       req.OSVariant,
+		Hostname:        req.Hostname,
+		InitialPassword: req.InitialPassword,
+		InitMode:        req.InitMode,
+		StaticIP:        req.StaticIP,
+		DataDisks:       req.DataDisks,
 		MachineType:     req.MachineType,
 		Firmware:        req.Firmware,
 		SecureBoot:      req.SecureBoot,

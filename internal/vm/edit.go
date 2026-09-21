@@ -203,6 +203,13 @@ var editFields = []EditField{
 		},
 		Hint: "作为主网卡与之后新增网口的默认型号。",
 	},
+	{
+		// 静态地址在创建时就给定：建好再改要走「静态地址变更」任务，而那
+		// 条路要求先关机——对"开箱就要在某个地址上"的场景不划算。
+		Key: "static_ip", Label: "静态地址", Kind: EditKindText, Group: EditGroupNetwork,
+		RequiresNode: true, InCreate: true,
+		Hint: "留空由 DHCP 分配。必须是节点内网段内的合法地址，否则主网口拿不到地址。",
+	},
 
 	// --- 启动与安全 ---
 	{
@@ -214,6 +221,50 @@ var editFields = []EditField{
 			{Value: "other", Label: "其它"},
 		},
 		Hint: "影响虚拟化层对硬件的呈现方式。",
+	},
+	{
+		// 系统版本（libosinfo 的 short id）。
+		//
+		// 它的作用不是"显示更好看"：虚拟化层据此优化设备呈现与驱动建议，
+		// 而装系统时的默认磁盘控制器也跟着它走。选错的表现通常是装完起不来，
+		// 而那时没人会想到是这一步选错了。
+		//
+		// 可选值内置而不是每次向节点问：libosinfo 的列表在节点上可能装了
+		// 也可能没装，而一个空的下拉框与"这台机器没有可选版本"在界面上
+		// 看不出区别。
+		Key: "os_variant", Label: "系统版本", Kind: EditKindSelect, Group: EditGroupBoot,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "",
+		Options: []EditOption{
+			{Value: "", Label: "不指定"},
+			{Value: "ubuntu24.04", Label: "Ubuntu 24.04"},
+			{Value: "ubuntu22.04", Label: "Ubuntu 22.04"},
+			{Value: "debian12", Label: "Debian 12"},
+			{Value: "debian11", Label: "Debian 11"},
+			{Value: "rocky9", Label: "Rocky Linux 9"},
+			{Value: "almalinux9", Label: "AlmaLinux 9"},
+			{Value: "centos7", Label: "CentOS 7"},
+			{Value: "opensuse15", Label: "openSUSE 15"},
+			{Value: "fedora40", Label: "Fedora 40"},
+			{Value: "archlinux", Label: "Arch Linux"},
+			{Value: "win11", Label: "Windows 11"},
+			{Value: "win10", Label: "Windows 10"},
+			{Value: "win2k22", Label: "Windows Server 2022"},
+			{Value: "win2k19", Label: "Windows Server 2019"},
+		},
+		Hint: "选具体版本能让虚拟化层给出更合适的默认硬件；不确定时选「不指定」。",
+	},
+	{
+		// 主机名与初始凭据在创建时给：它们是"这台机器第一次开机就该是
+		// 什么样"的一部分，建好再设要走来宾自动化，而那要求 Guest Agent
+		// 已经在跑——对一个刚装好的系统不成立。
+		Key: "hostname", Label: "主机名", Kind: EditKindText, Group: EditGroupBoot,
+		RequiresNode: true, InCreate: true,
+		Hint: "留空则使用虚拟机名称。",
+	},
+	{
+		Key: "initial_password", Label: "初始登录密码", Kind: EditKindText, Group: EditGroupBoot,
+		RequiresNode: true, InCreate: true, CreateOnly: true,
+		Hint: "写入来宾凭据记录，供「来宾自动化」与详情页展示用。**只写不读**，设置后只能重设。",
 	},
 	{
 		Key: "machine_type", Label: "机器类型", Kind: EditKindSelect, Group: EditGroupBoot,
@@ -293,7 +344,7 @@ var editFields = []EditField{
 	},
 	{
 		Key: "init_mode", Label: "首次启动初始化", Kind: EditKindSelect, Group: EditGroupAdvanced,
-		RequiresNode: true, RequiresShutdown: true,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "none",
 		Options: []EditOption{
 			{Value: "none", Label: "不初始化"},
 			{Value: "nocloud", Label: "NoCloud（Linux）"},
@@ -441,6 +492,7 @@ var columnToField = map[string]string{
 	"disk_bytes_read":   "DiskBytesRead",
 	"disk_bytes_write":  "DiskBytesWrite",
 	"os_type":           "OSType",
+	"os_variant":        "OSVariant",
 	"machine_type":      "MachineType",
 	"firmware":          "Firmware",
 	"secure_boot":       "SecureBoot",

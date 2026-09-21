@@ -164,7 +164,8 @@ func main() {
 	// 顺序反了就只能事后补一次装配，而那种"可选装配"最容易被忘记。
 	bus := realtime.NewBus()
 	queue := task.NewQueue(db, recorder, task.Options{}).WithBus(bus)
-	queue.Register(vm.NewCreateExecutor(db, mockAgent))
+	createExec := vm.NewCreateExecutor(db, mockAgent)
+	queue.Register(createExec)
 	queue.Register(vm.NewPowerExecutor(db, mockAgent))
 	queue.Register(vm.NewDeleteExecutor(db, mockAgent))
 	// 快照（F-2-07）。三个执行器共用资源锁键 vm:<id>，因此与电源操作天然
@@ -347,8 +348,12 @@ func main() {
 
 	// 控制台密码需要可逆加密（f-2-08 R-005）：它要交给 agent 参与 VNC 认证，
 	// 因此不能用单向哈希。用途标签与会话签名分开派生。
-	vmSvc.SetEncryptionKey(cryptoutil.DeriveKey(
-		[]byte(cfg.Session.Secret), "k_cockpit/vm/credential/v1"))
+	// 控制台密码与初始登录密码共用同一把派生密钥：它们都是"交给节点或展示
+	// 给用户的可逆凭据"，分开派生只会让"忘了配哪一个"的排查面翻倍。
+	credKey := cryptoutil.DeriveKey(
+		[]byte(cfg.Session.Secret), "k_cockpit/vm/credential/v1")
+	vmSvc.SetEncryptionKey(credKey)
+	createExec.SetEncryptionKey(credKey)
 
 	h := server.Default(server.WithHostPorts(cfg.HTTP.Addr()))
 	router.Register(h, router.Deps{

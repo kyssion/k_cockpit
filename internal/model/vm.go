@@ -136,7 +136,14 @@ type VM struct {
 	// 发现不了（测试库由同一套策略建表，两边一起错），只在连上真实库时
 	// 表现为一个笼统的 500。本项目为此踩过一次（VCPU → v_cpu）。
 
-	OSType      string `gorm:"column:os_type;size:32;not null;default:linux"`
+	OSType string `gorm:"column:os_type;size:32;not null;default:linux"`
+	// OSVariant 是具体系统版本（libosinfo short id）。
+	//
+	// 与 OSType 的关系：那是**大类**（决定硬件呈现的大方向，且必须非空），
+	// 这是**具体版本**（可为空——只有镜像被识别过或在向导里手选才有值）。
+	// 合到一列会让两种精度混在一起，而"知道它是 Linux"与"知道它是 Ubuntu
+	// 24.04"对虚拟化层是不同的信息量。
+	OSVariant   string `gorm:"column:os_variant;size:64"`
 	MachineType string `gorm:"size:32;not null;default:q35"`
 	Firmware    string `gorm:"size:16;not null;default:bios"`
 	SecureBoot  bool   `gorm:"not null;default:false"`

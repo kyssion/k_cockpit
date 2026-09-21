@@ -471,10 +471,26 @@ type CreateRequest struct {
 	// 键名与 editFields 矩阵一致：创建与编辑共用同一份取值与范围定义，
 	// 校验因此也走同一套（validateCreateConfig），不必再抄一份规则。
 
-	DiskFormat      string
-	DiskBus         string
-	NicModel        string
-	OSType          string
+	DiskFormat string
+	DiskBus    string
+	NicModel   string
+	OSType     string
+	// OSVariant 是具体系统版本（libosinfo short id）。
+	OSVariant string
+	// Hostname / InitialPassword / InitMode 是"第一次开机就该是什么样"的
+	// 一部分：建好再设要走来宾自动化，而那要求 Guest Agent 已经在跑——
+	// 对一个刚装好的系统不成立。
+	Hostname        string
+	InitialPassword string
+	InitMode        string
+	// StaticIP 是主网口的静态地址；留空由 DHCP 分配。
+	StaticIP string
+	// DataDisks 是除系统盘之外要一并创建的数据盘。
+	//
+	// 为什么不在矩阵里：矩阵描述的是"一个值"，而数据盘是一组结构（大小 +
+	// 格式 + 驱动），且数量不定。硬塞进矩阵会得到 data_disk_1_size 这种
+	// 上限写死在键名里的设计。
+	DataDisks       []DataDiskSpec
 	MachineType     string
 	Firmware        string
 	SecureBoot      bool
@@ -505,6 +521,13 @@ type CreateRequest struct {
 	ClientToken string
 	// BatchKey 是批量分组键，便于在任务中心按批查看与取消。
 	BatchKey string
+}
+
+// DataDiskSpec 描述创建时要一并建立的一块数据盘。
+type DataDiskSpec struct {
+	SizeGB int    `json:"size_gb"`
+	Format string `json:"format,omitempty"`
+	Bus    string `json:"bus,omitempty"`
 }
 
 // loadTemplateForClone 取出并校验要克隆的模板。
@@ -607,10 +630,21 @@ func (s *Service) CreateBatch(
 		return nil, err
 	}
 
+	if err := validateCreateExtras(req); err != nil {
+		return nil, err
+	}
+
 	// 配额按**整批**校验（R-005）：逐台校验会让第 N 台在写入前才发现超额，
 	// 而那时前面几台已经建好了——用户看到的是「建了一半」。
+	//
+	// 数据盘要算进去：它同系统盘一样是落在实际存储池里的镜像文件，漏掉它
+	// 会让配额显示还剩很多、实际却写不下。
 	if s.quota != nil {
-		total := int64(req.DiskGB) * int64(req.Count) * 1024 * 1024 * 1024
+		perVM := int64(req.DiskGB)
+		for i := range req.DataDisks {
+			perVM += int64(req.DataDisks[i].SizeGB)
+		}
+		total := perVM * int64(req.Count) * 1024 * 1024 * 1024
 		if err := s.quota.Check(ctx, owner.UserID, req.NodeID, total); err != nil {
 			return nil, err
 		}
