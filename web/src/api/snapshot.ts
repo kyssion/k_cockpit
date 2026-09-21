@@ -67,6 +67,27 @@ export const snapshotApi = {
     post<TaskRef>(`/api/v1/vms/${vmID}/snapshots/${id}/restore`),
 
   remove: (vmID: number, id: number) => del<TaskRef>(`/api/v1/vms/${vmID}/snapshots/${id}`),
+
+  /**
+   * 删除全部快照。
+   *
+   * 它是一个**整体操作**而不是循环调用单条删除：逐个入队会让"删到第三个
+   * 失败"留下一个既删了一部分、又没有地方可跟踪的中间状态。执行器按依赖
+   * 顺序（先删后建的）逐个删除。
+   *
+   * 需要二次验证（与恢复快照同一档）：丢一个还原点与丢掉整条时间线不是
+   * 同一件事。
+   */
+  deleteAll: (vmID: number, skipCurrent = false) =>
+    post<{ task_id: number; total: number; skipped: number }>(
+      `/api/v1/vms/${vmID}/snapshots/delete-all`,
+      { skip_current: skipCurrent },
+    ),
+}
+
+/** 修复 UEFI 启动项（恢复快照之后最常见的后遗症）。 */
+export const nvramApi = {
+  repair: (vmID: number) => post<TaskRef>(`/api/v1/vms/${vmID}/nvram/repair`),
 }
 
 /** 快照状态的中文名。 */
@@ -94,4 +115,15 @@ export const SNAPSHOT_STATUS_TONE: Record<SnapshotStatus, 'success' | 'idle' | '
 export const SNAPSHOT_KIND_LABEL: Record<SnapshotKind, string> = {
   internal: '内部快照',
   external: '外部快照',
+}
+
+/**
+ * 快照种类说明。
+ *
+ * 写"代价是什么"而不是"技术上是什么"：外部快照不保存内存，用户点"创建"
+ * 时如果没注意到这一点，会在恢复后发现运行现场不在——那种落差无法挽回。
+ */
+export const SNAPSHOT_KIND_HINT: Record<SnapshotKind, string> = {
+  internal: '保存在同一个镜像文件里，可保存运行现场（内存）。',
+  external: '把当前状态另存一份，不含内存——运行中创建的快照属于这一类。',
 }

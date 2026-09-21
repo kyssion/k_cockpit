@@ -38,9 +38,11 @@ import { GuestActionsSection } from '@/views/vm/GuestActionsSection'
 import { MigrateSection } from '@/views/vm/MigrateSection'
 import { templateApi } from '@/api/template'
 import {
+  SNAPSHOT_KIND_HINT,
   SNAPSHOT_KIND_LABEL,
   SNAPSHOT_STATUS_LABEL,
   SNAPSHOT_STATUS_TONE,
+  nvramApi,
   snapshotApi,
   type Snapshot,
 } from '@/api/snapshot'
@@ -545,7 +547,9 @@ export function VmDetailPage() {
       {tab === 'network' && <NetworkTab vmID={vm.id} />}
       {tab === 'console' && <ConsoleTab vmID={vm.id} />}
 
-      {tab === 'snapshot' && <SnapshotTab vmID={vm.id} />}
+      {/* 固件类型一并传进去：**只有 UEFI 机器才有启动项可修**，而"能不能
+          修"这个判断不该由快照页自己再查一次虚拟机。 */}
+      {tab === 'snapshot' && <SnapshotTab vmID={vm.id} firmware={vm.firmware ?? ''} />}
       {/* 监控画的是**这台机器实际发生了什么**，与「系统信息」里的配置
           是两回事——配置说它应该有多少内存，监控说它实际用了多少。 */}
       {tab === 'monitor' && (
@@ -2281,11 +2285,13 @@ function CreateScheduleModal({
 }
 
 /** SnapshotTab 管理虚拟机的快照（F-2-07）。 */
-function SnapshotTab({ vmID }: { vmID: number }) {
+function SnapshotTab({ vmID, firmware }: { vmID: number; firmware: string }) {
   const queryClient = useQueryClient()
   const [creating, setCreating] = useState(false)
   const [restoreTarget, setRestoreTarget] = useState<Snapshot | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Snapshot | null>(null)
+  const [deleteAllOpen, setDeleteAllOpen] = useState(false)
+  const [skipCurrent, setSkipCurrent] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
 
@@ -2317,6 +2323,36 @@ function SnapshotTab({ vmID }: { vmID: number }) {
       setRestoreTarget(null)
       setError(describe(err))
     },
+  })
+
+  const deleteAll = useMutation({
+    mutationFn: () => snapshotApi.deleteAll(vmID, skipCurrent),
+    onSuccess: (r) => {
+      setDeleteAllOpen(false)
+      setError('')
+      setNotice(
+        r.skipped > 0
+          ? `已提交删除 ${r.total} 个快照（跳过 ${r.skipped} 个），任务 #${r.task_id} 正在执行`
+          : `已提交删除 ${r.total} 个快照，任务 #${r.task_id} 正在执行`,
+      )
+      refresh()
+    },
+    onError: (err) => {
+      setDeleteAllOpen(false)
+      setError(describe(err))
+    },
+  })
+
+  // 启动项修复只在 UEFI 机器上有意义：BIOS 没有 NVRAM 启动项，给一个点了
+  // 必然报错的按钮，只会让人以为"修复失败了"。
+  const repair = useMutation({
+    mutationFn: () => nvramApi.repair(vmID),
+    onSuccess: (r) => {
+      setError('')
+      setNotice(`已提交启动项修复，任务 #${r.task_id} 正在执行；完成后请重启虚拟机确认`)
+      refresh()
+    },
+    onError: (err) => setError(describe(err)),
   })
 
   const remove = useMutation({
@@ -2353,14 +2389,41 @@ function SnapshotTab({ vmID }: { vmID: number }) {
               {used} / {quota}
             </span>
           </div>
-          <Button
-            size="sm"
-            // 配额用完时直接禁用，而不是让用户填完名字才被拒绝。
-            disabled={used >= quota}
-            onClick={() => setCreating(true)}
-          >
-            创建快照
-          </Button>
+          <div className="flex items-center gap-2">
+            {firmware === 'uefi' && (
+              <Button
+                size="sm"
+                variant="secondary"
+                loading={repair.isPending}
+                title="恢复快照后若开机直接进入 UEFI Shell，多半是启动项指向了不存在的路径"
+                onClick={() => repair.mutate()}
+              >
+                修复 UEFI 启动项
+              </Button>
+            )}
+            {/* 删除全部只在真的有快照时出现：一个点了必然失败的按钮，
+                比没有这个按钮更糟。 */}
+            {items.length > 0 && (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => {
+                  setSkipCurrent(false)
+                  setDeleteAllOpen(true)
+                }}
+              >
+                删除全部
+              </Button>
+            )}
+            <Button
+              size="sm"
+              // 配额用完时直接禁用，而不是让用户填完名字才被拒绝。
+              disabled={used >= quota}
+              onClick={() => setCreating(true)}
+            >
+              创建快照
+            </Button>
+          </div>
         </div>
 
         {items.length === 0 ? (
@@ -2398,6 +2461,11 @@ function SnapshotTab({ vmID }: { vmID: number }) {
                   <td className="px-4 py-2.5 text-ink-2">
                     {SNAPSHOT_KIND_LABEL[s.kind] ?? s.kind}
                     {s.include_memory && <span className="ml-1 text-xs text-ink-3">含内存</span>}
+                    {/* 说明写"代价"而不是"技术名词"：外部快照不含内存，
+                        用户如果没注意到，恢复后会发现运行现场不在。 */}
+                    <span className="block text-xs text-ink-3">
+                      {SNAPSHOT_KIND_HINT[s.kind] ?? ''}
+                    </span>
                   </td>
                   <td className="px-4 py-2.5 text-ink-2">
                     {s.size_bytes > 0 ? formatBytes(s.size_bytes) : '—'}
@@ -2440,6 +2508,52 @@ function SnapshotTab({ vmID }: { vmID: number }) {
         <span className="text-warning">恢复快照会丢弃快照之后的所有磁盘改动</span>
         ，且不可撤销。有子快照或正处于「当前状态」的快照不能删除。
       </p>
+
+      <Modal
+        open={deleteAllOpen}
+        title="删除全部快照"
+        description="这台虚拟机的还原点会被一次性删除。删除进行中的快照与当前所处的快照会被跳过。"
+        onClose={() => setDeleteAllOpen(false)}
+        footer={
+          <>
+            <Button variant="secondary" size="sm" onClick={() => setDeleteAllOpen(false)}>
+              取消
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              loading={deleteAll.isPending}
+              onClick={() => deleteAll.mutate()}
+            >
+              确认删除
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-2 text-base text-ink-2">
+          <p>
+            将删除 <span className="kc-nums text-ink">{items.length}</span> 个快照
+            {used >= quota && <span className="ml-1 text-xs text-warning">（配额已满）</span>}
+          </p>
+          <label className="flex cursor-pointer items-start gap-2">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={skipCurrent}
+              onChange={(e) => setSkipCurrent(e.target.checked)}
+            />
+            <span>
+              保留当前所处的快照
+              <span className="block text-xs text-ink-3">
+                勾选后只清掉历史还原点，虚拟机当前所在的那个不动。
+              </span>
+            </span>
+          </label>
+          <p className="text-sm text-danger">
+            删除后无法回滚到这些时间点。这一操作需要二次验证。
+          </p>
+        </div>
+      </Modal>
 
       <CreateSnapshotModal
         open={creating}
