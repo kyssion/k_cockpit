@@ -215,6 +215,24 @@ func stagePlan(op Operation) [][2]string {
 			{"session_kill", "结束在线会话"},
 		}
 
+	case OpPublicIPv6Detect:
+		return [][2]string{
+			{"egress_read", "读取出口网卡"},
+			{"prefix_read", "读取 IPv6 前缀"},
+			{"reachability", "检查可达性"},
+		}
+	case OpPublicIPReload:
+		return [][2]string{
+			{"binding_read", "读取绑定关系"},
+			{"rule_reapply", "重新下发规则"},
+			{"rule_verify", "校验生效"},
+		}
+	case OpPublicIPGuestStatus:
+		return [][2]string{
+			{"guest_probe", "探测来宾配置"},
+			{"reachability", "检查连通性"},
+		}
+
 	case OpStoragePartitionCreate:
 		return [][2]string{
 			{"table_read", "读取分区表"},
@@ -1508,6 +1526,28 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 				return 2
 			}(),
 			Message: "SSH 访问设置已生效",
+		}
+
+	case OpPublicIPv6Detect:
+		data[IPv6PrefixDataKey] = []IPv6PrefixInfo{
+			{Prefix: "2001:db8:1::/64", EgressIf: "eth0", Trusted: true, Assignable: 100},
+			// 一条不可信的：界面要能显示"检测到了但用不了"，否则用户会以为
+			// 检测出来的都能用。
+			{Prefix: "fd00:1::/64", EgressIf: "eth1", Trusted: false, Assignable: 0},
+		}
+
+	case OpPublicIPReload:
+		data[PublicIPReloadDataKey] = PublicIPReloadInfo{
+			Applied: 3,
+			Message: "已按当前绑定关系重新应用规则",
+		}
+
+	case OpPublicIPGuestStatus:
+		data[GuestIPDataKey] = []GuestIPInfo{
+			{Address: "203.0.113.10/24", Family: "ipv4", Configured: true, Reachable: true},
+			// 一条"规则下发了、来宾没配上"的：这是排查"绑了却不通"时最需要
+			// 区分的一种情况。
+			{Address: "2001:db8:1::10/64", Family: "ipv6", Configured: false, Reachable: false, Detail: "来宾内未配置该地址"},
 		}
 
 	case OpStoragePartitions:

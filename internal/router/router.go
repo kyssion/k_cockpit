@@ -871,6 +871,13 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/public-ips/:id/bind", requireAuth, adminOnly, publicIPHandler.Bind)
 		v1.POST("/public-ips/:id/migrate", requireAuth, adminOnly, publicIPHandler.Migrate)
 		v1.DELETE("/public-ips/:id/bind", requireAuth, adminOnly, publicIPHandler.Unbind)
+		// 公网 IP 的三项运维能力（F-4-06）：前缀检测、规则重载、来宾地址状态。
+		//
+		// 前两项挂在 /public-ips 下（按节点），第三项按虚拟机查询——它回答的是
+		// "绑定成功之后为什么还是不通"。
+		v1.GET("/public-ips/ipv6-prefixes", requireAuth, adminOnly, publicIPHandler.DetectIPv6Prefixes)
+		v1.POST("/public-ips/reload", requireAuth, adminOnly, publicIPHandler.ReloadRules)
+		v1.GET("/vms/:id/public-ips/guest-status", requireAuth, publicIPHandler.GuestStatus)
 
 		// 存储配额（F-9-02）。
 		//
