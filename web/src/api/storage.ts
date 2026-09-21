@@ -100,3 +100,56 @@ export const POOL_STATUS_TONE: Record<PoolStatus, StatusTone> = {
   unallocated: 'info',
   error: 'danger',
 }
+
+/** 一个分区（节点侧事实，按需读取而不是缓存）。 */
+export interface PartitionView {
+  index: number
+  path: string
+  size_bytes: number
+  fs_type?: string
+  mounted: boolean
+  /** 系统盘上的分区：删它的后果不是"少一块空间"，而是宿主机可能起不来。 */
+  system: boolean
+  in_use_by_pool?: string
+}
+
+export interface PartitionListView {
+  node_id: number
+  device_id: string
+  items: PartitionView[]
+  unavailable?: string
+}
+
+export interface TrimResultView {
+  node_id: number
+  devices: number
+  reclaimed_bytes: number
+  message: string
+}
+
+export const storageExtraApi = {
+  partitions: (nodeID: number, deviceID: string) =>
+    get<PartitionListView>('/api/v1/storage-partitions', { node_id: nodeID, device_id: deviceID }),
+
+  createPartition: (input: { node_id: number; device_id: string; size_gb: number }) =>
+    post<{ task_id: number; status: string }>('/api/v1/storage-partitions', input),
+
+  /**
+   * 删除分区。参数走查询串而不是请求体：DELETE 带 body 并非所有中间层都
+   * 支持，而这里只有三个标量。
+   */
+  deletePartitions: (input: { node_id: number; device_id: string; index?: number; all?: boolean }) => {
+    const qs = new URLSearchParams({ node_id: String(input.node_id), device_id: input.device_id })
+    if (input.all) qs.set('all', 'true')
+    else if (input.index) qs.set('index', String(input.index))
+    return del<{ task_id: number; status: string }>(`/api/v1/storage-partitions?${qs.toString()}`)
+  },
+
+  updatePoolConfig: (id: number, input: { mount_path?: string; auto_mount?: boolean; remark?: string }) =>
+    post<{ task_id: number; status: string }>(`/api/v1/storage-pools/${id}/config`, input),
+
+  unmountPool: (id: number) =>
+    post<{ task_id: number; status: string }>(`/api/v1/storage-pools/${id}/unmount`),
+
+  trim: (nodeID: number) => post<TrimResultView>('/api/v1/storage/trim', { node_id: nodeID }),
+}
