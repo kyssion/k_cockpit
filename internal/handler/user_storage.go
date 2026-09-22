@@ -94,6 +94,31 @@ func (h *UserStorage) DeleteFile(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, map[string]any{"deleted": true})
 }
 
+// Download 取回一份用户存储文件（G-38）。内容经控制面转发，
+// 归属校验与审计在服务层；不缓存——减少一份浏览器磁盘缓存里的副本。
+func (h *UserStorage) Download(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "文件 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	userID, nodeID := userAndNode(c)
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	name, data, mime, err := h.svc.DownloadFile(ctx, userID, nodeID, id,
+		authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	c.Header("Content-Disposition", contentDisposition(name))
+	c.Header("Cache-Control", "no-store")
+	c.SetContentType(mime)
+	c.Response.SetBody(data)
+}
+
 type createUploadRequest struct {
 	NodeID    int64  `json:"node_id"`
 	Category  string `json:"category"`

@@ -46,6 +46,9 @@ export function PublicIPPage() {
   // ——用户需要看到哪几条失败了、为什么。
   const [batchResult, setBatchResult] = useState<BatchResult | null>(null)
   const [prefixOpen, setPrefixOpen] = useState(false)
+  // IPv6 引导（G-38）：从前缀检测带入录入——预填出口网卡与地址前缀，
+  // 用户补全后缀即可。检测只读、录入要人确认，两步分开是有意的。
+  const [ipv6Prefill, setIpv6Prefill] = useState<{ ip: string; egress_if: string } | null>(null)
 
   const nodes = useQuery({ queryKey: ['nodes'], queryFn: nodeApi.list })
   const effectiveNodeID = nodeID || nodes.data?.[0]?.id || 0
@@ -328,20 +331,32 @@ export function PublicIPPage() {
         open={prefixOpen}
         nodeID={effectiveNodeID}
         onClose={() => setPrefixOpen(false)}
+        onUse={(prefix, egressIf) => {
+          setIpv6Prefill({ ip: prefix, egress_if: egressIf })
+          setPrefixOpen(false)
+          setCreateOpen(true)
+        }}
       />
 
       <CreateIPModal
+        key={`create-ip-${createOpen}-${ipv6Prefill?.ip ?? ''}`}
         open={createOpen}
         nodeID={effectiveNodeID}
-        onClose={() => setCreateOpen(false)}
+        initial={createOpen ? ipv6Prefill : null}
+        onClose={() => {
+          setCreateOpen(false)
+          setIpv6Prefill(null)
+        }}
         onDone={(count) => {
           setCreateOpen(false)
+          setIpv6Prefill(null)
           setError('')
           setNotice(`已录入 ${count} 个地址`)
           refresh()
         }}
         onError={(msg) => {
           setCreateOpen(false)
+          setIpv6Prefill(null)
           setError(msg)
         }}
       />
@@ -382,23 +397,26 @@ export function PublicIPPage() {
   )
 }
 
-/** CreateIPModal 录入地址，支持单个或 CIDR 批量。 */
+/** CreateIPModal 录入地址，支持单个或 CIDR 批量，IPv4 与 IPv6 皆可（G-38）。 */
 function CreateIPModal({
   open,
   nodeID,
+  initial,
   onClose,
   onDone,
   onError,
 }: {
   open: boolean
   nodeID: number
+  /** 从 IPv6 前缀检测带入的预填值；打开时应用一次。 */
+  initial?: { ip: string; egress_if: string } | null
   onClose: () => void
   onDone: (count: number) => void
   onError: (message: string) => void
 }) {
-  const [ip, setIP] = useState('')
+  const [ip, setIP] = useState(initial?.ip ?? '')
   const [gateway, setGateway] = useState('')
-  const [egressIf, setEgressIf] = useState('')
+  const [egressIf, setEgressIf] = useState(initial?.egress_if ?? '')
   const [modes, setModes] = useState<PublicIPMode[]>(['nat_1to1'])
   const [remark, setRemark] = useState('')
 
@@ -438,9 +456,9 @@ function CreateIPModal({
     >
       <div className="flex flex-col gap-3">
         <Input
-          label="地址或网段"
+          label="地址或网段（IPv4 / IPv6）"
           value={ip}
-          placeholder="203.0.113.10 或 203.0.113.0/29"
+          placeholder="203.0.113.10、203.0.113.0/29 或 2001:db8:ab::10"
           onChange={(e) => setIP(e.target.value)}
           hint="一次最多展开 4096 个地址。填 /8 这种超大的网段会被拒绝——那多半是掩码写错了一位，而照做会在库里留下一批你并不打算录入的地址。"
         />
@@ -728,10 +746,13 @@ function IPv6PrefixModal({
   open,
   nodeID,
   onClose,
+  onUse,
 }: {
   open: boolean
   nodeID: number
   onClose: () => void
+  /** 对可用前缀点「带入录入」：把前缀与出口网卡预填进录入表单（G-38）。 */
+  onUse: (prefix: string, egressIf: string) => void
 }) {
   const list = useQuery({
     queryKey: ['ipv6-prefixes', nodeID],
@@ -770,6 +791,17 @@ function IPv6PrefixModal({
                 </StatusBadge>
                 {p.assignable >= 0 && (
                   <span className="kc-nums text-xs text-ink-3">可分配 {p.assignable}</span>
+                )}
+                {/* 只对可用前缀给入口：不可用的前缀带进录入表单，只会在
+                    创建时被拒绝——那一步的错误对定位没有帮助。 */}
+                {p.trusted && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => onUse(p.prefix, p.egress_if ?? '')}
+                  >
+                    带入录入
+                  </Button>
                 )}
               </span>
             </li>

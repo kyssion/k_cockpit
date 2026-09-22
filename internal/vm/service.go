@@ -198,6 +198,13 @@ type View struct {
 	LockReason string     `json:"lock_reason,omitempty"`
 	LockedAt   *time.Time `json:"locked_at,omitempty"`
 
+	// NodeMaintenance 表示所属节点处于维护模式（G-37）。
+	//
+	// 维护模式下电源与配置操作都会被拒绝——在列表上把这个事实提前画出来，
+	// 比让用户逐台点了才收到同一个错误要好。批量查节点表（一次查询），
+	// 与锁定的填充方式同理。
+	NodeMaintenance bool `json:"node_maintenance"`
+
 	// RescueActive 表示该虚拟机当前从救援镜像启动（F-2-12）。
 	//
 	// 界面据此显示醒目提示：救援模式下看到的系统**不是用户自己的系统**
@@ -328,6 +335,21 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]View, int64, error)
 		}
 	}
 
+	// 维护标记（G-37）同样**一次查完**：节点通常只有个位数，一次 IN 查询
+	// 的代价可以忽略，而它换来的是列表上直接可见的「这台机器动不了」。
+	maintenance := map[int64]bool{}
+	if len(ids) > 0 {
+		var rows []model.Node
+		if err := s.db.WithContext(ctx).
+			Where("maintenance_mode = ?", true).Find(&rows).Error; err != nil {
+			log.Printf("[vm] 查询维护节点失败（列表将不显示该标记）: %v", err)
+		} else {
+			for i := range rows {
+				maintenance[rows[i].ID] = true
+			}
+		}
+	}
+
 	views := make([]View, 0, len(vms))
 	for i := range vms {
 		view := toView(&vms[i], locks[vms[i].ID], now, threshold)
@@ -338,6 +360,7 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]View, int64, error)
 			latest := u
 			view.Usage = &latest
 		}
+		view.NodeMaintenance = maintenance[vms[i].NodeID]
 		views = append(views, view)
 	}
 	return views, total, nil
@@ -501,6 +524,14 @@ type CreateRequest struct {
 	// HideKVM / NestedVirt 默认关闭：它们都有实打实的代价，只有确实需要才开。
 	HideKVM    bool
 	NestedVirt bool
+	// VideoModel / RTCMode / Arch 是显示与架构维度（G-29）：
+	// 组合约束（aarch64 → virt + UEFI + ramfb 等）由 validateCreateExtras 校验。
+	VideoModel string
+	RTCMode    string
+	Arch       string
+	// CPUHotplug / MemoryHotplug 是运行态热扩的创建期前提（F-2-05）。
+	CPUHotplug    bool
+	MemoryHotplug bool
 	// NICCount 是要一并创建的网口数量（含主网口）。0 / 1 都表示只建主网口。
 	//
 	// 它存在的理由：多网卡机器（内网 + 公网 + 管理网）建好之后再加，要一块块
@@ -531,6 +562,10 @@ type CreateRequest struct {
 	// ISOFileID 非零表示创建成功后把该镜像挂到光驱——ISO 安装路径
 	// （f-2-02）：虚拟机建好时空盘无法引导，挂上镜像才能进安装界面。
 	ISOFileID int64
+	// ISOFileIDs 是多 ISO 场景（G-29）：首个为主安装盘（决定系统类型与
+	// 最小磁盘的推断），其余作为额外光驱。与 ISOFileID 并存：老客户端
+	// 只传单值时由它兜底，两处都给值时以列表为准。
+	ISOFileIDs []int64
 	// SwitchID 是主网口接入的交换机；为零表示落到节点的系统网络。
 	SwitchID int64
 	// SecurityGroupIDs 是主网口挂载的安全组。
@@ -824,6 +859,9 @@ func validateCreateConfig(req CreateRequest) error {
 		"boot_order":   req.BootOrder,
 		"watchdog":     req.Watchdog,
 		"cpu_type":     req.CPUType,
+		"video_model":  req.VideoModel,
+		"rtc_mode":     req.RTCMode,
+		"arch":         req.Arch,
 	}
 	numbers := map[string]int{
 		"cpu_limit_percent": req.CPULimitPercent,

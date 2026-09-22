@@ -175,6 +175,24 @@ type VM struct {
 	FloppyFileID    *int64 `gorm:"column:floppy_file_id"`
 	CPULimitPercent int    `gorm:"column:cpu_limit_percent;not null;default:0"`
 	MemoryHugepages bool   `gorm:"not null;default:false"`
+
+	// --- 显示与架构（创建向导，G-29）---
+	//
+	// VideoModel 是显示设备型号（virtio/vga/qxl/...）。它决定来宾里看到的
+	// 显卡与控制台的行为：无头机器选 none，ARM 机器几乎必须 ramfb。
+	VideoModel string `gorm:"column:video_model;size:16;not null;default:virtio"`
+	// RTCMode 是实时时钟的时区口径：utc（Linux 默认）或 localtime
+	// （Windows 惯例——否则系统时间会差一个时区）。
+	RTCMode string `gorm:"column:rtc_mode;size:16;not null;default:utc"`
+	// Arch 是来宾架构。x86_64 之外的取值会改变机型/固件/显示设备的合法
+	// 组合（aarch64 只能 virt + UEFI + ramfb），由创建校验保证。
+	Arch string `gorm:"column:arch;size:16;not null;default:x86_64"`
+
+	// CPUHotplug / MemoryHotplug 是运行态热扩的前提：libvirt 需要在建域时
+	// 就预置热插拔槽位与内存气球设备。创建时没打开的话，运行中扩容无从谈起
+	// ——它不是运行态的属性，而是建域那一刻定下的事实。
+	CPUHotplug    bool `gorm:"column:cpu_hotplug;not null;default:false"`
+	MemoryHotplug bool `gorm:"column:memory_hotplug;not null;default:false"`
 	// APIC / PAE 同样是 default:true 的字段：创建时如果传 false 会被省略
 	// 而变成 true。当前它们只出现在编辑矩阵（走 Update），不受影响。
 	APIC bool `gorm:"column:apic;not null;default:true"`

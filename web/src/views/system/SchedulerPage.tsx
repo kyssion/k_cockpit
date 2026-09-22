@@ -20,6 +20,9 @@ import { StatusBadge } from '@/components/common/StatusBadge'
 
 export function SchedulerPage() {
   const [onlyFailed, setOnlyFailed] = useState(false)
+  // 按调度器筛选（G-38）：后端一直支持按 key 过滤，之前只是没有入口——
+  // 事件一多，「只看失败」之外还需要定位到单个调度器的历史。
+  const [schedulerKey, setSchedulerKey] = useState('')
 
   const overview = useQuery({
     queryKey: ['schedulers'],
@@ -28,8 +31,8 @@ export function SchedulerPage() {
   })
 
   const events = useQuery({
-    queryKey: ['scheduler-events', onlyFailed],
-    queryFn: () => schedulerApi.events(undefined, onlyFailed ? 'failed' : undefined),
+    queryKey: ['scheduler-events', onlyFailed, schedulerKey],
+    queryFn: () => schedulerApi.events(schedulerKey || undefined, onlyFailed ? 'failed' : undefined),
   })
 
   if (overview.isPending) return <PageLoading />
@@ -62,13 +65,28 @@ export function SchedulerPage() {
       <section className="flex flex-col gap-3">
         <header className="flex flex-wrap items-baseline justify-between gap-3">
           <h2 className="text-base font-medium text-ink-2">调度事件</h2>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => setOnlyFailed((v) => !v)}
-          >
-            {onlyFailed ? '显示全部' : '只看失败'}
-          </Button>
+          <div className="flex items-center gap-2">
+            <select
+              value={schedulerKey}
+              onChange={(e) => setSchedulerKey(e.target.value)}
+              aria-label="按调度器筛选"
+              className="h-8 rounded-control border border-line-strong bg-sunken px-2 text-base text-ink"
+            >
+              <option value="">全部调度器</option>
+              {items.map((v) => (
+                <option key={v.scheduler.key} value={v.scheduler.key}>
+                  {v.scheduler.name}
+                </option>
+              ))}
+            </select>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setOnlyFailed((v) => !v)}
+            >
+              {onlyFailed ? '显示全部' : '只看失败'}
+            </Button>
+          </div>
         </header>
 
         {events.isPending ? (

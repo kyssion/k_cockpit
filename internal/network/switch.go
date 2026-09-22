@@ -7,6 +7,7 @@ import (
 	"hash/fnv"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 
 	"gorm.io/gorm"
@@ -29,6 +30,11 @@ type SwitchRequest struct {
 	DHCPStart string
 	DHCPEnd   string
 	UplinkIf  string
+	// BandwidthInMbps / BandwidthOutMbps 是该交换机的总带宽上限（G-38，
+	// F-4-10 的速率型维度）。0 表示不限。它约束的是**整个交换机**的合计
+	// 吞吐，与网卡级的 rate_limit_mbps（单网卡）是两层不同的限制。
+	BandwidthInMbps  int
+	BandwidthOutMbps int
 }
 
 // maxBridgeNameLen 是宿主机上网桥名的长度上限。
@@ -100,14 +106,16 @@ func (s *Service) CreateSwitch(
 			// 而两处一旦不一致，节点收到的目标与记录里写的就不是同一个。
 			"bridge_name": bridgeNameFor(nodeID, req.Name),
 			"spec": map[string]any{
-				"name":       req.Name,
-				"mode":       req.Mode,
-				"vlan_id":    req.VlanID,
-				"cidr":       req.CIDR,
-				"gateway_ip": req.GatewayIP,
-				"dhcp_start": req.DHCPStart,
-				"dhcp_end":   req.DHCPEnd,
-				"uplink_if":  req.UplinkIf,
+				"name":               req.Name,
+				"mode":               req.Mode,
+				"vlan_id":            req.VlanID,
+				"cidr":               req.CIDR,
+				"gateway_ip":         req.GatewayIP,
+				"dhcp_start":         req.DHCPStart,
+				"dhcp_end":           req.DHCPEnd,
+				"uplink_if":          req.UplinkIf,
+				"bandwidth_in_mbps":  req.BandwidthInMbps,
+				"bandwidth_out_mbps": req.BandwidthOutMbps,
 			},
 		},
 	})
@@ -164,14 +172,16 @@ func (s *Service) UpdateSwitch(
 			"switch_id":   sw.ID,
 			"bridge_name": sw.BridgeName,
 			"spec": map[string]any{
-				"name":       req.Name,
-				"mode":       req.Mode,
-				"vlan_id":    req.VlanID,
-				"cidr":       req.CIDR,
-				"gateway_ip": req.GatewayIP,
-				"dhcp_start": req.DHCPStart,
-				"dhcp_end":   req.DHCPEnd,
-				"uplink_if":  req.UplinkIf,
+				"name":               req.Name,
+				"mode":               req.Mode,
+				"vlan_id":            req.VlanID,
+				"cidr":               req.CIDR,
+				"gateway_ip":         req.GatewayIP,
+				"dhcp_start":         req.DHCPStart,
+				"dhcp_end":           req.DHCPEnd,
+				"uplink_if":          req.UplinkIf,
+				"bandwidth_in_mbps":  req.BandwidthInMbps,
+				"bandwidth_out_mbps": req.BandwidthOutMbps,
 			},
 		},
 	})
@@ -271,6 +281,17 @@ func (r *SwitchRequest) validate() error {
 	case model.NetworkModeNAT, model.NetworkModeEmpty, model.NetworkModePhysical:
 	default:
 		return api.InvalidParameter("网络模式非法，可选 nat / empty / physical")
+	}
+
+	// 带宽上限（G-38）：0 表示不限，负数与超上限拒绝。上限取 40 Gbps
+	// 的 Mbps 值——它高于当前主流单机网络的最大吞吐，只用来挡住明显的
+	// 手滑输入，而不是一个业务约束。
+	if r.BandwidthInMbps < 0 || r.BandwidthOutMbps < 0 {
+		return api.InvalidParameter("带宽上限不能为负数（0 表示不限）")
+	}
+	if r.BandwidthInMbps > maxSwitchBandwidthMbps || r.BandwidthOutMbps > maxSwitchBandwidthMbps {
+		return api.InvalidParameter(
+			"带宽上限不能超过 " + strconv.Itoa(maxSwitchBandwidthMbps) + " Mbps")
 	}
 
 	if r.VlanID != nil && (*r.VlanID < 1 || *r.VlanID > 4094) {
@@ -395,3 +416,7 @@ func (s *Service) record(
 		ClientIP:     clientIP,
 	})
 }
+
+// maxSwitchBandwidthMbps 是交换机带宽上限的输入上限（40 Gbps）。
+// 它挡的是手滑输入，不是业务约束——真实的瓶颈由链路决定。
+const maxSwitchBandwidthMbps = 40000

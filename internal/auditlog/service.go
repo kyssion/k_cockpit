@@ -57,6 +57,9 @@ type Filter struct {
 	Success *bool
 	// Keyword 在资源名与错误信息里做模糊匹配。
 	Keyword string
+	// Source 按记录来源精确匹配（web / api / system / emergency，G-38）；
+	// 空串表示不限。
+	Source string
 
 	Page     int
 	PageSize int
@@ -155,6 +158,11 @@ func (s *Service) List(ctx context.Context, f Filter, v authz.Viewer) (*Page, er
 	}
 	if f.Success != nil {
 		query = query.Where("success = ?", *f.Success)
+	}
+	// 来源（G-38）：web / api / system / emergency。它是判断一条记录风险的
+	// 第一手信息——API 凭证与带外脚本的操作需要能被单独拎出来看。
+	if f.Source != "" {
+		query = query.Where("source = ?", f.Source)
 	}
 	if kw := strings.TrimSpace(f.Keyword); kw != "" {
 		// 只在资源名与错误信息里找：把参数也纳入匹配，会让"搜一个常见的

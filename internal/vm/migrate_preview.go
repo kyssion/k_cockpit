@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"k_cockpit/internal/agent"
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/authz"
 	"k_cockpit/internal/model"
@@ -59,6 +60,12 @@ type MigrationPreview struct {
 	// 给一个精确到秒的估计会让用户按它去安排窗口期——然后发现差了几倍。
 	// 相比之下「取决于 X，通常在这个量级」不会误导人。
 	DowntimeHint string `json:"downtime_hint"`
+	// BandwidthMbps 是两节点间**实测**的可用带宽（G-35）；测不到时为 0，
+	// 此时 DowntimeHint 回落到按链路规格的口径。
+	BandwidthMbps int64 `json:"bandwidth_mbps,omitempty"`
+	// BandwidthSource 说明带宽的来源（speedtest / estimate），两者置信度
+	// 不同，界面上要能区分。
+	BandwidthSource string `json:"bandwidth_source,omitempty"`
 }
 
 // PreviewMigration 预检一次迁移。**只读**，不产生任何记录。
@@ -96,12 +103,7 @@ func (s *Service) PreviewMigration(
 	out.ModeNote = "先把虚拟机**关机**，把磁盘完整复制到目标节点，再在那边启动。" +
 		"因此停机时长约等于复制整个磁盘所需的时间。"
 	if target.DiskGB > 0 {
-		// 见 DowntimeHint 的说明：给量级与依据，不给精确数字。
-		out.DowntimeHint = fmt.Sprintf(
-			"取决于两个节点之间的实际带宽。以千兆网（约 100 MB/s）为例，"+
-				"%d GB 的数据大约需要 %d 分钟；万兆网快约十倍。"+
-				"迁移期间虚拟机保持关机。",
-			target.DiskGB, target.DiskGB*1024/100/60)
+		out.DowntimeHint = s.migrationDowntimeHint(ctx, target, toNodeID, out)
 	}
 
 	if target.DiskGB == 0 {
@@ -114,6 +116,56 @@ func (s *Service) PreviewMigration(
 			"但存储与 CPU 的实际性能取决于目标节点。")
 
 	return out, nil
+}
+
+// migrationDowntimeHint 生成停机时长的估算文案（G-35）。
+//
+// 优先使用**实测带宽**（节点间真实传输一小段数据计时），拿不到时回落到
+// 按千兆链路的口径。两条路径的差别是置信度：实测值能把「大约 7 分钟」
+// 收窄到「大约 8 分钟」，而回落路径连数量级都可能差十倍——界面上必须
+// 能看出当前给的是哪一种。
+func (s *Service) migrationDowntimeHint(
+	ctx context.Context, target *model.VM, toNodeID int64, out *MigrationPreview,
+) string {
+	// 测速失败不阻断预检：带宽只是一个估算依据，评估不出来说明原因，
+	// 然后回落到公式——迁移本身在其余校验通过时仍然可以进行。
+	result, err := s.agent.Execute(ctx, agent.Operation{
+		Kind:   agent.OpMigrateAssess,
+		NodeID: target.NodeID,
+		Target: target.Name,
+		Params: map[string]any{"target_node_id": toNodeID},
+	})
+	if err == nil && result.Success {
+		if info, ok := result.Data[agent.MigrateAssessDataKey].(agent.MigrateAssessInfo); ok && info.BandwidthMbps > 0 {
+			out.BandwidthMbps = info.BandwidthMbps
+			out.BandwidthSource = info.Source
+			// MB/s = Mbps / 8；分钟 = GB * 1024 MB / (MB/s) / 60。
+			minutes := int64(target.DiskGB) * 1024 / (info.BandwidthMbps / 8) / 60
+			hint := fmt.Sprintf(
+				"实测两节点间带宽约 %d Mbps%s。%d GB 的数据预计需要 %d 分钟；"+
+					"实际时长取决于传输时的并发负载，迁移期间虚拟机保持关机。",
+				info.BandwidthMbps, sourceNote(info.Source), target.DiskGB, minutes)
+			if info.Message != "" {
+				hint += "（" + info.Message + "）"
+			}
+			return hint
+		}
+	}
+	out.Warnings = append(out.Warnings,
+		"未能测得两节点间的实际带宽，以下估算按千兆链路的常见值计算")
+	return fmt.Sprintf(
+		"取决于两个节点之间的实际带宽。以千兆网（约 100 MB/s）为例，"+
+			"%d GB 的数据大约需要 %d 分钟；万兆网快约十倍。"+
+			"迁移期间虚拟机保持关机。",
+		target.DiskGB, target.DiskGB*1024/100/60)
+}
+
+// sourceNote 把来源标识翻成人话，说明这个数字有多可信。
+func sourceNote(source string) string {
+	if source == agent.AssessSourceEstimate {
+		return "（按链路规格估算）"
+	}
+	return ""
 }
 
 // migrationBlockers 返回会阻止迁移的条件。

@@ -230,6 +230,23 @@ function MigrateModal({
                   {/* **「会怎么迁」比「能不能迁」更影响决定**：停机时长由它
                       决定，而用户很可能以为迁移是「不断服务地挪过去」。 */}
                   <p className="text-sm text-ink-2">{preview.data.mode_note}</p>
+                  {/* 实测带宽（G-35）：标注来源，实测与估算的置信度不同。 */}
+                  {preview.data.bandwidth_mbps ? (
+                    <p className="text-sm text-ink-2">
+                      实测带宽：
+                      <span className="kc-nums">{preview.data.bandwidth_mbps} Mbps</span>
+                      {preview.data.bandwidth_source === 'speedtest' && (
+                        <span className="ml-1.5 rounded-pill bg-success/10 px-1.5 py-0.5 text-xs text-success">
+                          实测
+                        </span>
+                      )}
+                      {preview.data.bandwidth_source === 'estimate' && (
+                        <span className="ml-1.5 rounded-pill bg-warning/10 px-1.5 py-0.5 text-xs text-warning">
+                          估算
+                        </span>
+                      )}
+                    </p>
+                  ) : null}
                   {preview.data.downtime_hint && (
                     <p className="text-sm text-ink-3">{preview.data.downtime_hint}</p>
                   )}

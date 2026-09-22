@@ -65,6 +65,13 @@ export const userStorageApi = {
   removeFile: (nodeID: number, id: number) =>
     del<{ deleted: boolean }>(`/api/v1/my-storage/files/${id}?node_id=${nodeID}`),
 
+  /**
+   * 下载地址（G-38）。内容经控制面转发（归属校验+审计在服务端），
+   * 用 <a href> 直接触发浏览器下载。
+   */
+  fileUrl: (nodeID: number, id: number) =>
+    `/api/v1/my-storage/files/${id}/download?node_id=${nodeID}`,
+
   createUpload: (input: {
     node_id: number
     category: FileCategory

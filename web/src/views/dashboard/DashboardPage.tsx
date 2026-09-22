@@ -18,6 +18,7 @@ import { Button } from '@/components/common/Button'
 import { EmptyState, PageLoading } from '@/components/common/Feedback'
 import { StatusBadge } from '@/components/common/StatusBadge'
 import { useSessionStore } from '@/stores/session'
+import { MyQuotaPanel } from './MyQuotaPanel'
 import { cn } from '@/utils/cn'
 import { formatBytes, relativeTime } from '@/utils/format'
 import { readRecentVisits } from '@/utils/recentVisits'
@@ -106,6 +107,11 @@ export function DashboardPage() {
           {user?.role === 'admin' && (
             <HostCard host={summary.data.host} allocation={summary.data.allocation} />
           )}
+
+          {/* G-32：普通用户的配额视角。管理员走平台视图（上方的宿主机资源
+              卡），配额是「我的额度还剩多少」的问题，两类卡片并存会让
+              页面出现两套「用量」口径。 */}
+          {user?.role !== 'admin' && <MyQuotaPanel />}
 
           <CommitCard allocation={summary.data.allocation} host={summary.data.host} />
 

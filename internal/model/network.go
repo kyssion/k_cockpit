@@ -28,8 +28,9 @@ const NetworkDefaultName = "default"
 
 // VpcSwitch 对应 vpc_switch 表。
 //
-// M2 只使用 `IsSystem = true` 的系统基础网络记录；VPC 交换机的其余字段
-// （带宽、流量配额等）由 M3 启用（f-4-01 §5.1）。
+// 系统基础网络（IsSystem = true）之外的自建交换机从 M3 起投入使用；
+// 带宽上限字段（BandwidthInMbps/OutMbps）自 G-38 起受理输入——
+// 月度流量配额仍属 F-4-10 的后续迭代。
 type VpcSwitch struct {
 	ID int64 `gorm:"primaryKey"`
 	// NodeID 参与两个唯一索引：同节点内交换机名唯一、VLAN ID 唯一。
@@ -51,6 +52,9 @@ type VpcSwitch struct {
 	DHCPEnd   *string `gorm:"size:64"`
 	UplinkIf  *string `gorm:"size:64"`
 
+	// BandwidthInMbps / BandwidthOutMbps 是交换机总带宽上限（Mbps，G-38）。
+	// 0 表示不限。它约束整个交换机的合计吞吐，与网卡级的
+	// rate_limit_mbps（单网卡）是两层不同的限制。
 	BandwidthInMbps  int `gorm:"not null;default:0"`
 	BandwidthOutMbps int `gorm:"not null;default:0"`
 

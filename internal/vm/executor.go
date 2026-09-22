@@ -98,6 +98,16 @@ type createParams struct {
 	// 默认关闭的两个高级开关。
 	HideKVM    bool `json:"hide_kvm"`
 	NestedVirt bool `json:"nested_virt"`
+	// 显示与架构维度（G-29）与运行态热扩的创建期开关（F-2-05）。
+	VideoModel    string `json:"video_model,omitempty"`
+	RTCMode       string `json:"rtc_mode,omitempty"`
+	Arch          string `json:"arch,omitempty"`
+	CPUHotplug    bool   `json:"cpu_hotplug"`
+	MemoryHotplug bool   `json:"memory_hotplug"`
+
+	// ISOFileIDs 是要挂到光驱的镜像列表（首个为主安装盘）。为空时回落到
+	// ISOFileID 单值（老任务参数兼容）。
+	ISOFileIDs []int64 `json:"iso_file_ids,omitempty"`
 }
 
 // newCreateParams 由创建请求构造任务参数。
@@ -121,6 +131,8 @@ func newCreateParams(
 		// 传递，不做兜底：0 / false 本身就是"不指定 / 不开"的合法取值。
 		CPUSockets: req.CPUSockets, CPUCores: req.CPUCores, CPUThreads: req.CPUThreads,
 		HideKVM: req.HideKVM, NestedVirt: req.NestedVirt,
+		VideoModel: req.VideoModel, RTCMode: req.RTCMode, Arch: req.Arch,
+		CPUHotplug: req.CPUHotplug, MemoryHotplug: req.MemoryHotplug,
 		NICCount:     req.NICCount,
 		PCIAddresses: req.PCIAddresses,
 		FloppyFileID: req.FloppyFileID,
@@ -142,6 +154,7 @@ func newCreateParams(
 		DiskIOPSRead:     req.DiskIOPSRead,
 		DiskIOPSWrite:    req.DiskIOPSWrite,
 		ISOFileID:        req.ISOFileID,
+		ISOFileIDs:       isoFileIDsOf(req),
 		SwitchID:         req.SwitchID,
 		SecurityGroupIDs: req.SecurityGroupIDs,
 		BatchKey:         req.BatchKey,
@@ -158,6 +171,20 @@ func newCreateParams(
 		p.TemplateDiskPath = tpl.DiskPathOf()
 	}
 	return p
+}
+
+// isoFileIDsOf 归一化要挂载的镜像列表：多值优先，单值兜底。
+//
+// 两个入口并存是因为多 ISO 是后来加的（G-29）：已有客户端（脚本、旧前端）
+// 仍只传 iso_file_id，直接丢掉单值等于静默改变既有行为。
+func isoFileIDsOf(req CreateRequest) []int64 {
+	if len(req.ISOFileIDs) > 0 {
+		return req.ISOFileIDs
+	}
+	if req.ISOFileID > 0 {
+		return []int64{req.ISOFileID}
+	}
+	return nil
 }
 
 // CreateExecutor 执行 vm.create 任务。
@@ -238,6 +265,15 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 			"disk_iops_total":   p.DiskIOPSTotal,
 			"disk_iops_read":    p.DiskIOPSRead,
 			"disk_iops_write":   p.DiskIOPSWrite,
+
+			// 显示与架构维度（G-29）与运行态热扩的创建期开关（F-2-05）：
+			// libvirt 建域时就要据此选显卡模型、RTC 口径与热插拔槽位，
+			// 事后补只能关机重建域，因此随创建一次下发。
+			"video_model":    p.VideoModel,
+			"rtc_mode":       p.RTCMode,
+			"arch":           p.Arch,
+			"cpu_hotplug":    p.CPUHotplug,
+			"memory_hotplug": p.MemoryHotplug,
 		},
 	}
 	if p.TemplateID > 0 {
@@ -283,6 +319,12 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 		OSVariant:  p.OSVariant,
 		CPUSockets: p.CPUSockets, CPUCores: p.CPUCores, CPUThreads: p.CPUThreads,
 		HideKVM: p.HideKVM, NestedVirt: p.NestedVirt,
+		VideoModel: orDefault(p.VideoModel, "virtio"),
+		RTCMode:    orDefault(p.RTCMode, "utc"),
+		Arch:       orDefault(p.Arch, "x86_64"),
+
+		CPUHotplug:    p.CPUHotplug,
+		MemoryHotplug: p.MemoryHotplug,
 
 		MachineType:     orDefault(p.MachineType, "q35"),
 		Firmware:        orDefault(p.Firmware, "bios"),
@@ -353,10 +395,16 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 		log.Printf("[vm] 挂载直通设备失败 vm=%d: %v", vm.ID, err)
 	}
 
-	// ISO 安装：把镜像挂到光驱，否则新机器空盘无法引导。
-	if p.ISOFileID > 0 {
-		if err := e.attachISO(ctx, &vm, p.ISOFileID); err != nil {
-			log.Printf("[vm] 挂载安装镜像失败 vm=%d: %v", vm.ID, err)
+	// ISO 安装：把镜像挂到光驱，否则新机器空盘无法引导。多 ISO（G-29）
+	// 逐个挂载——首个是主安装盘，其余为额外光驱；任何一个失败都只记日志，
+	// 道理与单 ISO 相同：机器已经建好，为挂盘失败判整个任务失败会让用户
+	// 以为创建没成功。
+	for _, isoID := range p.ISOFileIDs {
+		if isoID <= 0 {
+			continue
+		}
+		if err := e.attachISO(ctx, &vm, isoID); err != nil {
+			log.Printf("[vm] 挂载安装镜像失败 vm=%d iso=%d: %v", vm.ID, isoID, err)
 		}
 	}
 

@@ -95,6 +95,10 @@ type SwitchView struct {
 	VlanID   *int   `json:"vlan_id,omitempty"`
 	IsSystem bool   `json:"is_system"`
 	Status   string `json:"status"`
+
+	// 带宽上限（G-38）：0 表示不限，界面上显示为「不限」。
+	BandwidthInMbps  int `json:"bandwidth_in_mbps"`
+	BandwidthOutMbps int `json:"bandwidth_out_mbps"`
 }
 
 // capabilityMeta 是能力清单的**静态部分**。
@@ -350,6 +354,9 @@ func toSwitchView(sw *model.VpcSwitch) SwitchView {
 		VlanID:     sw.VlanID,
 		IsSystem:   sw.IsSystem,
 		Status:     sw.Status,
+
+		BandwidthInMbps:  sw.BandwidthInMbps,
+		BandwidthOutMbps: sw.BandwidthOutMbps,
 	}
 }
 

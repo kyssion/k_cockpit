@@ -17,6 +17,7 @@ import { useState } from 'react'
 
 import { ApiError, NetworkError } from '@/api/client'
 import { nodeApi } from '@/api/node'
+import { platformCheckApi } from '@/api/platformcheck'
 import {
   portSecurityApi,
   PS_LIMIT_BOUNDS,
@@ -236,6 +237,14 @@ function PolicyModal({
   const [pps, setPPS] = useState('')
   const [check, setCheck] = useState<PortSecurityPrecheck | null>(null)
 
+  // 节点的 OVS 端口列表（G-38）：给网口输入提供候选，也顺带展示口与
+  // 虚拟机的对应关系。
+  const ports = useQuery({
+    queryKey: ['ovs-ports', nodeID],
+    queryFn: () => platformCheckApi.ovsPorts(nodeID),
+    enabled: open && nodeID > 0,
+  })
+
   // 编辑时用已有值初始化。
   const [seeded, setSeeded] = useState<number | null>(null)
   if (seeded !== (policy?.id ?? 0)) {
@@ -308,15 +317,32 @@ function PolicyModal({
       }
     >
       <div className="flex flex-col gap-3.5">
-        <Input
-          label="网口"
-          value={portRef}
-          onChange={(e) => {
-            setPortRef(e.target.value)
-            setCheck(null)
-          }}
-          hint="虚拟机网口的接口名，例如 vnet0。"
-        />
+        <div className="flex flex-col gap-1">
+          <label className="text-sm text-ink-2">网口</label>
+          <input
+            list="port-ref-options"
+            value={portRef}
+            onChange={(e) => {
+              setPortRef(e.target.value)
+              setCheck(null)
+            }}
+            placeholder="例如 vnet0"
+            className="h-9 rounded-control border border-line-strong bg-sunken px-2.5 text-base text-ink focus:outline-none focus-visible:border-brand"
+          />
+          {/* 从节点的 OVS 端口列表联动带出（G-38）：vnet 口与虚拟机的对应
+              关系只有节点知道，手填的话拼错一个字符，策略就会套在一个
+              不存在的口上——预检能发现，但那已经是第二次点击。 */}
+          <datalist id="port-ref-options">
+            {(ports.data?.items ?? []).map((p) => (
+              <option key={p.Name} value={p.Name}>
+                {p.VMName ? `虚拟机 ${p.VMName}` : p.Bridge}
+              </option>
+            ))}
+          </datalist>
+          <span className="text-xs text-ink-3">
+            虚拟机网口的接口名，可从下拉候选中选择（来自节点 OVS 端口列表）。
+          </span>
+        </div>
 
         <Toggle
           checked={spoofing}

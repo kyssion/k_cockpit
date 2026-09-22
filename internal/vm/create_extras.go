@@ -85,6 +85,59 @@ func validateCreateExtras(req CreateRequest) error {
 		return api.InvalidParameter(
 			"网口数量需在 0 到 " + strconv.Itoa(defaultInterfaceLimit) + " 之间")
 	}
+	return validateCreateCombinations(req)
+}
+
+// validateCreateCombinations 校验**跨字段的组合**（G-29 的 OS 联动规则后端副本）。
+//
+// 单个字段的取值合法性由 validateCreateConfig 按矩阵校验；这里拦的是"每个值
+// 单独看都合法、放在一起却引导不了"的组合。前端向导会按同一套规则自动调整
+// 联动项，但前端可能被绕过，后端必须再拦一道——这是同一套规则的两份副本
+// 中后端那份（f-2-02 R-002 的口径）。
+func validateCreateCombinations(req CreateRequest) error {
+	arch := req.Arch
+	if arch == "" {
+		arch = "x86_64" // 与矩阵 Default 一致
+	}
+	machine := req.MachineType
+	if machine == "" {
+		machine = "q35"
+	}
+	firmware := req.Firmware
+	if firmware == "" {
+		firmware = "bios"
+	}
+
+	// ARM 的固件与机型是硬约束：aarch64 上没有 i440fx/q35 对应的固件支持，
+	// BIOS 路径在 virt 机型上也不存在。不拦的话虚拟机会卡在固件画面，
+	// 而报错要到装系统时才出现。
+	if arch == "aarch64" {
+		if machine != "virt" {
+			return api.InvalidParameter("aarch64 架构只能使用 virt 机型")
+		}
+		if firmware != "uefi" {
+			return api.InvalidParameter("aarch64 架构必须使用 UEFI 固件")
+		}
+		if v := req.VideoModel; v != "" && v != "ramfb" && v != "none" {
+			return api.InvalidParameter("aarch64 架构的显示设备只支持 ramfb 或无（none）")
+		}
+	} else if machine == "virt" {
+		// 反向同样成立：virt 机型是 ARM 专用，x86 上选它要到引导时才失败。
+		return api.InvalidParameter("virt 机型仅用于 aarch64 架构；x86_64 请选 q35 或 i440fx")
+	}
+
+	// i440fx + UEFI 的组合会卡在 TianoCore 固件画面（f-2-02 的已知坑）：
+	// Windows 镜像默认推荐 UEFI，而这个机型不支持——必须在受理时就拒绝。
+	if machine == "i440fx" && firmware == "uefi" && (req.OSType == "" || req.OSType == "windows") {
+		return api.InvalidParameter(
+			"i440fx 机型不支持 UEFI（会卡在固件画面）；请改用 q35，或把固件改回 BIOS")
+	}
+
+	// 安全启动只在 UEFI 下有意义：BIOS 路径没有 Secure Boot 概念，
+	// 静默忽略等于配置与实际不符。
+	if req.SecureBoot && firmware != "uefi" {
+		return api.InvalidParameter("安全启动仅在 UEFI 固件下可用")
+	}
 	return nil
 }
 

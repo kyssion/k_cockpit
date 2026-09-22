@@ -131,6 +131,10 @@ func (e *SwitchChangeExecutor) createRecord(ctx context.Context, p *switchParams
 		DHCPStart:  specOptStr(p.Spec, "dhcp_start"),
 		DHCPEnd:    specOptStr(p.Spec, "dhcp_end"),
 		UplinkIf:   specOptStr(p.Spec, "uplink_if"),
+
+		// 带宽上限（G-38）：spec 里是数字，缺省 0 = 不限。
+		BandwidthInMbps:  specIntDef(p.Spec, "bandwidth_in_mbps"),
+		BandwidthOutMbps: specIntDef(p.Spec, "bandwidth_out_mbps"),
 	}
 
 	if err := e.db.WithContext(ctx).Create(&sw).Error; err != nil {
@@ -164,16 +168,18 @@ func (e *SwitchChangeExecutor) updateRecord(
 	err := e.db.WithContext(ctx).Model(&model.VpcSwitch{}).
 		Where("id = ?", p.SwitchID).
 		Updates(map[string]any{
-			"name":       specStr(p.Spec, "name"),
-			"mode":       specStr(p.Spec, "mode"),
-			"vlan_id":    specInt(p.Spec, "vlan_id"),
-			"cidr":       specOptStr(p.Spec, "cidr"),
-			"gateway_ip": specOptStr(p.Spec, "gateway_ip"),
-			"dhcp_start": specOptStr(p.Spec, "dhcp_start"),
-			"dhcp_end":   specOptStr(p.Spec, "dhcp_end"),
-			"uplink_if":  specOptStr(p.Spec, "uplink_if"),
-			"status":     status,
-			"updated_at": time.Now(),
+			"name":               specStr(p.Spec, "name"),
+			"mode":               specStr(p.Spec, "mode"),
+			"vlan_id":            specInt(p.Spec, "vlan_id"),
+			"cidr":               specOptStr(p.Spec, "cidr"),
+			"gateway_ip":         specOptStr(p.Spec, "gateway_ip"),
+			"dhcp_start":         specOptStr(p.Spec, "dhcp_start"),
+			"dhcp_end":           specOptStr(p.Spec, "dhcp_end"),
+			"uplink_if":          specOptStr(p.Spec, "uplink_if"),
+			"bandwidth_in_mbps":  specIntDef(p.Spec, "bandwidth_in_mbps"),
+			"bandwidth_out_mbps": specIntDef(p.Spec, "bandwidth_out_mbps"),
+			"status":             status,
+			"updated_at":         time.Now(),
 		}).Error
 	if err != nil {
 		// 记录不在了（用户刚把它删了）不算失败：宿主机上已经改好了，
@@ -243,6 +249,14 @@ func specOptStr(spec map[string]any, key string) *string {
 //
 // JSON 反序列化到 any 会得到 float64，直接断言 int 会**静默失败**并返回
 // nil——那意味着用户设的 VLAN ID 被丢掉了，而界面上看起来设置成功了。
+// specIntDef 读取数字键，缺省返回 def（0 = 不限）。
+func specIntDef(spec map[string]any, key string) int {
+	if p := specInt(spec, key); p != nil {
+		return *p
+	}
+	return 0
+}
+
 func specInt(spec map[string]any, key string) *int {
 	v, ok := spec[key]
 	if !ok || v == nil {

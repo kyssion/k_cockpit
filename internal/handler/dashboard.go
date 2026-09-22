@@ -51,3 +51,18 @@ func (h *Dashboard) HostDetail(ctx context.Context, c *app.RequestContext) {
 	}
 	api.OK(c, detail)
 }
+
+// MyQuotas 返回当前用户的配额总览（G-32）。
+//
+// 单独一个接口而不是塞进 Summary：配额由三个可选服务拼装，任何一个缺失
+// 都不该拖慢或拖垮首页；而普通用户工作台的配额卡是这个接口唯一的使用方。
+// 管理员调用返回空列表（而不是 403）：他的工作台走平台视图，前端不必为
+// 同一页面维护两条错误路径。
+func (h *Dashboard) MyQuotas(ctx context.Context, c *app.RequestContext) {
+	overview, err := h.svc.QuotaOverview(ctx, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, overview)
+}

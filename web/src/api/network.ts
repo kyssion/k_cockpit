@@ -52,6 +52,9 @@ export interface SwitchView {
   vlan_id?: number
   is_system: boolean
   status: string
+  /** 交换机总带宽上限（Mbps，G-38）；0 表示不限。 */
+  bandwidth_in_mbps: number
+  bandwidth_out_mbps: number
 }
 
 export const networkApi = {
@@ -91,6 +94,9 @@ export interface SwitchInput {
   dhcp_start?: string
   dhcp_end?: string
   uplink_if?: string
+  /** 交换机总带宽上限（Mbps，G-38）；0 / 缺省表示不限。 */
+  bandwidth_in_mbps?: number
+  bandwidth_out_mbps?: number
 }
 
 export const SWITCH_MODE_LABEL: Record<string, string> = {

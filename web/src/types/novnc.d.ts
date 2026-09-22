@@ -28,6 +28,12 @@ declare module '@novnc/novnc' {
     disconnect(): void
     sendCredentials(credentials: { username?: string; password?: string }): void
     sendCtrlAltDel(): void
+    /**
+     * 发送一个按键。keysym 是 X11 键符号值（ASCII 区间等于码点）；code 是
+     * noVNC 的键位名（如 "ControlLeft"），仅在节点支持 QEMU 扩展键事件时
+     * 参与扫描码映射。down 省略时发送一次按下 + 抬起。
+     */
+    sendKey(keysym: number, code: string, down?: boolean): void
 
     addEventListener(type: string, listener: (event: Event) => void): void
     removeEventListener(type: string, listener: (event: Event) => void): void

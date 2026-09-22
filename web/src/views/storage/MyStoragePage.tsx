@@ -213,13 +213,25 @@ export function MyStoragePage() {
                     {f.uploaded_at ? relativeTime(f.uploaded_at) : '—'}
                   </td>
                   <td className="px-4 py-2.5">
-                    <button
-                      className="text-sm text-danger hover:underline"
-                      disabled={remove.isPending}
-                      onClick={() => remove.mutate(f)}
-                    >
-                      删除
-                    </button>
+                    <span className="flex items-center gap-3">
+                      {/* 下载（G-38）：内容经控制面转发，归属校验与审计在服务端。 */}
+                      {f.uploaded_at && (
+                        <a
+                          href={userStorageApi.fileUrl(effectiveNodeID, f.id)}
+                          className="text-sm text-brand hover:underline"
+                          download
+                        >
+                          下载
+                        </a>
+                      )}
+                      <button
+                        className="text-sm text-danger hover:underline"
+                        disabled={remove.isPending}
+                        onClick={() => remove.mutate(f)}
+                      >
+                        删除
+                      </button>
+                    </span>
                   </td>
                 </tr>
               ))}

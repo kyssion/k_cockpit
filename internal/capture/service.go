@@ -429,3 +429,62 @@ func derefStr(p *string) string {
 	}
 	return *p
 }
+
+// File 取回一份抓包文件的内容（G-38）。
+//
+// 与导出产物下载是同一个模式：控制面**转发字节**而不给浏览器一个节点直链
+// ——抓包文件里是完整的流量内容（明文密码、会话令牌），它比导出产物更
+// 不适合暴露任何绕过权限判断的访问方式。归属校验与 List/Delete 同一条
+// 规则：租户只能取自己发起的。
+func (s *Service) File(
+	ctx context.Context, id int64, v authz.Viewer, operatorName, clientIP string,
+) (fileName string, data []byte, mime string, err error) {
+	var row model.NetworkCapture
+	if err := s.db.WithContext(ctx).First(&row, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", nil, "", api.NotFound("抓包记录不存在")
+		}
+		return "", nil, "", api.Internal()
+	}
+	if !v.IsAdmin && (row.CreatedBy == nil || *row.CreatedBy != v.UserID) {
+		return "", nil, "", api.NotFound("抓包记录不存在")
+	}
+	// Ready 同时回答两件事：任务是否成功（有文件），文件是否还没过期。
+	// 过期的文件节点侧会清掉，取它只会得到一个对不上的错误。
+	if !row.Ready() {
+		return "", nil, "", api.ValidationFailed("该抓包尚未完成或文件已不在节点上")
+	}
+
+	result, err := s.agent.Execute(ctx, agent.Operation{
+		Kind:   agent.OpCaptureFetch,
+		NodeID: row.NodeID,
+		Target: derefStr(row.Interface),
+		Params: map[string]any{"file_path": derefStr(row.FilePath)},
+	})
+	if err != nil {
+		return "", nil, "", api.Unavailable("节点不可达，无法获取抓包文件")
+	}
+	if !result.Success {
+		return "", nil, "", api.ValidationFailed(result.Message)
+	}
+	content, ok := result.Data[agent.CaptureContentKey].(agent.ExportContent)
+	if !ok || len(content.Data) == 0 {
+		return "", nil, "", api.Unavailable("节点未返回抓包文件内容")
+	}
+
+	s.audit.Record(ctx, audit.Entry{
+		OperatorID: v.UserID, OperatorName: operatorName,
+		NodeID:       row.NodeID,
+		ResourceType: "capture", ResourceID: row.ID,
+		Action:  "capture.download",
+		Params:  map[string]any{"interface": derefStr(row.Interface)},
+		Success: true, ClientIP: clientIP,
+	})
+
+	name := fmt.Sprintf("capture-%d-%s.pcap", row.ID, s.now().Format("20060102-150405"))
+	mime = content.MIME
+	if mime == "" {
+		mime = "application/vnd.tcpdump.pcap"
+	}
+	return name, content.Data, mime, nil
+}

@@ -540,6 +540,9 @@ export function VmDetailPage() {
           {/* 来宾自动化（f-2-10）挂在「系统信息」下而不是另开一个页签：
               它是对这台机器的运维动作，与「这台机器是什么样」属于同一处
               上下文，而页签已经七个了。 */}
+          {/* 登录凭据（G-30）挂在「系统信息」下：它回答的是"这台机器怎么登"，
+              与配置摘要属于同一处上下文。 */}
+          <CredentialSection vmID={vm.id} />
           <GuestActionsSection vm={vm} />
           {/* 迁移挂在「系统信息」下：它改变的是这台机器**在哪**，
               与「这台机器是什么样」属于同一处上下文。 */}
@@ -1965,8 +1968,8 @@ function ConsoleTab({ vmID }: { vmID: number }) {
           </Link>
         </div>
         <p className="text-sm text-ink-3">
-          控制台开关、改密与「对外暴露」需要下发到节点，尚未实现；当前可从
-          虚拟机列表进入控制台。
+          控制台的开关、密码与「对外暴露」在控制台页面的「控制台设置」中配置；
+          这里提供进入控制台的入口。
         </p>
       </div>
     </section>
@@ -2089,7 +2092,8 @@ function ScheduleTab({ vmID }: { vmID: number }) {
         服务停机期间错过的时间点不会被补执行（记为「已跳过」）——补执行会让
         恢复后连着做几次本该分散在不同时间的操作。
         <br />
-        「删除虚拟机」类任务仅支持一次性，且需要二次验证，暂未接入本页。
+        「删除虚拟机」类任务仅支持一次性，创建时需要二次验证；它固定保留磁盘
+        （可从回收站恢复），需要连盘删除请在虚拟机上手动执行。
       </p>
 
       <CreateScheduleModal
@@ -2229,14 +2233,29 @@ function CreateScheduleModal({
           <select
             className="rounded-control border border-line-strong bg-surface px-2.5 py-2 text-base text-ink"
             value={action}
-            onChange={(e) => setAction(e.target.value as ScheduleAction)}
+            onChange={(e) => {
+              const next = e.target.value as ScheduleAction
+              setAction(next)
+              // 删除只支持一次性（后端同样拒绝周期删除）：定时删除的破坏性
+              // 与一次误配的重复周期叠加，是没有人要求过的风险。
+              if (next === 'delete' && kind !== 'once') setKind('once')
+            }}
           >
             <option value="shutdown">关机</option>
             <option value="start">开机</option>
             {/* 创建快照与删除相反：快照是累加且可再删的，因此允许周期执行。 */}
             <option value="snapshot">创建快照</option>
+            {/* G-36：删除属高风险动作——仅一次性，执行时走二次验证。 */}
+            <option value="delete">删除虚拟机</option>
           </select>
         </label>
+
+        {action === 'delete' && (
+          <p className="rounded-control border border-warning/40 bg-warning/5 px-3 py-2 text-sm text-warning">
+            到达时间点时会删除这台虚拟机（磁盘处理方式为「保留」，可从回收站恢复）。
+            创建本任务时需要完成一次二次验证；仅支持一次性任务。
+          </p>
+        )}
 
         {action === 'snapshot' && (
           <label className="flex flex-col gap-1">
@@ -2907,7 +2926,10 @@ function EditTab({ vmID, onSaved }: { vmID: number; onSaved: () => void }) {
             {fields.map((f) => {
               // 运行态下，需要关机的项禁用输入——但**仍然显示**：
               // 直接隐藏会让用户在关机之后再进来才发现多出几项。
-              const blocked = (f.requires_shutdown && blockedByStatus) || f.read_only
+              // 例外（G-33）：热添加开关打开的机器，vCPU / 内存运行中可增。
+              const hotOK = data.hot_addition?.[f.key] === true
+              const blocked =
+                (f.requires_shutdown && blockedByStatus && !hotOK) || f.read_only
               const statusLabel =
                 VM_STATUS_LABEL[data.current_status as VmStatus] ?? data.current_status
 
@@ -2918,9 +2940,13 @@ function EditTab({ vmID, onSaved }: { vmID: number; onSaved: () => void }) {
                 : f.requires_shutdown
                   ? '需关机后修改'
                   : '即时生效，不影响运行'
-              const hint = f.requires_shutdown && blockedByStatus && !f.read_only
-                ? `当前为${statusLabel}，需关机后才能修改`
-                : [mode, f.hint].filter(Boolean).join(' · ')
+              const hint = f.read_only
+                ? mode
+                : f.requires_shutdown && hotOK
+                  ? `当前为${statusLabel}，已开启热添加：可增加，不能减少`
+                  : f.requires_shutdown && blockedByStatus
+                    ? `当前为${statusLabel}，需关机后才能修改`
+                    : [mode, f.hint].filter(Boolean).join(' · ')
 
               return (
                 <FieldControl
@@ -3695,5 +3721,102 @@ function MakeIndependentModal({
         )}
       </div>
     </Modal>
+  )
+}
+
+/**
+ * CredentialSection 登录凭据（G-30）。
+ *
+ * 明文**只读一次、显示一次**：每次刷新页面都要重新点「显示」才会再取——
+ * 后端对每次读取都写审计，界面上「主动取一下」的动作与审计条目一一对应，
+ * 而不是页面一打开密码就躺在那里。
+ */
+function CredentialSection({ vmID }: { vmID: number }) {
+  const [revealed, setRevealed] = useState(false)
+  const [copied, setCopied] = useState<'user' | 'pass' | null>(null)
+
+  // 凭据的读取是**用户动作驱动**而不是页面加载驱动：
+  // staleTime 为 0 + 手动 refetch 都不如「enabled 由 revealed 控制」直白——
+  // 没点「显示」就永远不发请求，审计里也就没有多余的读取记录。
+  const cred = useQuery({
+    queryKey: ['vm-initial-credential', vmID],
+    queryFn: () => vmApi.initialCredential(vmID),
+    enabled: revealed,
+    staleTime: 0,
+    gcTime: 0,
+  })
+
+  const copy = async (text: string, which: 'user' | 'pass') => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(which)
+      setTimeout(() => setCopied(null), 2000)
+    } catch {
+      // 剪贴板不可用时用户仍可手动选中，不打断。
+    }
+  }
+
+  return (
+    <section className="rounded-card border border-line bg-surface p-4">
+      <div className="flex items-baseline justify-between gap-2">
+        <h3 className="text-sm text-ink-3">登录凭据</h3>
+        <span className="text-xs text-ink-3">每次读取都会记录到审计</span>
+      </div>
+
+      {!revealed ? (
+        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+          <Button variant="secondary" size="sm" onClick={() => setRevealed(true)}>
+            显示登录凭据
+          </Button>
+          <span className="text-sm text-ink-3">
+            创建时注入的初始密码；改过密码后请以来宾自动化里的重设结果为准。
+          </span>
+        </div>
+      ) : cred.isLoading ? (
+        <p className="mt-2.5 text-sm text-ink-3">读取中…</p>
+      ) : cred.isError ? (
+        <p className="mt-2.5 rounded-control border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
+          {describe(cred.error)}
+        </p>
+      ) : !cred.data?.has ? (
+        <p className="mt-2.5 text-sm text-ink-3">
+          这台机器创建时没有设置初始密码。可在下方「来宾自动化」里为它重设一个。
+        </p>
+      ) : (
+        <dl className="mt-2.5 grid gap-2 sm:grid-cols-2">
+          <div className="flex items-center justify-between gap-2 rounded-control border border-line px-3 py-2">
+            <div className="min-w-0">
+              <dt className="text-xs text-ink-3">用户名</dt>
+              <dd className="truncate font-mono text-base text-ink">{cred.data.username}</dd>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => copy(cred.data?.username ?? '', 'user')}
+            >
+              {copied === 'user' ? '已复制' : '复制'}
+            </Button>
+          </div>
+          <div className="flex items-center justify-between gap-2 rounded-control border border-line px-3 py-2">
+            <div className="min-w-0">
+              <dt className="text-xs text-ink-3">密码</dt>
+              <dd className="truncate font-mono text-base text-ink">{cred.data.password}</dd>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => copy(cred.data?.password ?? '', 'pass')}
+            >
+              {copied === 'pass' ? '已复制' : '复制'}
+            </Button>
+          </div>
+          {cred.data.created_at && (
+            <p className="text-xs text-ink-3 sm:col-span-2">
+              设置于 {cred.data.created_at}
+            </p>
+          )}
+        </dl>
+      )}
+    </section>
   )
 }

@@ -82,7 +82,18 @@ func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task
 		PollInterval:  20 * time.Millisecond,
 	})
 	// 用真实的 mock agent：业务链路端到端走通，只有「执行」那一步是假的。
-	queue.Register(vm.NewCreateExecutor(db, client))
+	//
+	// testCredentialKey 非空时，把同一把密钥注入凭据相关的三个角色
+	// （创建执行器加密、来宾执行器同步、Service 解密）——三处不一致的
+	// 表现是"读凭据时永远解密失败"。只有覆盖凭据链路的用例才设置它；
+	// 缺省为 nil 时维持「无密钥」行为（如 TestConsolePasswordWithoutKeyFails）。
+	createExec := vm.NewCreateExecutor(db, client)
+	guestExec := vm.NewGuestExecutor(db, client)
+	if testCredentialKey != nil {
+		createExec.SetEncryptionKey(testCredentialKey)
+		guestExec.SetEncryptionKey(testCredentialKey)
+	}
+	queue.Register(createExec)
 	queue.Register(vm.NewPowerExecutor(db, client))
 	queue.Register(vm.NewDeleteExecutor(db, client))
 	queue.Register(vm.NewSnapshotCreateExecutor(db, client))
@@ -98,7 +109,7 @@ func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task
 	queue.Register(vm.NewPurgeExecutor(db, client))
 	queue.Register(vm.NewExportExecutor(db, client))
 	queue.Register(vm.NewExportDeleteExecutor(db, client))
-	queue.Register(vm.NewGuestExecutor(db, client))
+	queue.Register(guestExec)
 	queue.Register(vm.NewMigrateExecutor(db, client))
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -109,8 +120,16 @@ func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task
 	})
 
 	// settings 传 nil：本包不依赖设置模块，阈值走内置默认值。
-	return vm.NewService(db, queue, recorder, client, nil, nil), queue, db
+	svc := vm.NewService(db, queue, recorder, client, nil, nil)
+	if testCredentialKey != nil {
+		svc.SetEncryptionKey(testCredentialKey)
+	}
+	return svc, queue, db
 }
+
+// testCredentialKey 是凭据链路用例（credential_test.go）显式设置的密钥。
+// 缺省 nil，保持「未配置密钥」的既有行为。
+var testCredentialKey []byte
 
 // probeClient 在 mock 之上覆盖**探测结果**，其余操作沿用 mock。
 type probeClient struct {
@@ -951,14 +970,17 @@ func TestUpdateConfigRejectsWhileRunning(t *testing.T) {
 
 	// 探测（mock）返回 running，所以需要关机的改动必须被拒绝——
 	// 注意投影写的是 stopped，判定必须基于实时探测（f-2-01 R-002）。
+	// 未开启热添加时，运行态改 vCPU 的文案会说清"为什么不能"（G-33）。
 	_, err := svc.UpdateConfig(ctx, row.ID, vm.ConfigChangeRequest{
 		Changes: map[string]any{"vcpu": 4},
 	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
 	assertAPIError(t, err, 422)
 
 	var apiErr *api.Error
-	if errors.As(err, &apiErr) && !strings.Contains(apiErr.Message, "关机") {
-		t.Errorf("拒绝文案未说明需要关机: %q", apiErr.Message)
+	if errors.As(err, &apiErr) &&
+		!strings.Contains(apiErr.Message, "关机") &&
+		!strings.Contains(apiErr.Message, "热添加") {
+		t.Errorf("拒绝文案未说明需要关机或未开启热添加: %q", apiErr.Message)
 	}
 }
 

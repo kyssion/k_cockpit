@@ -41,6 +41,11 @@ export const captureApi = {
   start: (nodeID: number, req: StartCaptureRequest) =>
     post<{ capture: CaptureView }>(`/api/v1/captures?node_id=${nodeID}`, req),
   remove: (id: number) => del<{ task?: unknown }>(`/api/v1/captures/${id}`),
+  /**
+   * 下载地址（G-38）。内容经控制面转发（归属校验+审计在服务端），
+   * 用 <a href> 直接触发浏览器下载即可，不需要 fetch。
+   */
+  fileUrl: (id: number) => `/api/v1/captures/${id}/file`,
 }
 
 /** 抓包时长边界，与服务端一致。 */

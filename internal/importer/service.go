@@ -95,6 +95,9 @@ func (s *Service) Parse(
 	if err := s.ensureNode(ctx, req.NodeID); err != nil {
 		return nil, err
 	}
+	if err := s.ensureSourceUploaded(ctx, req.NodeID, req.SourceFilename, v); err != nil {
+		return nil, err
+	}
 
 	preview := &model.ImportPreview{Sources: map[string]string{}}
 
@@ -179,6 +182,9 @@ func (s *Service) Create(
 		return nil, api.InvalidParameter("必须指定磁盘大小")
 	}
 	if err := s.ensureNode(ctx, req.NodeID); err != nil {
+		return nil, err
+	}
+	if err := s.ensureSourceUploaded(ctx, req.NodeID, req.SourceFilename, v); err != nil {
 		return nil, err
 	}
 
@@ -393,6 +399,39 @@ func (s *Service) ensureNode(ctx context.Context, nodeID int64) error {
 	}
 	if n.MaintenanceMode {
 		return api.ValidationFailed("节点处于维护模式，已暂停创建与导入")
+	}
+	return nil
+}
+
+// ensureSourceUploaded 校验源文件确实已经上传到该节点的用户存储（G-34）。
+//
+// 导入按**文件名**定位文件——这意味着一个没上传过的名字也能通过格式与
+// 扩展名校验，然后创建一条注定失败的任务（节点上找不到文件），用户要等
+// 任务跑到一半才知道错了。在这里拦住它：错误发生在点按钮的那一刻，
+// 而不是任务中心的某个时刻。
+//
+// 归属规则与「我的存储」一致：管理员任意；普通用户只能用自己上传的，
+// 或系统预置（UserID 为空）的文件。他人文件**按不存在处理**（404），
+// 不确认「它存在」。
+func (s *Service) ensureSourceUploaded(
+	ctx context.Context, nodeID int64, filename string, v authz.Viewer,
+) error {
+	var sf model.StorageFile
+	err := s.db.WithContext(ctx).
+		Where(`node_id = ? AND filename = ? AND category = ? AND uploaded_at IS NOT NULL`,
+			nodeID, filename, model.FileCategoryDisk).
+		Order("id DESC").First(&sf).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return api.ValidationFailed(
+			"没有在节点存储中找到这个文件。请先在导入页完成上传" +
+				"（文件会上传到「我的存储」的 disk 类别下）")
+	}
+	if err != nil {
+		log.Printf("[import] 查询源文件失败: %v", err)
+		return api.Internal()
+	}
+	if sf.UserID != nil && !v.IsAdmin && *sf.UserID != v.UserID {
+		return api.NotFound("没有在节点存储中找到这个文件")
 	}
 	return nil
 }

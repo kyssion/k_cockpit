@@ -36,6 +36,8 @@ func (h *AuditLog) List(ctx context.Context, c *app.RequestContext) {
 		ResourceID:   int64(queryInt(c, "resource_id")),
 		NodeID:       int64(queryInt(c, "node_id")),
 		Keyword:      c.Query("keyword"),
+		// 来源（G-38）：web / api / system / emergency，空串表示不限。
+		Source: c.Query("source"),
 	}
 	if v := c.Query("from"); v != "" {
 		if t, err := time.Parse(time.RFC3339, v); err == nil {

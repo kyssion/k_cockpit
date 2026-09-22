@@ -82,6 +82,12 @@ export interface VmView {
   locked_at?: string
 
   /**
+   * 所属节点是否处于维护模式（G-37）。维护模式下电源与配置操作会被拒绝
+   * ——列表行据此淡化并提示，而不是让用户逐台点了才收到同一个错误。
+   */
+  node_maintenance: boolean
+
+  /**
    * 是否处于救援模式（F-2-12）。
    *
    * 界面必须显示醒目提示：救援模式下看到的系统**不是用户自己的系统**
@@ -253,8 +259,20 @@ export interface CreateVmInput {
   disk_iops_read?: number
   disk_iops_write?: number
 
+  /** 显示设备型号（virtio/vga/qxl/ramfb/none...）。 */
+  video_model?: string
+  /** RTC 时钟口径：utc（Linux）/ localtime（Windows）。 */
+  rtc_mode?: string
+  /** 来宾架构：x86_64 / aarch64；ARM 会约束机型、固件与显示设备。 */
+  arch?: string
+  /** 运行态热扩的创建期前提（libvirt 建域时预置热插拔槽位）。 */
+  cpu_hotplug?: boolean
+  memory_hotplug?: boolean
+
   /** 非零表示创建成功后把该镜像挂到光驱——ISO 安装路径。 */
   iso_file_id?: number
+  /** 多 ISO（G-29）：首个为主安装盘，其余为额外光驱；给出时优先于单值。 */
+  iso_file_ids?: number[]
   switch_id?: number
   security_group_ids?: number[]
 
@@ -479,6 +497,15 @@ export const vmApi = {
     }),
 
   get: (id: number) => get<VmView>(`/api/v1/vms/${id}`),
+
+  /**
+   * 登录凭据（G-30）。明文返回一次即展示一次；服务端每次读取都写审计。
+   * has=false 表示创建时未设置初始密码，界面应显示引导而不是报错。
+   */
+  initialCredential: (id: number) =>
+    get<{ has: boolean; username?: string; password?: string; created_at?: string }>(
+      `/api/v1/vms/${id}/initial-credential`,
+    ),
 
   /** 修改备注与分组。它们是**纯控制面元数据**，改它们不下发节点、不用关机。 */
   updateMetadata: (id: number, input: { remark?: string; group_name?: string }) =>
@@ -802,6 +829,10 @@ export interface MigrationPreview {
   disk_gb: number
   /** 停机时长的**量级与依据**，而不是精确数字。 */
   downtime_hint: string
+  /** 两节点间实测带宽（Mbps，G-35）；测不到时缺省，此时按链路规格估算。 */
+  bandwidth_mbps?: number
+  /** speedtest（实测）/ estimate（估算），两者置信度不同。 */
+  bandwidth_source?: string
 }
 
 export interface MigrationView {

@@ -141,9 +141,21 @@ function CaptureCard({ capture: c, onDelete }: { capture: CaptureView; onDelete:
             <span className="text-sm text-ink-3">{formatBytes(c.size_bytes)}</span>
           )}
         </span>
-        <button className="text-sm text-danger hover:underline" onClick={onDelete}>
-          删除
-        </button>
+        <span className="flex items-center gap-3">
+          {/* 下载（G-38）：内容经控制面转发，归属校验与审计在服务端。 */}
+          {c.status === 'ready' && (
+            <a
+              href={captureApi.fileUrl(c.id)}
+              className="text-sm text-brand hover:underline"
+              download
+            >
+              下载 pcap
+            </a>
+          )}
+          <button className="text-sm text-danger hover:underline" onClick={onDelete}>
+            删除
+          </button>
+        </span>
       </div>
 
       <div className="mt-1.5 flex flex-wrap gap-x-4 text-sm">

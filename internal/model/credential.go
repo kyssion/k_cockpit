@@ -16,10 +16,11 @@ const CredentialVNC = "_vnc"
 // 但也因此，它是本项目里最需要保护的数据之一。
 type VMCredential struct {
 	ID int64 `gorm:"primaryKey"`
-	// 索引与迁移声明一致（uniq_vm_credential_vm_id）：一台虚拟机一份凭证。
-	// 不声明的话测试库不会有这条约束，而真实库有——两侧分叉。
-	VMID     int64   `gorm:"not null;uniqueIndex:uniq_vm_credential_vm_id"`
-	Username *string `gorm:"size:64"`
+	// 索引与迁移声明一致（uniq_vm_credential_vm_username）：一台虚拟机的每个
+	// 用途（控制台 _vnc / 初始登录 root 等）各一行。只按 vm_id 唯一的话，
+	// 两个用途并存时后写的一方会静默失败。
+	VMID     int64   `gorm:"not null;uniqueIndex:uniq_vm_credential_vm_username"`
+	Username *string `gorm:"size:64;uniqueIndex:uniq_vm_credential_vm_username"`
 	// PasswordEnc 是 AES-GCM 密文（见 internal/cryptoutil）。
 	PasswordEnc string `gorm:"type:text;not null"`
 

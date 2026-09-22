@@ -54,6 +54,17 @@ func (m *MockClient) WithStageDelay(d time.Duration) *MockClient {
 // 控制面不该替它猜。
 func stagePlan(op Operation) [][2]string {
 	switch op.Kind {
+	case OpCaptureFetch:
+		return [][2]string{
+			{"file_check", "确认文件仍在保留期内"},
+			{"stream_back", "回传文件内容"},
+		}
+	case OpMigrateAssess:
+		return [][2]string{
+			{"ping_peer", "确认对端可达"},
+			{"transfer_probe", "传输探测数据并计时"},
+			{"average", "计算平均带宽"},
+		}
 	case OpPlatformCheck:
 		return [][2]string{
 			{"read_ovs", "读取 OVS 状态"},
@@ -649,6 +660,35 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 	switch op.Kind {
 	case OpVMCreate:
 		data["uuid"] = mockUUID(op.NodeID, op.Target)
+
+	case OpStorageFileRead:
+		// 占位内容而不是伪装成真实文件：与抓包取回、导出取回同一条原则。
+		data[StorageFileContentKey] = ExportContent{
+			Data: []byte("k_cockpit mock storage file placeholder\n" +
+				"节点侧会由节点返回文件内容。\n" +
+				"rel_path=" + op.Target + "\n"),
+			MIME: "application/octet-stream",
+		}
+
+	case OpCaptureFetch:
+		// 与导出取回同一条原则：返回**一眼能看出是占位**的内容，而不是
+		// 伪造一段像真实流量的字节——那会让人以为抓包通路已经端到端打通。
+		path, _ := op.Params["file_path"].(string)
+		data[CaptureContentKey] = ExportContent{
+			Data: []byte("k_cockpit mock capture placeholder\n" +
+				"节点侧会由节点返回 pcap 文件内容。\n" +
+				"path=" + path + "\n"),
+			MIME: "application/vnd.tcpdump.pcap",
+		}
+
+	case OpMigrateAssess:
+		// 千兆链路的**非整值**实测读数：940 Mbps 是千兆网卡扣除协议开销后
+		// 的常见量级。给整数的 1000 会让人以为这是理论值而不是测出来的。
+		data[MigrateAssessDataKey] = MigrateAssessInfo{
+			BandwidthMbps: 937,
+			Source:        AssessSourceSpeedtest,
+			Message:       "测速 2 秒，取平均值；波动 ±5%",
+		}
 
 	case OpVMClone:
 		data["uuid"] = mockUUID(op.NodeID, op.Target)

@@ -723,7 +723,14 @@ function VmRow({
   onTags: () => void
 }) {
   return (
-    <tr className={selected ? 'border-t border-line bg-brand/5' : 'border-t border-line hover:bg-raised'}>
+    <tr
+      className={
+        (selected ? 'border-t border-line bg-brand/5' : 'border-t border-line hover:bg-raised') +
+        // 维护模式（G-37）：整行淡化但仍可读——它标注的是"这台机器现在
+        // 动不了"，而淡化比隐藏诚实，比报错友好。
+        (vm.node_maintenance ? ' opacity-60' : '')
+      }
+    >
       <td className="px-4 py-2.5">
         <input
           type="checkbox"
@@ -746,6 +753,14 @@ function VmRow({
             已锁定
           </span>
         )}
+        {vm.node_maintenance && (
+          <span
+            className="ml-2 rounded-pill bg-danger/10 px-1.5 py-0.5 text-xs text-danger"
+            title="所属节点处于维护模式，电源与配置操作已暂停"
+          >
+            维护中
+          </span>
+        )}
         {vm.group_name && <span className="ml-2 text-xs text-ink-3">{vm.group_name}</span>}
       </td>
       <td className="px-4 py-2.5">
@@ -765,7 +780,7 @@ function VmRow({
       <UsageCell usage={vm.usage} />
       <td className="kc-mono px-4 py-2.5 text-ink-2">{vm.ip_summary || '—'}</td>
       <td className="px-4 py-2.5">
-        <TagCell tags={vm.tags} onEdit={onTags} />
+        <TagCell vmID={vm.id} tags={vm.tags} onEdit={onTags} />
       </td>
       <td className="px-4 py-2.5 text-ink-2">{nodeName ?? `#${vm.node_id}`}</td>
       <td className="px-4 py-2.5 text-ink-2">{relativeTime(vm.created_at)}</td>
@@ -841,7 +856,7 @@ function VmCard({
         </dd>
         <dt className="text-ink-3">标签</dt>
         <dd>
-          <TagCell tags={vm.tags} onEdit={onTags} />
+          <TagCell vmID={vm.id} tags={vm.tags} onEdit={onTags} />
         </dd>
       </dl>
 
@@ -1110,25 +1125,83 @@ function UsageCell({ usage }: { usage?: VmUsage }) {
   )
 }
 
-/** TagCell 行内标签。点一下直接编辑——标签是"这台机器是干什么的"的主要表达。 */
-function TagCell({ tags, onEdit }: { tags?: string[]; onEdit: () => void }) {
-  if (!tags || tags.length === 0) {
-    return (
-      <button className="text-sm text-ink-3 hover:text-brand hover:underline" onClick={onEdit}>
-        + 标签
-      </button>
-    )
+/**
+ * TagCell 行内标签（G-37 升级为行内直接增删）。
+ *
+ * 标签是"这台机器是干什么的"的主要表达，增删是高频轻量动作——为它开一个
+ * 弹窗、再关掉，交互成本远大于动作本身。因此：已有标签**点 × 直接移除**，
+ * 输入框**回车直接添加**，两者都就地生效；「编辑」入口保留，打开弹窗做
+ * 批量整理（快捷标签点选在那边）。
+ */
+function TagCell({ vmID, tags, onEdit }: { vmID: number; tags?: string[]; onEdit: () => void }) {
+  const queryClient = useQueryClient()
+  const [draft, setDraft] = useState('')
+  const [error, setError] = useState('')
+
+  const save = useMutation({
+    mutationFn: (next: string[]) => vmTagApi.set(vmID, next),
+    onSuccess: () => {
+      setError('')
+      void queryClient.invalidateQueries({ queryKey: ['vms'] })
+      void queryClient.invalidateQueries({ queryKey: ['vm-tags', vmID] })
+    },
+    onError: (e) => setError(describe(e)),
+  })
+
+  const add = () => {
+    const t = draft.trim()
+    if (!t) return
+    if ((tags ?? []).includes(t)) {
+      setDraft('')
+      return
+    }
+    save.mutate([...(tags ?? []), t])
+    setDraft('')
   }
+  const remove = (t: string) => {
+    save.mutate((tags ?? []).filter((x) => x !== t))
+  }
+
   return (
     <span className="flex flex-wrap items-center gap-1">
-      {tags.map((t) => (
-        <span key={t} className="rounded-pill bg-sunken px-1.5 py-0.5 text-xs text-ink-2">
+      {(tags ?? []).map((t) => (
+        <span
+          key={t}
+          className="flex items-center gap-0.5 rounded-pill bg-sunken px-1.5 py-0.5 text-xs text-ink-2"
+        >
           {t}
+          <button
+            aria-label={`移除标签 ${t}`}
+            className="text-ink-3 hover:text-danger"
+            onClick={() => remove(t)}
+            disabled={save.isPending}
+          >
+            ×
+          </button>
         </span>
       ))}
+      <input
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            add()
+          }
+        }}
+        onBlur={() => {
+          // 失焦时把已输入的内容提交掉，而不是丢掉——用户打了字，
+          // 静默吞掉会让他以为加上了。
+          if (draft.trim()) add()
+        }}
+        placeholder={tags?.length ? undefined : '+ 标签'}
+        aria-label="添加标签"
+        className="w-16 rounded-pill border border-transparent bg-transparent px-1.5 py-0.5 text-xs text-ink placeholder:text-ink-3 focus:border-line-strong focus:bg-surface focus:outline-none"
+      />
       <button className="text-xs text-ink-3 hover:text-brand hover:underline" onClick={onEdit}>
         编辑
       </button>
+      {error && <span className="text-xs text-danger">{error}</span>}
     </span>
   )
 }

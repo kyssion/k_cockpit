@@ -451,10 +451,10 @@ func Register(h *server.Hertz, deps Deps) {
 
 		// 镜像导入（F-2-13）。
 		//
-		// **本面板不接收真实文件内容**：受理时只提交文件名、大小与格式
-		// （都是浏览器能直接读到的元数据）。整条链路——受理、状态流转、
-		// 转换后建模板、配额记账——都能被验证，唯独「字节怎么从浏览器到
-		// 宿主机」这一段留空。那一段属于 mock 未覆盖的范围，是最难的部分之一。
+		// 文件内容由前端**先分片上传**到「我的存储」（disk 类别，秒传与
+		// 断点续传见 f-5-04），这里按文件名受理——受理与 Parse 都会校验
+		// 文件确实已在该节点的存储中（G-34），没上传过的名字进不来。
+		// 受理、状态流转、转换后建模板、配额记账由 importer 包完成。
 		v1.GET("/imports/format", requireAuth, importerHandler.GuessFormat)
 		v1.POST("/imports/parse", requireAuth, importerHandler.Parse)
 		v1.GET("/imports", requireAuth, importerHandler.List)
@@ -483,6 +483,8 @@ func Register(h *server.Hertz, deps Deps) {
 		// 而不是靠路由层切断——后者的结果是租户打开首页就 403，而首页是
 		// 登录后第一个到达的页面。
 		v1.GET("/dashboard/summary", requireAuth, dashboardHandler.Summary)
+		// G-32：普通用户的配额总览（计算 / 存储 / 累计型逐节点聚合）。
+		v1.GET("/dashboard/quotas", requireAuth, dashboardHandler.MyQuotas)
 		// 宿主机细节（调优 / 硬件 / 网络统计）。它需要**按节点**向节点发请求，
 		// 因此不并进 Summary——否则首页会变成一次探测风暴。
 		v1.GET("/dashboard/host-detail", requireAuth, dashboardHandler.HostDetail)
@@ -774,6 +776,7 @@ func Register(h *server.Hertz, deps Deps) {
 		// 而每一次抓包都进审计。
 		v1.GET("/captures", requireAuth, captureHandler.List)
 		v1.POST("/captures", requireAuth, captureHandler.Start)
+		v1.GET("/captures/:id/file", requireAuth, captureHandler.Download)
 		v1.DELETE("/captures/:id", requireAuth, captureHandler.Delete)
 
 		// 端口安全（F-4-08）。
@@ -823,6 +826,7 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/my-storage", requireAuth, userStorageHandler.Get)
 		v1.POST("/my-storage", requireAuth, userStorageHandler.Ensure)
 		v1.GET("/my-storage/files", requireAuth, userStorageHandler.ListFiles)
+		v1.GET("/my-storage/files/:id/download", requireAuth, userStorageHandler.Download)
 		v1.DELETE("/my-storage/files/:id", requireAuth, userStorageHandler.DeleteFile)
 		v1.POST("/my-storage/uploads", requireAuth, userStorageHandler.CreateUpload)
 		v1.GET("/my-storage/uploads/:uploadID", requireAuth, userStorageHandler.GetUpload)
@@ -997,6 +1001,8 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/vms/:id/console", requireAuth, consoleHandler.GetConfig)
 		v1.PATCH("/vms/:id/console", requireAuth, consoleHandler.Update)
 		v1.GET("/vms/:id/console/screenshot", requireAuth, consoleHandler.Screenshot)
+		// G-30：登录凭据读取。明文出站，审计在服务层写入。
+		v1.GET("/vms/:id/initial-credential", requireAuth, vmHandler.InitialCredential)
 		v1.GET("/vms/:id/console/ws", requireAuth, consoleHandler.WS)
 		// SPICE 连接文件（.vv）。含明文密码的版本需要二次验证，由 handler
 		// 按查询参数决定——默认不含密码，用户手输即可。

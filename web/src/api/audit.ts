@@ -52,6 +52,11 @@ export interface AuditFilter {
   operator_id?: number
   resource_type?: string
   action?: string
+  /**
+   * 来源筛选（G-38）：web（界面）/ api（API 凭证）/ emergency（带外脚本）。
+   * 不传表示不限——「从哪里发起的」是判断一条记录风险的第一手信息。
+   */
+  source?: string
   keyword?: string
   /** 三态：不传表示不限。 */
   success?: boolean

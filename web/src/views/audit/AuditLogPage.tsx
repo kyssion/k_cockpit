@@ -24,7 +24,9 @@ import { StatusBadge } from '@/components/common/StatusBadge'
 import { relativeTime } from '@/utils/format'
 
 export function AuditLogPage() {
-  const [draft, setDraft] = useState({ keyword: '', action: '', resourceType: '', success: '' })
+  const [draft, setDraft] = useState({
+    keyword: '', action: '', resourceType: '', success: '', source: '', from: '', to: '',
+  })
   const [filter, setFilter] = useState<AuditFilter>({ page: 1, page_size: 50 })
   const [detail, setDetail] = useState<AuditEntry | null>(null)
 
@@ -34,6 +36,16 @@ export function AuditLogPage() {
     queryFn: () => auditApi.list(filter),
   })
 
+  // 时间范围转 RFC 3339：datetime-local 给的是本地时间无时区后缀，
+  // 直接拼 Z 会把本地时间当 UTC——先转成 Date 再序列化。
+  const rfc3339 = (local: string, endOfDay: boolean) => {
+    if (!local) return undefined
+    const d = new Date(local)
+    if (Number.isNaN(d.getTime())) return undefined
+    if (endOfDay) d.setHours(23, 59, 59, 999)
+    return d.toISOString()
+  }
+
   const apply = () =>
     setFilter({
       page: 1,
@@ -42,10 +54,13 @@ export function AuditLogPage() {
       action: draft.action || undefined,
       resource_type: draft.resourceType || undefined,
       success: draft.success === '' ? undefined : draft.success === 'true',
+      source: draft.source || undefined,
+      from: rfc3339(draft.from, false),
+      to: rfc3339(draft.to, true),
     })
 
   const reset = () => {
-    setDraft({ keyword: '', action: '', resourceType: '', success: '' })
+    setDraft({ keyword: '', action: '', resourceType: '', success: '', source: '', from: '', to: '' })
     setFilter({ page: 1, page_size: 50 })
   }
 
@@ -116,6 +131,45 @@ export function AuditLogPage() {
             <option value="true">成功</option>
             <option value="false">失败</option>
           </select>
+        </div>
+
+        {/* 来源与时间范围（G-38）：后端 Filter 早已支持，之前只是没有入口。
+            来源是判断一条记录风险的第一手信息——API 凭证与带外脚本的
+            操作和界面操作需要区分开看。 */}
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-ink-3">来源</label>
+          <select
+            value={draft.source}
+            onChange={(e) => setDraft({ ...draft, source: e.target.value })}
+            className="h-8 rounded-control border border-line-strong bg-sunken px-2 text-base text-ink"
+          >
+            <option value="">全部</option>
+            {Object.entries(SOURCE_LABEL).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-ink-3">开始日期</label>
+          <input
+            type="date"
+            value={draft.from}
+            onChange={(e) => setDraft({ ...draft, from: e.target.value })}
+            className="h-8 rounded-control border border-line-strong bg-sunken px-2 text-base text-ink"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-ink-3">结束日期</label>
+          <input
+            type="date"
+            value={draft.to}
+            onChange={(e) => setDraft({ ...draft, to: e.target.value })}
+            className="h-8 rounded-control border border-line-strong bg-sunken px-2 text-base text-ink"
+          />
         </div>
 
         <div className="flex gap-2">

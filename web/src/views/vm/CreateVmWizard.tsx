@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 
 import { ApiError, NetworkError } from '@/api/client'
 import { nodeApi } from '@/api/node'
@@ -36,7 +36,10 @@ interface Draft {
   nodeID: number
   mode: CreateMode
   values: Record<string, unknown>
-  isoFileID: number
+  /** 多 ISO（G-29）：首个为主安装盘。旧草稿只有 isoFileID 单值，读入时归一。 */
+  isoFileIDs?: number[]
+  /** @deprecated 旧草稿的单值字段，读取时并入 isoFileIDs。 */
+  isoFileID?: number
   switchID: number
   groupIDs: number[]
   count: number
@@ -71,6 +74,7 @@ function readDraft(): Draft | null {
 
 export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () => void }) {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
 
   // 草稿在**挂载时**读一次，而不是放进 effect：effect 里的 setState 会再
   // 触发一轮渲染，而它做的事其实只是初始化——初始化就该在初始化时做。
@@ -84,7 +88,11 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
   // 结果（effective）。这样后端调整默认值时，已经填过一半的表单不会被
   // 覆盖，而没动过的项会跟着更新。
   const [values, setValues] = useState<Record<string, unknown>>(draft?.values ?? {})
-  const [isoFileID, setISOFileID] = useState(draft?.isoFileID ?? 0)
+  // 多 ISO（G-29）：首个是主安装盘，其余作为额外光驱。旧草稿的单值并入数组。
+  const [isoFileIDs, setISOFileIDs] = useState<number[]>(() => {
+    const ids = draft?.isoFileIDs ?? (draft?.isoFileID ? [draft.isoFileID] : [])
+    return ids
+  })
   const [switchID, setSwitchID] = useState(draft?.switchID ?? 0)
   const [groupIDs, setGroupIDs] = useState<number[]>(draft?.groupIDs ?? [])
   const [count, setCount] = useState(draft?.count ?? 1)
@@ -133,11 +141,11 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
       // 初始密码**不进草稿**（R-008）：localStorage 里的凭据是一个不出门
       // 却能长期存在的泄漏面，而它的价值只是"少打一次字"。
       values: withoutSensitive(values),
-      isoFileID, switchID, groupIDs, count, dataDisks,
+      isoFileIDs, switchID, groupIDs, count, dataDisks,
       savedAt: Date.now(),
     }
     localStorage.setItem(DRAFT_KEY, JSON.stringify(draft))
-  }, [open, submitted, name, nodeID, mode, values, isoFileID, switchID, groupIDs, count, dataDisks])
+  }, [open, submitted, name, nodeID, mode, values, isoFileIDs, switchID, groupIDs, count, dataDisks])
 
   const steps = useMemo(() => {
     const backend = (form.data?.groups ?? []).filter((g) => !g.planned)
@@ -186,7 +194,15 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
         disk_iops_read: num(effective.disk_iops_read, 0),
         disk_iops_write: num(effective.disk_iops_write, 0),
 
-        iso_file_id: mode === 'iso' && isoFileID > 0 ? isoFileID : undefined,
+        video_model: str(effective.video_model),
+        rtc_mode: str(effective.rtc_mode),
+        arch: str(effective.arch),
+        cpu_hotplug: bool(effective.cpu_hotplug),
+        memory_hotplug: bool(effective.memory_hotplug),
+
+        // 多 ISO 优先（首个为主安装盘）；单值字段保留给旧客户端兼容。
+        iso_file_ids: mode === 'iso' && isoFileIDs.length > 0 ? isoFileIDs : undefined,
+        iso_file_id: mode === 'iso' && isoFileIDs.length === 1 ? isoFileIDs[0] : undefined,
         switch_id: effectiveSwitch > 0 ? effectiveSwitch : undefined,
         security_group_ids: groupIDs.length > 0 ? groupIDs : undefined,
 
@@ -206,6 +222,56 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
 
   function setValue(key: string, value: unknown) {
     setValues((prev) => ({ ...prev, [key]: value }))
+  }
+
+  /**
+   * 带联动规则的写入（G-29）。与后端 validateCreateCombinations 是**同一套
+   * 规则的前端副本**：后端那份保证非法组合进不了系统，这份让用户根本不必
+   * 手工去改联动项——选了 Windows 再手选回 BIOS，是无意义的来回。
+   *
+   * 联动只做"自动调整"不做提示：调整的每一项都是矩阵里看得见的字段，
+   * 用户改完立刻能看到它们变了。
+   */
+  function setValueLinked(key: string, value: unknown) {
+    const patch: Record<string, unknown> = { [key]: value }
+    const v = String(value)
+    const cur = (k: string) => String(effective[k] ?? '')
+    if (key === 'os_type') {
+      if (v === 'windows') {
+        // Windows 惯例：UEFI 引导、SATA 磁盘（安装器不带 VirtIO 驱动）、
+        // e1000 网卡、硬件钟记本地时间。
+        if (cur('firmware') !== 'uefi') patch.firmware = 'uefi'
+        if (cur('disk_bus') === 'virtio' || cur('disk_bus') === 'ide') patch.disk_bus = 'sata'
+        if (cur('nic_model') === 'virtio') patch.nic_model = 'e1000'
+        if (cur('rtc_mode') === 'utc') patch.rtc_mode = 'localtime'
+        // i440fx + UEFI 会卡在固件画面，连同修正到 q35。
+        if (cur('machine_type') === 'i440fx') patch.machine_type = 'q35'
+      }
+    } else if (key === 'arch') {
+      if (v === 'aarch64') {
+        // ARM 是硬约束：virt 机型 + UEFI + ramfb，三者缺一引导不了。
+        patch.machine_type = 'virt'
+        patch.firmware = 'uefi'
+        patch.video_model = 'ramfb'
+      } else if (v === 'x86_64') {
+        // 从 ARM 切回 x86 时，ARM 专属的选择一并回落到 x86 合法值。
+        if (cur('machine_type') === 'virt') patch.machine_type = 'q35'
+        if (cur('video_model') === 'ramfb') patch.video_model = 'virtio'
+      }
+    } else if (key === 'machine_type') {
+      if (v === 'i440fx' && cur('firmware') === 'uefi' && cur('os_type') === 'windows') {
+        patch.firmware = 'bios'
+      }
+    } else if (key === 'firmware') {
+      if (v === 'bios' && bool(effective.secure_boot)) {
+        // BIOS 没有 Secure Boot 概念，留着这个开关等于配置与实际不符。
+        patch.secure_boot = false
+      }
+      if (v === 'uefi' && cur('machine_type') === 'i440fx' && cur('os_type') === 'windows') {
+        patch.machine_type = 'q35'
+      }
+    }
+    setValues((prev) => ({ ...prev, ...patch }))
   }
 
   function pickTemplate(id: number, list: TemplateView[] | undefined) {
@@ -236,7 +302,7 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
   const missing: string[] = []
   if (!name.trim()) missing.push('虚拟机名')
   if (nodeID <= 0) missing.push('节点')
-  if (mode === 'iso' && isoFileID <= 0) missing.push('安装镜像')
+  if (mode === 'iso' && isoFileIDs.length === 0) missing.push('安装镜像')
   if (mode === 'template' && templateID <= 0) missing.push('模板')
   const blocked = (form.data?.prerequisites ?? []).filter((p) => !p.ok)
 
@@ -283,15 +349,24 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
                 desc="从已制备好的模板复制一台，开机即用。最快的方式。"
                 onClick={() => setMode('template')}
               />
+              {/* G-34：两条导入路径已接通（文件真实上传 + 转换产出模板）。
+                  它们不在向导内完成——导入是一个独立的长任务流程，
+                  引导到导入页而不是把整个流程塞进弹窗。 */}
               <ModeCard
-                disabled
                 title="导入已有磁盘"
-                desc="把已有的 qcow2 / vmdk 等磁盘作为系统盘导入，见「导入」页面。"
+                desc="把已有的 qcow2 / vmdk 等磁盘上传并转换为模板。"
+                onClick={() => {
+                  handleClose()
+                  navigate('/import')
+                }}
               />
               <ModeCard
-                disabled
                 title="导入 OVF / OVA 虚拟机包"
-                desc="从其它虚拟化平台导出的整机包导入，尚未实现。"
+                desc="从其它虚拟化平台导出的整机包导入，配置从包内解析。"
+                onClick={() => {
+                  handleClose()
+                  navigate('/import')
+                }}
               />
 
               <Prerequisites form={form.data} />
@@ -345,37 +420,55 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
               {steps[step]?.key === 'disk' && mode === 'iso' && (
                 <div className="flex flex-col gap-1.5">
                   <label htmlFor="wizard-iso" className="text-sm font-medium text-ink-2">
-                    安装镜像
+                    安装镜像（可多选，首个为主安装盘）
                   </label>
-                  <select
-                    id="wizard-iso"
-                    value={isoFileID}
-                    onChange={(e) => {
-                      const id = Number(e.target.value)
-                      setISOFileID(id)
-                      const iso = (form.data?.iso_files ?? []).find((f) => f.id === id)
-                      // 镜像带出系统类型与最小磁盘：识别结果给用户一个不用
-                      // 查文档的起点，而不是必须照做的约束。
-                      if (iso?.os_type) setValue('os_type', iso.os_type)
-                      if (iso && iso.min_disk_gb > 0) {
-                        setValue('disk_gb', Math.max(num(effective.disk_gb, 40), iso.min_disk_gb))
-                      }
-                    }}
-                    className="h-9 rounded-control border border-line-strong bg-sunken px-3 text-base text-ink focus:outline-none focus-visible:border-brand"
-                  >
-                    <option value={0}>不挂载镜像（之后手动挂载）</option>
-                    {(form.data?.iso_files ?? []).map((f) => (
-                      <option key={f.id} value={f.id}>
-                        {f.filename}
-                        {f.min_disk_gb > 0 ? `（至少 ${f.min_disk_gb} GB）` : ''}
-                      </option>
-                    ))}
-                  </select>
-                  {(form.data?.iso_files ?? []).length === 0 && (
-                    <p className="text-sm text-ink-3">
-                      该节点上还没有镜像，可先在「我的存储」上传，或在创建后手动挂载。
-                    </p>
-                  )}
+                  {/* 多 ISO（G-29）：勾选列表而不是单选下拉——驱动盘与安装盘
+                      分开存放是常见做法，多选让两步并成一步。首个勾选为主
+                      安装盘，据此自动补全系统类型与最小磁盘。 */}
+                  <div className="flex flex-col gap-1 rounded-control border border-line px-3 py-2">
+                    {(form.data?.iso_files ?? []).map((f) => {
+                      const idx = isoFileIDs.indexOf(f.id)
+                      const on = idx >= 0
+                      return (
+                        <label
+                          key={f.id}
+                          className="flex cursor-pointer items-center gap-2 text-base text-ink"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={on}
+                            onChange={() => {
+                              setISOFileIDs((prev) => {
+                                if (on) return prev.filter((id) => id !== f.id)
+                                return [...prev, f.id]
+                              })
+                              // 主安装盘（勾选后的第一个）带出系统类型与最小
+                              // 磁盘：识别结果给用户一个不用查文档的起点。
+                              const next = on
+                                ? isoFileIDs.filter((id) => id !== f.id)
+                                : [...isoFileIDs, f.id]
+                              const primary = next[0]
+                              const iso = (form.data?.iso_files ?? []).find((x) => x.id === primary)
+                              if (iso?.os_type) setValueLinked('os_type', iso.os_type)
+                              if (iso && iso.min_disk_gb > 0) {
+                                setValue('disk_gb', Math.max(num(effective.disk_gb, 40), iso.min_disk_gb))
+                              }
+                            }}
+                          />
+                          <span>
+                            {f.filename}
+                            {idx === 0 && <span className="ml-1 text-sm text-brand">（主安装盘）</span>}
+                            {f.min_disk_gb > 0 ? `· 至少 ${f.min_disk_gb} GB` : ''}
+                          </span>
+                        </label>
+                      )
+                    })}
+                    {(form.data?.iso_files ?? []).length === 0 && (
+                      <p className="text-sm text-ink-3">
+                        该节点上还没有镜像，可先在「我的存储」上传，或在创建后手动挂载。
+                      </p>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -506,7 +599,7 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
                   key={f.key}
                   field={f}
                   value={effective[f.key]}
-                  onChange={(v) => setValue(f.key, v)}
+                  onChange={(v) => setValueLinked(f.key, v)}
                 />
               ))}
             </div>
@@ -521,7 +614,14 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
                 values={effective}
                 dataDisks={dataDisks}
                 switchName={(form.data?.switches ?? []).find((s) => s.id === effectiveSwitch)?.name}
-                isoName={(form.data?.iso_files ?? []).find((f) => f.id === isoFileID)?.filename}
+                isoName={isoFileIDs
+                  .map((id, i) => {
+                    const f = (form.data?.iso_files ?? []).find((x) => x.id === id)
+                    if (!f) return null
+                    return i === 0 ? `${f.filename}（主安装盘）` : f.filename
+                  })
+                  .filter(Boolean)
+                  .join('、') || undefined}
                 groups={(form.data?.security_groups ?? [])
                   .filter((g) => groupIDs.includes(g.id))
                   .map((g) => g.name)}

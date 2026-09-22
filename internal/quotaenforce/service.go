@@ -348,6 +348,16 @@ func (s *Service) usageOfQuiet(ctx context.Context, q *model.ResourceQuota) map[
 	return used
 }
 
+// UsageFor 返回某用户在某节点上的**当前周期**累计用量（G-32）。
+//
+// 它与 Evaluate 用的是同一个 usageOf：用户在工作台看到的数字必须与
+// 调度器做超限判定的数字出自同一处，否则会出现「界面显示没超、却被
+// 限速了」这类无法解释的状态。键是配额维度（traffic_in / traffic_out /
+// runtime），单位分别为 GB 与小时——与配额行的口径一致。
+func (s *Service) UsageFor(ctx context.Context, userID, nodeID int64) (map[string]int64, error) {
+	return s.usageOf(ctx, nodeID, userID, s.currentPeriod())
+}
+
 // Evaluate 对节点上的全部配额做一次判定并按需处置。
 //
 // 它由采样器周期调用（与其他周期工作一样登记在调度器注册表里），因此

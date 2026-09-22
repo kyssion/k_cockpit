@@ -3,12 +3,14 @@ package vm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 
 	"gorm.io/gorm"
 
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/api"
+	"k_cockpit/internal/cryptoutil"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/task"
 )
@@ -33,12 +35,18 @@ type guestParams struct {
 type GuestExecutor struct {
 	db    *gorm.DB
 	agent agent.Client
+	// encKey 用于改密成功后同步凭据记录（G-30）。为 nil 时不更新——
+	// 与创建时「未配置密钥则不落凭据」是同一条降级路径。
+	encKey []byte
 }
 
 // NewGuestExecutor 构造来宾自动化执行器。
 func NewGuestExecutor(db *gorm.DB, client agent.Client) *GuestExecutor {
 	return &GuestExecutor{db: db, agent: client}
 }
+
+// SetEncryptionKey 设置凭据加密密钥（与 CreateExecutor 共用同一把）。
+func (e *GuestExecutor) SetEncryptionKey(key []byte) { e.encKey = key }
 
 // Type 返回处理的任务类型。
 func (e *GuestExecutor) Type() string { return model.TaskVMGuest }
@@ -97,7 +105,51 @@ func (e *GuestExecutor) Run(ctx context.Context, t *model.Task) error {
 	} else {
 		log.Printf("[vm] 来宾操作完成 vm=%s action=%s task=%d", p.VMName, p.Action, t.ID)
 	}
+
+	// 改密成功后同步凭据记录（G-30）：详情页展示的是「最新一份已知凭据」。
+	// 不同步的话，用户改完密码回头看到的是旧密码——比不给更糟，因为那会
+	// 被当成真的拿去登录，然后在失败时怀疑一切。失败只记日志：改密本身
+	// 已经成功，为凭据记录失败判任务失败会让用户误以为改密没生效。
+	if p.Action == agentGuestActionPasswordOnline || p.Action == agentGuestActionPasswordOffline {
+		e.syncCredential(ctx, p)
+	}
 	return nil
+}
+
+// syncCredential 在改密成功后把新密码写入（或更新）凭据记录。
+func (e *GuestExecutor) syncCredential(ctx context.Context, p guestParams) {
+	if p.Password == "" || p.Username == "" {
+		return
+	}
+	if e.encKey == nil {
+		return
+	}
+	sealed, err := cryptoutil.Seal(e.encKey, p.Password)
+	if err != nil {
+		log.Printf("[vm] 加密凭据失败 vm=%d: %v", p.VMID, err)
+		return
+	}
+	// 一行一个用途：有记录就更新，没有就新建。用的不是先查后写——
+	// 复合唯一索引（vm_id, username）保证并发下也不会出现双行。
+	var row model.VMCredential
+	err = e.db.WithContext(ctx).
+		Where("vm_id = ? AND username = ?", p.VMID, p.Username).
+		First(&row).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		row = model.VMCredential{VMID: p.VMID, Username: &p.Username, PasswordEnc: sealed}
+		if err := e.db.WithContext(ctx).Create(&row).Error; err != nil {
+			log.Printf("[vm] 写入凭据失败 vm=%d user=%s: %v", p.VMID, p.Username, err)
+		}
+	case err != nil:
+		log.Printf("[vm] 查询凭据失败 vm=%d user=%s: %v", p.VMID, p.Username, err)
+	default:
+		if err := e.db.WithContext(ctx).Model(&model.VMCredential{}).
+			Where("id = ?", row.ID).
+			Update("password_enc", sealed).Error; err != nil {
+			log.Printf("[vm] 更新凭据失败 vm=%d user=%s: %v", p.VMID, p.Username, err)
+		}
+	}
 }
 
 // scrubPassword 把任务参数里的密码抹掉，只留下其余字段。

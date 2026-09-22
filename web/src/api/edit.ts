@@ -64,6 +64,11 @@ export interface EditForm {
   values: Record<string, unknown>
   /** 以当前运行态能否提交需要下发的修改。 */
   editable_now: boolean
+  /**
+   * 运行态下仍可热改的键（G-33，如 vcpu / memory_mb）。只在运行态有语义，
+   * 键存在且为 true 表示该项当前可改（只能增加）。
+   */
+  hot_addition?: Record<string, boolean>
   current_status: string
   /** 子选项卡的顺序与名称，同样由后端下发。 */
   groups: EditGroupInfo[]

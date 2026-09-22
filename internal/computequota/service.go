@@ -278,6 +278,38 @@ func (s *Service) SnapshotLimit(ctx context.Context, userID, nodeID int64) (int,
 	return q.Snapshots, nil
 }
 
+// UsageFor 返回某用户在某节点上的计算资源占用与配额（G-32）。
+//
+// 它是工作台「我的配额」的数据源：占用与上限**必须出自同一处**——
+// 用户看到的数字要与创建时被拦的理由对得上，两套计算迟早给出两个答案。
+// 没有配额记录时 HasQuota 为 false（不限），与 Check 的放行语义一致。
+func (s *Service) UsageFor(ctx context.Context, userID, nodeID int64) (Usage, error) {
+	u, err := s.usageOf(ctx, nodeID, userID)
+	if err != nil {
+		return Usage{}, err
+	}
+
+	var q model.ComputeQuota
+	err = s.db.WithContext(ctx).
+		Where("node_id = ? AND user_id = ?", nodeID, userID).First(&q).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return u, nil
+	case err != nil:
+		log.Printf("[computequota] 查询配额失败: %v", err)
+		return Usage{}, api.Internal()
+	}
+
+	u.HasQuota = true
+	u.QuotaVCPU = q.VCPU
+	u.QuotaMemMB = q.MemoryMB
+	u.QuotaVMs = q.VMCount
+	u.QuotaSnapshots = q.Snapshots
+	u.QuotaPortForwards = q.PortForwards
+	u.QuotaPublicIPs = q.PublicIPs
+	return u, nil
+}
+
 func (s *Service) usageOf(ctx context.Context, nodeID, userID int64) (Usage, error) {
 	// 列名必须显式声明：GORM 的命名策略把 `VCPU` 转成 `v_cpu`，而这里扫描的
 	// 别名是 `vcpu`。不写标签的结果是这一列**永远是 0**——不报错、看起来像

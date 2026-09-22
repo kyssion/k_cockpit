@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,6 +36,7 @@ func newTestEnv(t *testing.T) (*importer.Service, *gorm.DB) {
 	if err := db.AutoMigrate(
 		&model.ImageImport{}, &model.Template{}, &model.Node{},
 		&model.Task{}, &model.TaskStage{}, &model.AuditLog{},
+		&model.StorageFile{},
 	); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
@@ -49,6 +51,21 @@ func newTestEnv(t *testing.T) (*importer.Service, *gorm.DB) {
 		PollInterval:  20 * time.Millisecond,
 	})
 	queue.Register(importer.NewImportExecutor(db, client))
+
+	// 预置测试用到的源文件（G-34 起导入校验文件已上传）：文件名与各用例
+	// 使用的保持一致，category=disk、已上传（uploaded_at 非空）。
+	now := time.Now()
+	for _, name := range []string{
+		"ubuntu.qcow2", "fast.qcow2", "disk.qcow2", "old.vmdk", "appliance.ova",
+	} {
+		if err := db.Create(&model.StorageFile{
+			NodeID: 1, UserID: iptr(7), Category: model.FileCategoryDisk,
+			RelPath:  "disk/" + name,
+			Filename: name, SizeBytes: 1 << 30, UploadedAt: &now,
+		}).Error; err != nil {
+			t.Fatalf("预置源文件 %s 失败: %v", name, err)
+		}
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	queue.Start(ctx)
@@ -363,4 +380,58 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("等待导入完成超时")
+}
+
+// iptr 是 int64 指针的简写（本包测试没有现成的同名辅助）。
+func iptr(v int64) *int64 { return &v }
+
+// TestCreateRejectsUnuploadedSource 覆盖源文件存在性校验（G-34）。
+//
+// 导入按文件名定位文件：没上传过的名字如果放过去，会建出一条注定失败的
+// 任务，用户要等任务跑到一半才知道错。校验在受理时拦住它，并给出
+// 「去哪上传」的可执行指引。他人上传的文件按不存在处理（404），
+// 不确认「它存在」。
+func TestCreateRejectsUnuploadedSource(t *testing.T) {
+	svc, db := newTestEnv(t)
+	ctx := context.Background()
+	viewer := authz.Viewer{UserID: 7}
+
+	_, err := svc.Create(ctx, importer.CreateRequest{
+		NodeID: 1, Name: "ghost-import",
+		SourceFilename: "never-uploaded.qcow2", SourceFormat: model.ImportQCOW2,
+		DiskGB: 20,
+	}, viewer, "alice", "")
+	assertStatus(t, err, 422)
+
+	var apiErr *api.Error
+	if !errors.As(err, &apiErr) || !strings.Contains(apiErr.Message, "上传") {
+		t.Fatalf("错误文案未指向上传: %v", err)
+	}
+
+	// 他人（用户 8）上传的同名文件：普通用户按不存在处理。
+	foreign := int64(8)
+	now := time.Now()
+	if err := db.Create(&model.StorageFile{
+		NodeID: 1, UserID: &foreign, Category: model.FileCategoryDisk,
+		RelPath: "disk/foreign.qcow2", Filename: "foreign.qcow2",
+		SizeBytes: 1 << 30, UploadedAt: &now,
+	}).Error; err != nil {
+		t.Fatalf("预置他人文件失败: %v", err)
+	}
+	_, err = svc.Create(ctx, importer.CreateRequest{
+		NodeID: 1, Name: "steal-import",
+		SourceFilename: "foreign.qcow2", SourceFormat: model.ImportQCOW2,
+		DiskGB: 20,
+	}, viewer, "alice", "")
+	assertStatus(t, err, 404)
+
+	// 管理员可以用任何人的文件。
+	_, err = svc.Create(ctx, importer.CreateRequest{
+		NodeID: 1, Name: "admin-import",
+		SourceFilename: "foreign.qcow2", SourceFormat: model.ImportQCOW2,
+		DiskGB: 20,
+	}, authz.Viewer{UserID: 1, IsAdmin: true}, "admin", "")
+	if err != nil {
+		t.Fatalf("管理员导入他人文件被误拒: %v", err)
+	}
 }

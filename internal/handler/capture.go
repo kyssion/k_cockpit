@@ -87,3 +87,28 @@ func (h *Capture) Delete(ctx context.Context, c *app.RequestContext) {
 	}
 	api.OK(c, map[string]any{"task": t})
 }
+
+// Download 取回一份抓包文件（G-38）。
+//
+// 内容经控制面转发（归属校验与审计都在服务层），响应头声明 pcap 类型与
+// 文件名；不缓存——文件虽然不可变，但它含完整流量内容，减少一份浏览器
+// 磁盘缓存里的副本是更稳妥的默认。
+func (h *Capture) Download(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "抓包 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	name, data, mime, err := h.svc.File(ctx, id, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	c.Header("Content-Disposition", contentDisposition(name))
+	c.Header("Cache-Control", "no-store")
+	c.SetContentType(mime)
+	c.Response.SetBody(data)
+}

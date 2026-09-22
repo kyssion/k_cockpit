@@ -235,6 +235,12 @@ export function ConsolePage({ standalone = false }: { standalone?: boolean }) {
         className="min-h-0 flex-1 overflow-hidden rounded-card border border-line bg-[#0b0f14]"
       />
 
+      {/* 快捷键工具条（G-31）。只在**已连接**时出现：断开状态下按任何键都
+          只是空操作，而一个点了没反应的按钮比没有更糟。 */}
+      {displayState === 'connected' && (
+        <ConsoleKeyToolbar rfb={rfbRef} />
+      )}
+
       {displayState === 'connecting' && (
         <p className="text-center text-sm text-ink-3">正在连接控制台…</p>
       )}
@@ -550,4 +556,160 @@ function describeChange(input: Parameters<typeof consoleApi.update>[1]): string 
 function describe(error: unknown): string {
   if (error instanceof ApiError || error instanceof NetworkError) return error.message
   return '操作失败，请稍后重试'
+}
+
+/** X11 keysym（仅本工具条用到的键）。ASCII 可打印字符的 keysym 等于码点。 */
+const XK = {
+  escape: 0xff1b,
+  tab: 0xff09,
+  enter: 0xff0d,
+  controlLeft: 0xffe5,
+  altLeft: 0xffe9,
+  superLeft: 0xffeb,
+  delete: 0xffff,
+} as const
+
+/**
+ * ConsoleKeyToolbar 快捷键工具条（G-31）。
+ *
+ * 组合键的发送方式与 noVNC 自家 sendCtrlAltDel 相同：修饰键 down → 主键
+ * down/up → 修饰键 up。不能只发「主键 down+up」——没有修饰键按下时，
+ * 远端收到的就是一次普通的 Esc / Tab。
+ */
+function ConsoleKeyToolbar({ rfb }: { rfb: React.RefObject<RFB | null> }) {
+  const [text, setText] = useState('')
+  const [hint, setHint] = useState('')
+
+  const combo = (mod: { keysym: number; code: string }, key: { keysym: number; code: string }) => {
+    const client = rfb.current
+    if (!client) return
+    // 修饰键 down，主键 down+up，修饰键 up。
+    client.sendKey(mod.keysym, mod.code, true)
+    client.sendKey(key.keysym, key.code, true)
+    client.sendKey(key.keysym, key.code, false)
+    client.sendKey(mod.keysym, mod.code, false)
+  }
+
+  const sendText = () => {
+    const client = rfb.current
+    if (!client || !text) return
+    // 逐字符 down+up。code 用 noVNC 的键位名约定；映射不到的字符传
+    // "Unidentified"——节点不支持 QEMU 扩展键事件时它无影响，支持时
+    // 查不到扫描码也会自动退回纯 keysym 路径（noVNC 内部行为）。
+    for (const ch of text) {
+      if (ch === '\n') {
+        client.sendKey(XK.enter, 'Enter')
+        continue
+      }
+      client.sendKey(ch.charCodeAt(0), scancodeName(ch))
+    }
+    setText('')
+    setHint('已发送')
+    setTimeout(() => setHint(''), 2000)
+  }
+
+  const pasteClipboard = async () => {
+    try {
+      const clip = await navigator.clipboard.readText()
+      if (!clip) {
+        setHint('剪贴板是空的')
+        setTimeout(() => setHint(''), 2000)
+        return
+      }
+      const client = rfb.current
+      if (!client) return
+      for (const ch of clip.replace(/\r/g, '')) {
+        if (ch === '\n') {
+          client.sendKey(XK.enter, 'Enter')
+          continue
+        }
+        client.sendKey(ch.charCodeAt(0), scancodeName(ch))
+      }
+      setHint('已粘贴')
+      setTimeout(() => setHint(''), 2000)
+    } catch {
+      // 剪贴板读取需要授权，失败时提示而不是静默。
+      setHint('无法读取剪贴板（需要浏览器授权），可改用输入框发送')
+      setTimeout(() => setHint(''), 3000)
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-card border border-line bg-surface px-3 py-2">
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() => rfb.current?.sendCtrlAltDel()}
+        title="登录 Windows 时常用"
+      >
+        Ctrl+Alt+Del
+      </Button>
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() => combo(
+          { keysym: XK.controlLeft, code: 'ControlLeft' },
+          { keysym: XK.escape, code: 'Escape' },
+        )}
+      >
+        Ctrl+Esc
+      </Button>
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() => combo(
+          { keysym: XK.altLeft, code: 'AltLeft' },
+          { keysym: XK.tab, code: 'Tab' },
+        )}
+        title="Alt+Tab 在本地浏览器里会被拦截，这里把组合发给远端"
+      >
+        Alt+Tab
+      </Button>
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() => rfb.current?.sendKey(XK.superLeft, 'MetaLeft')}
+        title="打开远端的开始菜单 / 启动器"
+      >
+        Win
+      </Button>
+
+      <span className="mx-1 h-5 w-px bg-line" aria-hidden />
+
+      <input
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') sendText()
+        }}
+        placeholder="输入要发送到远端的文本"
+        className="h-8 min-w-40 flex-1 rounded-control border border-line-strong bg-sunken px-2.5 text-sm text-ink focus:outline-none focus-visible:border-brand"
+      />
+      <Button variant="secondary" size="sm" onClick={sendText} disabled={!text}>
+        发送
+      </Button>
+      <Button variant="secondary" size="sm" onClick={pasteClipboard}>
+        粘贴剪贴板
+      </Button>
+      {hint && <span className="text-xs text-ink-3">{hint}</span>}
+    </div>
+  )
+}
+
+/**
+ * scancodeName 把可打印字符映射到 noVNC 的键位名。映射不到的返回
+ * "Unidentified"：QEMU 扩展键事件下查不到扫描码时 noVNC 会退回纯
+ * keysym 路径，字符仍能到达远端。
+ */
+function scancodeName(ch: string): string {
+  if (ch >= 'a' && ch <= 'z') return `Key${ch.toUpperCase()}`
+  if (ch >= 'A' && ch <= 'Z') return `Key${ch}`
+  if (ch >= '0' && ch <= '9') return `Digit${ch}`
+  if (ch === ' ') return 'Space'
+  const named: Record<string, string> = {
+    '-': 'Minus', '=': 'Equal', '[': 'BracketLeft', ']': 'BracketRight',
+    '\\': 'Backslash', ';': 'Semicolon', "'": 'Quote', '`': 'Backquote',
+    ',': 'Comma', '.': 'Period', '/': 'Slash',
+  }
+  return named[ch] ?? 'Unidentified'
 }

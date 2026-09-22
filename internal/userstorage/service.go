@@ -250,6 +250,56 @@ func (s *Service) DeleteFile(
 	return nil
 }
 
+// DownloadFile 取回一份用户存储文件的内容（G-38）。
+//
+// 文件最终落在节点上（OpStorageFileCommit 交给节点落盘），因此取回同样
+// 走 agent 通道转发字节——不给浏览器节点直链，归属校验留在一处。归属
+// 规则与 DeleteFile 完全一致：租户只能取自己的，他人文件按 404 处理。
+func (s *Service) DownloadFile(
+	ctx context.Context, userID, nodeID, fileID int64, v authz.Viewer,
+	operatorName, clientIP string,
+) (string, []byte, string, error) {
+	file, err := s.loadFile(ctx, fileID)
+	if err != nil {
+		return "", nil, "", err
+	}
+	if file.NodeID != nodeID {
+		return "", nil, "", api.NotFound("文件不存在")
+	}
+	if !v.IsAdmin && (file.UserID == nil || *file.UserID != userID) {
+		// 404 而非 403：不让租户通过枚举推断别人有哪些文件。
+		return "", nil, "", api.NotFound("文件不存在")
+	}
+	if !file.IsReady() {
+		return "", nil, "", api.ValidationFailed("该文件尚未上传完成")
+	}
+
+	result, err := s.agent.Execute(ctx, agent.Operation{
+		Kind:   agent.OpStorageFileRead,
+		NodeID: file.NodeID,
+		Target: file.RelPath,
+	})
+	if err != nil {
+		return "", nil, "", api.Unavailable("节点不可达，无法获取文件内容")
+	}
+	if !result.Success {
+		return "", nil, "", api.ValidationFailed(result.Message)
+	}
+	content, ok := result.Data[agent.StorageFileContentKey].(agent.ExportContent)
+	if !ok || len(content.Data) == 0 {
+		return "", nil, "", api.Unavailable("节点未返回文件内容")
+	}
+
+	s.record(ctx, audit.Entry{
+		OperatorID: v.UserID, OperatorName: operatorName,
+		NodeID: file.NodeID, ResourceType: "storage_file", ResourceID: file.ID,
+		ResourceName: file.Filename, Action: "storage_file.download",
+		Params:  map[string]any{"rel_path": file.RelPath, "size": file.SizeBytes},
+		Success: true, ClientIP: clientIP,
+	})
+	return file.Filename, content.Data, "application/octet-stream", nil
+}
+
 // --- 上传会话（F-5-04）---
 
 // CreateUploadRequest 是创建上传会话的请求。

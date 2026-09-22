@@ -1,16 +1,14 @@
 /**
  * ImportPage 导入已有磁盘与镜像（F-2-13）。
  *
- * 流程按规格要求做成**先解析预览、再创建**：用户选好文件后先看到「将要创建
- * 的是什么」，确认后才受理。对 OVA 而言那些值来自包内的 OVF 描述；对裸镜像
- * 而言是用户自己填的——预览里会标出每一项的来源，因为「这个 4 核是我选的
- * 还是包里读的」对错误的含义完全不同。
- *
- * **上传是模拟的**：只提交文件名、大小与格式（浏览器能直接读到的元数据），
- * 不传文件内容。界面里如实说明这一点，避免让人以为已经传完了。
+ * 流程按规格要求做成**先上传、再解析预览、最后创建**：选好文件立即开始
+ * 分片上传（G-34，落到「我的存储」的 disk 类别），传完才能解析——解析与
+ * 导入都按文件名向节点要文件，文件不在，后面全是空转。对 OVA 而言预览值
+ * 来自包内的 OVF 描述；对裸镜像而言是用户自己填的——预览里会标出每一项
+ * 的来源，因为「这个 4 核是我选的还是包里读的」对错误的含义完全不同。
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 
 import { ApiError, NetworkError } from '@/api/client'
 import {
@@ -29,6 +27,7 @@ import { Input } from '@/components/common/Input'
 import { Modal } from '@/components/common/Modal'
 import { StatusBadge } from '@/components/common/StatusBadge'
 import { formatBytes, formatDateTime } from '@/utils/format'
+import { uploadFileToStorage } from '@/utils/fileUpload'
 
 export function ImportPage() {
   const queryClient = useQueryClient()
@@ -72,10 +71,9 @@ export function ImportPage() {
         </Button>
       </header>
 
-      <p className="rounded-card border border-warning/40 bg-warning/5 px-4 py-3 text-sm text-ink-2">
-        当前为**模拟上传**：只提交文件名与大小，不传输文件内容。
-        整条链路（受理、格式转换、产出模板、配额记账）与真实流程一致，
-        唯一未接通的是「文件怎么传到宿主机」。
+      <p className="rounded-card border border-line bg-surface px-4 py-3 text-sm text-ink-2">
+        文件会先分片上传到「我的存储」（disk 类别，支持秒传与断点续传），
+        之后由节点从存储中读取并转换为 QCOW2 模板。
       </p>
 
       {error && (
@@ -187,6 +185,16 @@ function ImportModal({
   const [name, setName] = useState('')
   const [preview, setPreview] = useState<ImportPreview | null>(null)
   const [error, setError] = useState('')
+  // 上传状态（G-34）：idle（未开始）→ uploading → done / failed。
+  // **解析以完成为前置**：解析与导入都按文件名向节点要文件，
+  // 文件还没落到存储里就解析，得到的一切预览都是空转。
+  const [uploadState, setUploadState] = useState<'idle' | 'uploading' | 'done' | 'failed'>('idle')
+  const [uploadProgress, setUploadProgress] = useState('')
+  const [uploadError, setUploadError] = useState('')
+  // 同名换文件时避免上一次上传的完成回调污染本次状态。
+  const uploadSeq = useRef(0)
+  // 保存 File 引用：节点后选时据此重传，不必让用户重新选择文件。
+  const fileRef = useRef<File | null>(null)
 
   const parse = useMutation({
     mutationFn: () =>
@@ -222,18 +230,50 @@ function ImportModal({
     onError: (err) => onError(describe(err)),
   })
 
-  /** 选文件：只读元数据，不读取内容。 */
+  /**
+   * 选文件：读元数据、识别格式，然后**立即开始上传**。
+   *
+   * 上传不需要用户再点一次「开始」——选择文件本身就是上传的意图，
+   * 多一步只会在大文件上让人干等两次。
+   */
   function pickFile(file: File | undefined) {
     if (!file) return
+    fileRef.current = file
+    const seq = ++uploadSeq.current
     setFilename(file.name)
     setSizeBytes(file.size)
     setPreview(null)
+    setError('')
+    setUploadError('')
+    setUploadState('uploading')
+    setUploadProgress('准备上传…')
     // 扩展名由**后端**识别——用户唯一会认真看的就是它，自己解析容易与
     // 后端的支持列表不一致。
     void importerApi
       .guessFormat(file.name)
       .then((r) => setFormat(r.supported ? (r.format as ImportFormat) : ''))
       .catch(() => setFormat(''))
+
+    if (nodeID === 0) {
+      // 还没选节点无法上传：这是唯一需要用户先补的一步，提示出来。
+      setUploadState('failed')
+      setUploadError('请先选择目标节点——文件要传到该节点的存储上')
+      return
+    }
+    void uploadFileToStorage(nodeID, 'disk', file, (text) => {
+      if (uploadSeq.current === seq) setUploadProgress(text)
+    })
+      .then(() => {
+        if (uploadSeq.current !== seq) return
+        setUploadState('done')
+        setUploadProgress('')
+      })
+      .catch((err) => {
+        if (uploadSeq.current !== seq) return
+        setUploadState('failed')
+        setUploadProgress('')
+        setUploadError(describe(err))
+      })
   }
 
   const sourceOf = (key: string) =>
@@ -253,7 +293,7 @@ function ImportModal({
           {preview === null ? (
             <Button
               size="sm"
-              disabled={nodeID === 0 || !format || parse.isPending}
+              disabled={nodeID === 0 || !format || uploadState !== 'done' || parse.isPending}
               loading={parse.isPending}
               onClick={() => parse.mutate()}
             >
@@ -277,7 +317,15 @@ function ImportModal({
           <label className="text-sm text-ink-2">目标节点</label>
           <select
             value={nodeID}
-            onChange={(e) => setNodeID(Number(e.target.value))}
+            onChange={(e) => {
+              const id = Number(e.target.value)
+              setNodeID(id)
+              // 先选了文件、后补节点的场景：文件已在手，选好节点即重传——
+              // 让用户再点一次文件选择器等于把同样的错误再犯一遍。
+              if (id > 0 && fileRef.current && uploadState !== 'done') {
+                pickFile(fileRef.current)
+              }
+            }}
             className="h-8 rounded-control border border-line-strong bg-sunken px-2 text-base text-ink focus:outline-none focus-visible:border-brand"
           >
             <option value={0}>请选择…</option>
@@ -301,6 +349,19 @@ function ImportModal({
             <p className="text-xs text-ink-3">
               {filename} · {formatBytes(sizeBytes)}
               {format ? ` · 识别为 ${IMPORT_FORMAT_HINT[format]}` : ' · 无法识别格式'}
+            </p>
+          )}
+          {/* 上传状态（G-34）：解析按钮以「上传完成」为前置，因此这里必须
+              让用户看见当前卡在哪一步——是还在传、传失败了，还是节点没选。 */}
+          {uploadState === 'uploading' && (
+            <p className="text-sm text-ink-2">{uploadProgress || '上传中…'}</p>
+          )}
+          {uploadState === 'done' && (
+            <p className="text-sm text-success">已上传到「我的存储」（disk 类别）</p>
+          )}
+          {uploadError && (
+            <p className="rounded-control border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
+              {uploadError}
             </p>
           )}
         </div>

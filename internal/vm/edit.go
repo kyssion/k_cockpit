@@ -272,7 +272,9 @@ var editFields = []EditField{
 		Options: []EditOption{
 			{Value: "q35", Label: "q35（较新，支持 PCIe）"},
 			{Value: "i440fx", Label: "i440fx（兼容老旧系统）"},
+			{Value: "virt", Label: "virt（ARM 专用机型）"},
 		},
+		Hint: "x86_64 选 q35 / i440fx；aarch64 只能用 virt。",
 	},
 	{
 		Key: "firmware", Label: "固件类型", Kind: EditKindSelect, Group: EditGroupBoot,
@@ -344,6 +346,58 @@ var editFields = []EditField{
 		Hint: "让来宾检测不到自己运行在虚拟机上。代价是失去部分半虚拟化优化，仅在确有需要时开启。",
 	},
 	{
+		// 显示设备：它决定来宾里"看到"的显卡。无头机器选 none（省内存、
+		// 也不再有控制台画面）；ARM 机器几乎只能 ramfb——多数 x86 显卡模型
+		// 在 aarch64 上没有对应固件支持。
+		Key: "video_model", Label: "显示设备", Kind: EditKindSelect, Group: EditGroupAdvanced,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "virtio",
+		Options: []EditOption{
+			{Value: "virtio", Label: "VirtIO（半虚拟化，性能最好）"},
+			{Value: "vga", Label: "VGA（兼容性最好）"},
+			{Value: "qxl", Label: "QXL（配合 SPICE 多分辨率）"},
+			{Value: "vmvga", Label: "VMware SVGA（迁移兼容）"},
+			{Value: "cirrus", Label: "Cirrus（老旧系统）"},
+			{Value: "ramfb", Label: "ramfb（ARM 固件帧缓冲）"},
+			{Value: "none", Label: "无（无头机器，无控制台画面）"},
+		},
+		Hint: "选 none 后详情页不再提供控制台入口。",
+	},
+	{
+		// RTC 时区口径：Linux 惯例把硬件钟当 UTC，Windows 当本地时间。
+		// 装双系统或迁移镜像时口径不对的表现是系统时间差一个时区，而
+		// 排查时会先怀疑 NTP——把选择放在创建期比事后修省事得多。
+		Key: "rtc_mode", Label: "RTC 时钟口径", Kind: EditKindSelect, Group: EditGroupAdvanced,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "utc",
+		Options: []EditOption{
+			{Value: "utc", Label: "UTC（Linux 惯例）"},
+			{Value: "localtime", Label: "本地时间（Windows 惯例）"},
+		},
+		Hint: "Windows 来宾选本地时间，否则系统时间会差一个时区。",
+	},
+	{
+		// 架构：x86_64 之外的取值会牵动机型 / 固件 / 显示设备的合法组合
+		// （aarch64 → virt + UEFI + ramfb），组合校验在 validateCreateExtras。
+		Key: "arch", Label: "架构", Kind: EditKindSelect, Group: EditGroupHardware,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "x86_64",
+		Options: []EditOption{
+			{Value: "x86_64", Label: "x86_64"},
+			{Value: "aarch64", Label: "aarch64（ARM64）"},
+		},
+		Hint: "ARM 镜像需选 aarch64，机器类型 / 固件 / 显示设备会随之约束。",
+	},
+	{
+		// 运行态热扩的创建期开关（F-2-05）：libvirt 建域时要预置热插拔槽位
+		// 与内存气球。创建时没打开，之后想热改就要关机重建域。
+		Key: "cpu_hotplug", Label: "CPU 热添加", Kind: EditKindBoolean, Group: EditGroupHardware,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "false",
+		Hint: "允许在运行中增加 vCPU（只能增加，不能减少）。",
+	},
+	{
+		Key: "memory_hotplug", Label: "内存热添加", Kind: EditKindBoolean, Group: EditGroupHardware,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "false",
+		Hint: "允许在运行中增加内存（只能增加，不能减少）。",
+	},
+	{
 		Key: "nested_virt", Label: "嵌套虚拟化", Kind: EditKindBoolean, Group: EditGroupAdvanced,
 		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "false",
 		Hint: "允许在这台虚拟机里再运行虚拟机。开销是实打实的，默认关闭。",
@@ -413,6 +467,11 @@ type EditForm struct {
 	Values map[string]any `json:"values"`
 	// EditableNow 报告**以当前运行态**能否提交需要下发的修改。
 	EditableNow bool `json:"editable_now"`
+	// HotAddition 列出**运行态下仍可修改**的键（G-33）：创建时打开了
+	// 热添加开关的机器，vCPU 与内存运行中可增。前端据此解除这两项的
+	// 禁用——用键集合而不是给 EditableNow 打补丁，是因为"整体可编辑"
+	// 与"个别项可热改"是两个维度的判断。
+	HotAddition map[string]bool `json:"hot_addition,omitempty"`
 	// CurrentStatus 是做出上述判断所依据的状态。
 	CurrentStatus string `json:"current_status"`
 	// Groups 是子选项卡的顺序与名称。由后端下发而不是前端硬编码：
@@ -465,10 +524,22 @@ func (s *Service) EditFormOf(
 		return nil, err
 	}
 
+	// HotAddition 只在运行态下有语义：关机状态下所有项本来就都可改。
+	hot := map[string]bool{}
+	if current != model.VMStatusStopped {
+		if vm.CPUHotplug {
+			hot["vcpu"] = true
+		}
+		if vm.MemoryHotplug {
+			hot["memory_mb"] = true
+		}
+	}
+
 	return &EditForm{
 		Fields:        editFields,
 		Values:        editValues(vm),
 		EditableNow:   current == model.VMStatusStopped,
+		HotAddition:   hot,
 		CurrentStatus: current,
 		Groups:        editGroups,
 	}, nil
@@ -540,6 +611,11 @@ var columnToField = map[string]string{
 	"cpu_threads":       "CPUThreads",
 	"hide_kvm":          "HideKVM",
 	"nested_virt":       "NestedVirt",
+	"video_model":       "VideoModel",
+	"rtc_mode":          "RTCMode",
+	"arch":              "Arch",
+	"cpu_hotplug":       "CPUHotplug",
+	"memory_hotplug":    "MemoryHotplug",
 	"memory_hugepages":  "MemoryHugepages",
 	"apic":              "APIC",
 	"pae":               "PAE",
@@ -703,11 +779,22 @@ func (s *Service) UpdateConfig(
 		return nil, err
 	}
 
-	// 需要关机的字段在运行态下一律拒绝。
+	// 运行态下的热添加（G-33 / F-2-05 的运行态可改矩阵）：创建时打开了
+	// 热添加开关的机器，vCPU 与内存可以**只增不减**地热改——libvirt 在
+	// 建域时已预置了热插拔槽位与内存气球。校验放在这里而不是执行器：
+	// 「不能减」是用户提交前就该被告知的事，而不是任务失败后才出现。
+	hotExempt := map[string]bool{}
+	if current != model.VMStatusStopped {
+		if err := checkHotAddition(vm, changes, hotExempt); err != nil {
+			return nil, err
+		}
+	}
+
+	// 需要关机的字段在运行态下一律拒绝（热添加豁免的除外）。
 	//
 	// 拒绝而不是「自动关机再改」：自动关机会中断用户正在跑的业务，而那是
 	// 一个他没有要求的操作。让他自己决定什么时候停机。
-	if current != model.VMStatusStopped && requiresShutdown(changes) {
+	if current != model.VMStatusStopped && requiresShutdownExempt(changes, hotExempt) {
 		return nil, api.ValidationFailed(
 			"这些配置需要先关机才能修改（当前为" + DescribeStatus(current) + "）")
 	}
@@ -954,6 +1041,57 @@ func requiresShutdown(changes map[string]any) bool {
 		}
 	}
 	return false
+}
+
+// requiresShutdownExempt 在 requiresShutdown 的基础上跳过豁免集。
+//
+// 豁免不是让这些字段绕过校验，而是它们**已经单独校验过**（checkHotAddition）：
+// 两处各判一次的话，将来放宽其中一处时另一处会悄悄收紧。
+func requiresShutdownExempt(changes map[string]any, exempt map[string]bool) bool {
+	for key := range changes {
+		if exempt[key] {
+			continue
+		}
+		if f, ok := editFieldByKey(key); ok && f.RequiresShutdown {
+			return true
+		}
+	}
+	return false
+}
+
+// checkHotAddition 校验运行态下的 vCPU / 内存热改（G-33）。
+//
+// 规则与参考实现一致：**只能增加**。缩小在运行态下没有意义——正在使用的
+// 资源不会因为配置改小而被回收，用户看到的是「配置改了、占用没变」。
+// 通过校验的键写进 exempt，供运行态的需关机判定跳过。
+func checkHotAddition(vm *model.VM, changes map[string]any, exempt map[string]bool) error {
+	if raw, ok := changes["vcpu"]; ok {
+		if !vm.CPUHotplug {
+			return api.ValidationFailed(
+				"这台虚拟机没有开启 CPU 热添加（创建时可勾选），运行中无法调整 vCPU")
+		}
+		newVCPU, _ := raw.(int)
+		if newVCPU < vm.VCPU {
+			return api.ValidationFailed(
+				"CPU 热添加只能增加：当前 " + strconv.Itoa(vm.VCPU) +
+					" 核，不能改为 " + strconv.Itoa(newVCPU) + " 核")
+		}
+		exempt["vcpu"] = true
+	}
+	if raw, ok := changes["memory_mb"]; ok {
+		if !vm.MemoryHotplug {
+			return api.ValidationFailed(
+				"这台虚拟机没有开启内存热添加（创建时可勾选），运行中无法调整内存")
+		}
+		newMem, _ := raw.(int)
+		if newMem < vm.MemoryMB {
+			return api.ValidationFailed(
+				"内存热添加只能增加：当前 " + strconv.Itoa(vm.MemoryMB) +
+					" MB，不能改为 " + strconv.Itoa(newMem) + " MB")
+		}
+		exempt["memory_mb"] = true
+	}
+	return nil
 }
 
 // configChangeParams 是 vm.config.update 任务的参数。

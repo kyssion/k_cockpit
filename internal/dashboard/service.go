@@ -26,8 +26,11 @@ import (
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/authz"
+	"k_cockpit/internal/computequota"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/node"
+	"k_cockpit/internal/quota"
+	"k_cockpit/internal/quotaenforce"
 )
 
 // 视角范围。
@@ -59,6 +62,13 @@ type Service struct {
 	// 只是少了两块展示，不该让整个首页失败。
 	tuning TuningProvider
 	agent  agent.Client
+
+	// 三个配额读数服务（G-32）。都是**可选**依赖：nil 时「我的配额」里
+	// 对应的维度不出现，而不是报错——配额是可选能力，与 vm.Service 的
+	// 可选注入是同一条约定。
+	computeQuota *computequota.Service
+	storageQuota *quota.Service
+	runtimeQuota *quotaenforce.Service
 }
 
 // SetAgent 装配 agent 客户端；不调用时硬件与网络统计两区块不显示。

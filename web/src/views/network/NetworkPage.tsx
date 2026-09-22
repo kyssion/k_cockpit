@@ -415,6 +415,13 @@ function SwitchFormModal({
   const [dhcpStart, setDhcpStart] = useState(target?.dhcp_start ?? '')
   const [dhcpEnd, setDhcpEnd] = useState(target?.dhcp_end ?? '')
   const [uplink, setUplink] = useState(target?.uplink_if ?? '')
+  // 带宽上限（G-38）：0 / 空 = 不限。约束的是整个交换机的合计吞吐。
+  const [bwIn, setBwIn] = useState(
+    target?.bandwidth_in_mbps ? String(target.bandwidth_in_mbps) : '',
+  )
+  const [bwOut, setBwOut] = useState(
+    target?.bandwidth_out_mbps ? String(target.bandwidth_out_mbps) : '',
+  )
 
   const save = useMutation({
     mutationFn: () => {
@@ -427,6 +434,8 @@ function SwitchFormModal({
         dhcp_start: dhcpStart.trim(),
         dhcp_end: dhcpEnd.trim(),
         uplink_if: uplink.trim(),
+        bandwidth_in_mbps: bwIn.trim() === '' ? 0 : Number(bwIn),
+        bandwidth_out_mbps: bwOut.trim() === '' ? 0 : Number(bwOut),
       }
       return editing
         ? networkApi.updateSwitch(target.id, input)
@@ -528,6 +537,27 @@ function SwitchFormModal({
               : '出网走这块网卡；留空表示由系统选择。'
           }
         />
+
+        {/* 带宽上限（G-38）：整个交换机的合计吞吐，与单网卡限速是两层。 */}
+        <div className="grid grid-cols-2 gap-3">
+          <Input
+            label="入方向带宽上限（Mbps）"
+            type="number"
+            value={bwIn}
+            placeholder="不限"
+            onChange={(e) => setBwIn(e.target.value)}
+          />
+          <Input
+            label="出方向带宽上限（Mbps）"
+            type="number"
+            value={bwOut}
+            placeholder="不限"
+            onChange={(e) => setBwOut(e.target.value)}
+          />
+        </div>
+        <p className="text-xs text-ink-3">
+          约束整个交换机的合计吞吐（0 表示不限），与单台虚拟机的网卡限速是两层限制。
+        </p>
       </div>
     </Modal>
   )

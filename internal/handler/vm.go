@@ -70,6 +70,27 @@ func (h *VM) Get(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, view)
 }
 
+// InitialCredential 返回虚拟机的登录凭据（G-30）。
+//
+// 有归属权限即可读取（详见 service 层的三道边界说明）；响应里的
+// has=false 表示创建时未设置初始密码，前端据此显示引导而不是报错。
+func (h *VM) InitialCredential(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+	view, err := h.svc.InitialCredentialOf(
+		ctx, id, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, view)
+}
+
 type createVMRequest struct {
 	Name      string `json:"name"`
 	NodeID    int64  `json:"node_id"`
@@ -121,7 +142,14 @@ type createVMRequest struct {
 	DiskIOPSRead  int   `json:"disk_iops_read"`
 	DiskIOPSWrite int   `json:"disk_iops_write"`
 
+	VideoModel    string `json:"video_model"`
+	RTCMode       string `json:"rtc_mode"`
+	Arch          string `json:"arch"`
+	CPUHotplug    bool   `json:"cpu_hotplug"`
+	MemoryHotplug bool   `json:"memory_hotplug"`
+
 	ISOFileID        int64   `json:"iso_file_id"`
+	ISOFileIDs       []int64 `json:"iso_file_ids"`
 	SwitchID         int64   `json:"switch_id"`
 	SecurityGroupIDs []int64 `json:"security_group_ids"`
 
@@ -186,7 +214,11 @@ func (h *VM) Create(ctx context.Context, c *app.RequestContext) {
 		DiskIOPSRead:    req.DiskIOPSRead,
 		DiskIOPSWrite:   req.DiskIOPSWrite,
 
+		VideoModel: req.VideoModel, RTCMode: req.RTCMode, Arch: req.Arch,
+		CPUHotplug: req.CPUHotplug, MemoryHotplug: req.MemoryHotplug,
+
 		ISOFileID:        req.ISOFileID,
+		ISOFileIDs:       req.ISOFileIDs,
 		SwitchID:         req.SwitchID,
 		SecurityGroupIDs: req.SecurityGroupIDs,
 

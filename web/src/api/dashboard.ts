@@ -163,4 +163,39 @@ export const dashboardApi = {
    */
   hostDetail: (nodeID: number) =>
     get<HostDetailView>('/api/v1/dashboard/host-detail', { node_id: nodeID }),
+
+  /**
+   * 我的配额总览（G-32）。按「用户 × 节点」聚合三类配额：
+   * 计算（存量）、存储（存量）、流量与运行时长（UTC 月累计）。
+   * `has_limit=false` 表示该维度不限。
+   */
+  myQuotas: () => get<QuotaOverview>('/api/v1/dashboard/quotas'),
+}
+
+/** 一个维度的「已用 / 上限」。 */
+export interface UsedLimit {
+  used: number
+  limit: number
+  has_limit: boolean
+  unit?: string
+}
+
+/** 一个节点上的全部配额维度。 */
+export interface NodeQuota {
+  node_id: number
+  node_name: string
+  vcpu: UsedLimit
+  memory_mb: UsedLimit
+  vms: UsedLimit
+  storage_gb: UsedLimit
+  traffic_in_gb: UsedLimit
+  traffic_out_gb: UsedLimit
+  runtime_hours: UsedLimit
+  /** ok / warned / limited，取全部维度中最差的。 */
+  worst_status: string
+}
+
+export interface QuotaOverview {
+  generated_at: string
+  nodes: NodeQuota[]
 }

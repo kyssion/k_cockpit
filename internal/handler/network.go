@@ -34,13 +34,19 @@ type switchRequest struct {
 	DHCPStart string `json:"dhcp_start"`
 	DHCPEnd   string `json:"dhcp_end"`
 	UplinkIf  string `json:"uplink_if"`
+	// BandwidthInMbps / BandwidthOutMbps 是交换机总带宽上限（G-38），
+	// 0 表示不限；校验在服务层。
+	BandwidthInMbps  int `json:"bandwidth_in_mbps"`
+	BandwidthOutMbps int `json:"bandwidth_out_mbps"`
 }
 
 func (r *switchRequest) toService() network.SwitchRequest {
 	return network.SwitchRequest{
 		Name: r.Name, Mode: r.Mode, VlanID: r.VlanID, CIDR: r.CIDR,
 		GatewayIP: r.GatewayIP, DHCPStart: r.DHCPStart, DHCPEnd: r.DHCPEnd,
-		UplinkIf: r.UplinkIf,
+		UplinkIf:         r.UplinkIf,
+		BandwidthInMbps:  r.BandwidthInMbps,
+		BandwidthOutMbps: r.BandwidthOutMbps,
 	}
 }
 
