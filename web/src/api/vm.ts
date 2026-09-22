@@ -232,6 +232,12 @@ export interface CreateVmInput {
   static_ip?: string
   /** 除系统盘之外要一并创建的数据盘。 */
   data_disks?: DataDiskInput[]
+  /** 要创建的网口总数（含主网口）。0 / 1 都表示只建主网口。 */
+  nic_count?: number
+  /** 创建时一并直通的 PCI 设备地址。 */
+  pci_addresses?: string[]
+  /** 软盘镜像文件（来自「我的存储」）。 */
+  floppy_file_id?: number
   machine_type?: string
   firmware?: string
   secure_boot?: boolean

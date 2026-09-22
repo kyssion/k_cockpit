@@ -5,6 +5,8 @@ import { Link } from 'react-router'
 import { ApiError, NetworkError } from '@/api/client'
 import { nodeApi } from '@/api/node'
 import { templateApi, type TemplateView } from '@/api/template'
+import { passthroughApi, type PCIDevice } from '@/api/passthrough'
+import { userStorageApi, type FileView } from '@/api/userstorage'
 import { vmApi, type CreateFormField, type DataDiskInput } from '@/api/vm'
 import { Button } from '@/components/common/Button'
 import { Input } from '@/components/common/Input'
@@ -87,6 +89,11 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
   const [groupIDs, setGroupIDs] = useState<number[]>(draft?.groupIDs ?? [])
   const [count, setCount] = useState(draft?.count ?? 1)
   // 数据盘不在矩阵里（它是一组结构且数量不定），因此单独存一份 state。
+  // 这三个也不在矩阵里：网口数量是一个"重复次数"，直通与软盘是从别的接口
+  // 选出来的对象，矩阵表达不了。
+  const [nicCount, setNicCount] = useState(1)
+  const [pciAddresses, setPciAddresses] = useState<string[]>([])
+  const [floppyFileID, setFloppyFileID] = useState(0)
   const [dataDisks, setDataDisks] = useState<DataDiskInput[]>(draft?.dataDisks ?? [])
   const [templateID, setTemplateID] = useState(0)
   const [error, setError] = useState('')
@@ -161,6 +168,9 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
         init_mode: str(effective.init_mode),
         static_ip: str(effective.static_ip),
         data_disks: dataDisks.length > 0 ? dataDisks : undefined,
+        nic_count: nicCount > 1 ? nicCount : undefined,
+        pci_addresses: pciAddresses.length > 0 ? pciAddresses : undefined,
+        floppy_file_id: floppyFileID > 0 ? floppyFileID : undefined,
         machine_type: str(effective.machine_type),
         firmware: str(effective.firmware),
         secure_boot: bool(effective.secure_boot),
@@ -370,6 +380,14 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
               )}
 
               {steps[step]?.key === 'disk' && (
+                <FloppyPicker
+                  nodeID={nodeID}
+                  value={floppyFileID}
+                  onChange={setFloppyFileID}
+                />
+              )}
+
+              {steps[step]?.key === 'disk' && (
                 <DataDiskEditor
                   items={dataDisks}
                   onChange={setDataDisks}
@@ -396,6 +414,27 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
                       </option>
                     ))}
                   </select>
+                </div>
+              )}
+
+              {steps[step]?.key === 'network' && (
+                <div className="flex flex-col gap-1 rounded-control border border-line px-3 py-2.5">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-sm text-ink-2">网口数量</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={8}
+                      value={nicCount}
+                      onChange={(e) => setNicCount(Math.max(1, Math.min(8, Number(e.target.value) || 1)))}
+                      className="h-9 rounded-control border border-line-strong bg-sunken px-2 text-base text-ink"
+                    />
+                  </label>
+                  {/* 说明写清"含主网口"：只写"网口数量"会让人怀疑还要不要另建
+                      一块主网卡。 */}
+                  <span className="text-xs text-ink-3">
+                    含主网口。多网卡机器（内网 + 公网）在这里一次建好，省得事后一块块补。
+                  </span>
                 </div>
               )}
 
@@ -452,6 +491,14 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
                     </div>
                   </div>
                 </div>
+              )}
+
+              {steps[step]?.key === 'advanced' && (
+                <PassthroughPicker
+                  nodeID={nodeID}
+                  selected={pciAddresses}
+                  onChange={setPciAddresses}
+                />
               )}
 
               {fieldsOf(steps[step]?.key ?? '').map((f) => (
@@ -869,6 +916,125 @@ function DataDiskEditor({
           ))}
         </ul>
       )}
+    </div>
+  )
+}
+
+/**
+ * PassthroughPicker 选创建时要一并直通的 PCI 设备。
+ *
+ * 只列出**可直通**的设备，并且把同组其它设备展示出来：IOMMU 分组里的设备
+ * 只能一起直通，用户选了一块卡就必须知道另一块也被带上了——否则他会在另一台
+ * 机器上看到"这块卡怎么也挂不上"。
+ */
+function PassthroughPicker({
+  nodeID,
+  selected,
+  onChange,
+}: {
+  nodeID: number
+  selected: string[]
+  onChange: (addrs: string[]) => void
+}) {
+  const list = useQuery({
+    queryKey: ['passthrough', nodeID],
+    queryFn: () => passthroughApi.overview(nodeID),
+    enabled: nodeID > 0,
+  })
+
+  const devices = (list.data?.devices ?? []).filter((d) => d.CanPassthrough)
+
+  return (
+    <div className="flex flex-col gap-1.5 rounded-control border border-line px-3 py-2.5">
+      <span className="text-sm text-ink-2">直通设备（可选）</span>
+      {devices.length === 0 ? (
+        <span className="text-xs text-ink-3">该节点没有可直通的设备。</span>
+      ) : (
+        <ul className="flex flex-col gap-1">
+          {devices.map((d: PCIDevice) => (
+            <li key={d.Address} className="flex items-start gap-2">
+              <input
+                type="checkbox"
+                className="mt-1"
+                // 已被别的机器占用的不给勾：勾了也会在启动时失败，而那时两台
+                // 机器都已经跑起来了。
+                disabled={!!d.attached_to_vm_id}
+                checked={selected.includes(d.Address)}
+                onChange={(e) =>
+                  onChange(
+                    e.target.checked
+                      ? [...selected, d.Address]
+                      : selected.filter((a) => a !== d.Address),
+                  )
+                }
+              />
+              <span className="min-w-0">
+                <span className="kc-mono text-sm text-ink">{d.Address}</span>
+                <span className="ml-2 text-sm text-ink-2">{d.Description || d.VendorDevice || '未识别设备'}</span>
+                {d.attached_to_vm_id ? (
+                  <span className="ml-2 text-xs text-warning">已被 {d.attached_to_vm_name || '其它虚拟机'} 挂载</span>
+                ) : null}
+                {d.group_peers.length > 0 && (
+                  <span className="block text-xs text-ink-3">
+                    同组设备（会一起直通）：{d.group_peers.join('、')}
+                  </span>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <span className="text-xs text-ink-3">
+        直通设备不支持热插拔；创建时机器是关着的，正是挂载它们的时机。
+      </span>
+    </div>
+  )
+}
+
+/**
+ * FloppyPicker 选软盘镜像。
+ *
+ * 软盘是**独立于光驱**的设备，因此它不复用光驱那一步的选择，而是单独一项。
+ * 候选来自「我的存储」而不是让用户填路径——路径是节点内部细节，让他去猜
+ * 等于没给入口。
+ */
+function FloppyPicker({
+  nodeID,
+  value,
+  onChange,
+}: {
+  nodeID: number
+  value: number
+  onChange: (id: number) => void
+}) {
+  const list = useQuery({
+    queryKey: ['storage-files', nodeID],
+    queryFn: () => userStorageApi.listFiles(nodeID),
+    enabled: nodeID > 0,
+  })
+
+  const files = list.data?.items ?? []
+
+  return (
+    <div className="flex flex-col gap-1 rounded-control border border-line px-3 py-2.5">
+      <label className="flex flex-col gap-1">
+        <span className="text-sm text-ink-2">软盘镜像（可选）</span>
+        <select
+          value={value}
+          onChange={(e) => onChange(Number(e.target.value) || 0)}
+          className="h-9 rounded-control border border-line-strong bg-sunken px-2 text-base text-ink"
+        >
+          <option value={0}>不挂载</option>
+          {files.map((f: FileView) => (
+            <option key={f.id} value={f.id}>
+              {f.filename}
+            </option>
+          ))}
+        </select>
+      </label>
+      <span className="text-xs text-ink-3">
+        老系统的驱动盘或安装流程有时仍走软盘。它与光驱是两个不同的设备。
+      </span>
     </div>
   )
 }

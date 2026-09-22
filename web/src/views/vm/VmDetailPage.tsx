@@ -64,6 +64,7 @@ import {
   type InterfaceInput,
   type PortForward,
 } from '@/api/net'
+import { publicIPExtraApi, type GuestIPView } from '@/api/publicip'
 import {
   NIC_MODEL_LABEL,
   vmApi,
@@ -1478,6 +1479,8 @@ function NetworkTab({ vmID }: { vmID: number }) {
       </p>
 
       {/* 邻居表：排查"虚拟机之间不通"时，先看它比抓包快一个数量级。 */}
+      <GuestIPSection vmID={vmID} />
+
       <NeighborSection vmID={vmID} />
 
       <NicModal
@@ -3406,6 +3409,83 @@ const NEIGHBOR_STATE_LABEL: Record<string, string> = {
   probe: '探测中',
   failed: '不可达',
   permanent: '固定',
+}
+
+/**
+ * GuestIPSection 来宾里实际配置的公网地址。
+ *
+ * 它回答的是"绑定成功之后为什么还是不通"：**绑定成功 ≠ 来宾里配好了**——
+ * 控制面只保证规则下发，来宾里还要有人（或 cloud-init）把地址配上。没有这一
+ * 项，这类问题只能靠进虚拟机自己看。
+ *
+ * 数据来自节点（`public_ip.guest_status`），因为"配没配、通不通"只有它知道。
+ */
+function GuestIPSection({ vmID }: { vmID: number }) {
+  const [open, setOpen] = useState(false)
+
+  const list = useQuery({
+    queryKey: ['guest-ips', vmID],
+    queryFn: () => publicIPExtraApi.guestStatus(vmID),
+    enabled: open,
+  })
+
+  const items = list.data?.items ?? []
+
+  return (
+    <section className="rounded-card border border-line">
+      <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
+        <div>
+          <h2 className="text-sm font-medium text-ink-2">来宾地址状态</h2>
+          <p className="mt-0.5 text-xs text-ink-3">
+            绑定成功不等于来宾里配好了——这里看的是虚拟机里实际有没有这个地址。
+          </p>
+        </div>
+        <Button size="sm" variant="secondary" onClick={() => setOpen((v) => !v)}>
+          {open ? '收起' : '查看'}
+        </Button>
+      </div>
+
+      {open && (
+        <div className="px-4 py-3">
+          {list.isPending ? (
+            <PageLoading />
+          ) : items.length === 0 ? (
+            <p className="text-base text-ink-3">没有检测到公网地址。</p>
+          ) : (
+            <table className="w-full border-collapse text-base">
+              <thead>
+                <tr className="text-left text-xs text-ink-3">
+                  <th className="px-2 py-1.5 font-normal">地址</th>
+                  <th className="px-2 py-1.5 font-normal">已配置</th>
+                  <th className="px-2 py-1.5 font-normal">可达</th>
+                  <th className="px-2 py-1.5 font-normal">说明</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((it: GuestIPView) => (
+                  <tr key={it.address} className="border-t border-line">
+                    <td className="kc-mono px-2 py-1.5 text-ink">{it.address}</td>
+                    <td className="px-2 py-1.5">
+                      <StatusBadge tone={it.configured ? 'success' : 'warning'}>
+                        {it.configured ? '是' : '否'}
+                      </StatusBadge>
+                    </td>
+                    <td className="px-2 py-1.5">
+                      <StatusBadge tone={it.reachable ? 'success' : 'idle'}>
+                        {it.reachable ? '是' : '否'}
+                      </StatusBadge>
+                    </td>
+                    {/* 未配置时 detail 是最有价值的一句：它说明卡在哪一步。 */}
+                    <td className="px-2 py-1.5 text-ink-3">{it.detail || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </section>
+  )
 }
 
 function describe(error: unknown): string {
