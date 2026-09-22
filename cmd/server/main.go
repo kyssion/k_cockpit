@@ -214,7 +214,9 @@ func main() {
 	queue.Register(vm.NewExportExecutor(db, mockAgent))
 	queue.Register(vm.NewExportDeleteExecutor(db, mockAgent))
 	// 来宾自动化要进系统内部执行，同样是异步的。
-	queue.Register(vm.NewGuestExecutor(db, mockAgent))
+	// （改密成功后要同步凭据记录，需要加密密钥——在下方 credKey 处注入。）
+	guestExec := vm.NewGuestExecutor(db, mockAgent)
+	queue.Register(guestExec)
 	// 镜像导入要转换格式，可能处理几十 GB 的文件。
 	queue.Register(importer.NewImportExecutor(db, mockAgent))
 	// 迁移要搬运整块磁盘，是最耗时的操作之一。
@@ -370,6 +372,9 @@ func main() {
 	vmSvc := vm.NewService(db, queue, recorder, mockAgent, settingsSvc, quotaSvc)
 	// 计算资源配额（vCPU / 内存 / 实例数）：创建虚拟机时校验，超限即拒绝新建。
 	computeQuotaSvc := computequota.NewService(db, recorder)
+	// 工作台「我的配额」（G-32）：三类配额的读数都从各自的判定服务取，
+	// 保证用户看到的数字与判定时用的是同一份。
+	dashboardSvc.SetQuotaReaders(computeQuotaSvc, quotaSvc, quotaEnforceSvc)
 	// 告警中心（F-8-07）。
 	alertSvc := alert.NewService(db)
 	vmSvc.SetComputeQuota(computeQuotaSvc)
@@ -420,6 +425,7 @@ func main() {
 		[]byte(cfg.Session.Secret), "k_cockpit/vm/credential/v1")
 	vmSvc.SetEncryptionKey(credKey)
 	createExec.SetEncryptionKey(credKey)
+	guestExec.SetEncryptionKey(credKey)
 
 	h := server.Default(server.WithHostPorts(cfg.HTTP.Addr()))
 	router.Register(h, router.Deps{
