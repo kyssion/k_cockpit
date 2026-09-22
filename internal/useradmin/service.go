@@ -78,6 +78,61 @@ type QuotaRequest struct {
 func (s *Service) SetAgent(c agent.Client) { s.agent = c }
 
 // NewService 构造服务。
+// CreateFromInvite 由邀请流程创建账号。
+//
+// 与 Create 的区别只有一处：**密码是受邀人自己设的**，因此不走强制改密——
+// 他自己刚设的密码，再让他改一遍没有意义。其余校验（角色、用户名）与 Create
+// 保持一致，避免两条创建路径长成两套口径。
+func (s *Service) CreateFromInvite(
+	ctx context.Context, email, username, password, role string,
+	quotaEnabled bool, quotaBytes int64,
+) error {
+	if strings.TrimSpace(username) == "" {
+		return api.InvalidParameter("必须填写用户名")
+	}
+	if len(username) > 64 {
+		return api.InvalidParameter("用户名最长 64 字")
+	}
+	// 受邀人自设密码，要求比管理员给的初始密码更长（12 位）：他只设这一次，
+	// 而这次的质量决定这个账号的长期强度。
+	if len(password) < 12 {
+		return api.InvalidParameter("密码至少 12 位")
+	}
+	if role != model.RoleTenant && role != model.RoleAdmin {
+		return api.InvalidParameter("角色必须是 tenant 或 admin")
+	}
+
+	hash, err := s.hasher(password)
+	if err != nil {
+		log.Printf("[useradmin] 生成密码哈希失败: %v", err)
+		return api.Internal()
+	}
+
+	// 复用 Create：配额、审计、状态都在那一条路径上。
+	_, err = s.Create(ctx, CreateRequest{
+		Username: username, Password: password, Role: role, Email: email,
+	}, authz.Viewer{UserID: 0, IsAdmin: true}, "invite", "")
+	if hash == "" || err != nil {
+		return err
+	}
+
+	// 配额：邀请时就把额度定下来。
+	if s.quota != nil && quotaEnabled {
+		var row model.User
+		if e := s.db.WithContext(ctx).Where("username = ?", username).Select("id").First(&row).Error; e == nil {
+			if e := s.quota.Set(ctx, QuotaRequest{
+				UserID: row.ID, NodeID: 0,
+				QuotaBytes: quotaBytes, Enabled: true,
+			}, 0, "invite", ""); e != nil {
+				// 配额设置失败**不算注册失败**：账号已经能用了，额度可以随后
+				// 补。让一次配额写入失败把注册判为失败，用户会以为邮箱被占了。
+				log.Printf("[useradmin] 设置邀请配额失败 user=%d: %v", row.ID, e)
+			}
+		}
+	}
+	return nil
+}
+
 func NewService(db *gorm.DB, recorder *audit.Recorder, q quotaSetter) *Service {
 	return &Service{db: db, audit: recorder, hasher: auth.HashPassword, quota: q}
 }

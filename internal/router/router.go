@@ -29,6 +29,7 @@ import (
 	"k_cockpit/internal/hostfirewall"
 	"k_cockpit/internal/hosttuning"
 	"k_cockpit/internal/importer"
+	"k_cockpit/internal/invite"
 	"k_cockpit/internal/logging"
 	"k_cockpit/internal/mailer"
 	"k_cockpit/internal/monitor"
@@ -87,6 +88,8 @@ type Deps struct {
 	PassAudit *passaudit.Service
 	// AuthKey 提供会话签名密钥轮换（F-1-09）。为 nil 时接口不可用。
 	AuthKey *authkey.Service
+	// Invite 提供邀请注册（F-1-10）。为 nil 时接口不可用。
+	Invite *invite.Service
 	// Risk 强制高风险操作的二次验证（f-10-01）。受保护的操作在 handler
 	// 入口调用它，清单本身集中在 internal/risk。
 	Risk *risk.Guard
@@ -198,6 +201,7 @@ func Register(h *server.Hertz, deps Deps) {
 	reqLogHandler := handler.NewReqLog(deps.ReqLog)
 	passAuditHandler := handler.NewPassAudit(deps.PassAudit)
 	authKeyHandler := handler.NewAuthKey(deps.AuthKey, deps.Risk)
+	inviteHandler := handler.NewInvite(deps.Invite)
 	settingsHandler := handler.NewSettings(deps.Settings, deps.Mailer)
 	consoleHandler := handler.NewConsole(deps.VM, deps.Risk)
 	templateHandler := handler.NewTemplate(deps.Template)
@@ -687,6 +691,14 @@ func Register(h *server.Hertz, deps Deps) {
 		// 会话签名密钥轮换（F-1-09）：轮换即全员登出，因此要二次验证。
 		v1.GET("/settings/auth-key", requireAuth, adminOnly, authKeyHandler.Status)
 		v1.POST("/settings/auth-key/rotate", requireAuth, adminOnly, authKeyHandler.Rotate)
+		// 邀请注册（F-1-10）：创建与撤销是管理员动作，预览与接受是**公开**接口
+		// ——拿到链接的人必须能在未登录状态下看到"这是给谁的"并完成注册。
+		v1.GET("/invites", requireAuth, adminOnly, inviteHandler.List)
+		v1.POST("/invites", requireAuth, adminOnly, inviteHandler.Create)
+		v1.POST("/invites/:id/revoke", requireAuth, adminOnly, inviteHandler.Revoke)
+		v1.POST("/invites/:id/resend", requireAuth, adminOnly, inviteHandler.Resend)
+		v1.GET("/invites/preview", inviteHandler.Preview)
+		v1.POST("/invites/accept", inviteHandler.Accept)
 		v1.GET("/settings/log/read", requireAuth, adminOnly, loggingHandler.Read)
 		v1.PUT("/settings/log/level", requireAuth, adminOnly, loggingHandler.SetLevel)
 		v1.GET("/settings/log/export", requireAuth, adminOnly, loggingHandler.Export)

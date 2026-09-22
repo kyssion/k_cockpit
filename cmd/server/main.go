@@ -33,6 +33,7 @@ import (
 	"k_cockpit/internal/hostfirewall"
 	"k_cockpit/internal/hosttuning"
 	"k_cockpit/internal/importer"
+	"k_cockpit/internal/invite"
 	"k_cockpit/internal/logging"
 	"k_cockpit/internal/mailer"
 	"k_cockpit/internal/monitor"
@@ -268,6 +269,7 @@ func main() {
 	reqLogSvc := reqlog.NewService(db, func(ctx context.Context) bool {
 		return settingsSvc.Bool("security.request_log_enabled", false)
 	})
+
 	// 口令检查：判定在节点侧，这里只做开关、定时与结果落地。
 	passAuditSvc := passaudit.NewService(db, mockAgent, func() bool {
 		return settingsSvc.Bool("security.password_breach_check", false)
@@ -298,6 +300,18 @@ func main() {
 	netSvc := networkbridge.NewService(db, mockAgent, recorder)
 	auditLogSvc := auditlog.NewService(db)
 	userAdminSvc := useradmin.NewService(db, recorder, quotaAdapter{svc: quotaSvc})
+	// 邀请注册（F-1-10）。账号创建复用 useradmin（密码由受邀人自设），链接里的站点地址取自设置项——没有配置时给出相对链接，由管理员自己补域名。
+	inviteSvc := invite.NewService(db, recorder)
+	inviteSvc.SetUserCreator(userAdminSvc.CreateFromInvite)
+	inviteSvc.SetMailer(func(ctx context.Context, to, link, role string) error {
+		// role 直接进正文：受邀人需要知道自己被邀请成什么角色。
+		return mailSvc.Send(ctx, to, "邀请你加入 K Cockpit",
+			"你被邀请加入 K Cockpit，角色："+role+"\n\n"+
+				"请打开下面的链接完成注册（链接三天内有效）：\n"+link+"\n\n"+
+				"如果你并不认识邀请你的人，请忽略这封邮件。\n")
+	})
+	// 站点地址留空 —— 链接是相对路径（/invite/<token>）。邮件里给相对链接比猜一个错误域名更安全：管理员转发时自己补域名。
+	inviteSvc.SetSiteURL(func(ctx context.Context) string { return "" })
 	// SSH 访问要下发到宿主机，因此接上 agent（不接时只改控制面记录）。
 	userAdminSvc.SetAgent(mockAgent)
 	tagSvc := vmtag.NewService(db, recorder)
@@ -441,6 +455,7 @@ func main() {
 		ReqLog:        reqLogSvc,
 		PassAudit:     passAuditSvc,
 		AuthKey:       authKeySvc,
+		Invite:        inviteSvc,
 		UserAdmin:     userAdminSvc,
 		VMTag:         tagSvc,
 		Monitor:       monitorSvc,
