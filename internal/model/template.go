@@ -64,6 +64,9 @@ type Template struct {
 
 	Status string `gorm:"size:16;not null;default:preparing"`
 
+	// PreprocessedAt 是上次离线预处理完成的时刻。为空表示没做过。
+	PreprocessedAt *time.Time
+
 	StoragePoolID *int64
 	// DiskPath 是模板盘在宿主机上的路径。**不暴露给普通用户**：它是内部
 	// 实现细节，暴露出去会诱使用户去宿主机上直接操作这个文件。

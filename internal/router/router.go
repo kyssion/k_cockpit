@@ -427,6 +427,8 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/templates/:id/flatten", requireAuth, templateHandler.FlattenTemplate)
 		v1.POST("/templates/:id/promote-child", requireAuth, templateHandler.PromoteChildTemplate)
 		v1.POST("/templates/:id/promote-delete", requireAuth, templateHandler.PromoteDeleteTemplate)
+		// 离线预处理（F-3-06）：判定与执行都在节点侧，控制面只固化选项。
+		v1.POST("/templates/:id/preprocess", requireAuth, adminOnly, templateHandler.Preprocess)
 
 		// 模板导出与导入（F-3-05）：模板包是跨节点搬运模板的载体。
 		//

@@ -76,6 +76,8 @@ const (
 
 	// TaskTemplateMaintain 维护模板派生链（rebase / 拉平 / 提升 / 热提升删除）。
 	TaskTemplateMaintain = "template.maintain"
+	// TaskTemplatePreprocess 对模板做离线预处理（需节点工具链）。
+	TaskTemplatePreprocess = "template.preprocess"
 
 	// 模板导出与导入（F-3-05）。两者都要读写几十 GB 的镜像文件，
 	// 因此与模板制备一样走队列。

@@ -239,6 +239,13 @@ func stagePlan(op Operation) [][2]string {
 			{"floppy_attach", "挂到软驱"},
 		}
 
+	case OpTemplatePreprocess:
+		return [][2]string{
+			{"image_mount", "挂载镜像到临时环境"},
+			{"image_tune", "改写镜像内容"},
+			{"image_verify", "校验可启动"},
+		}
+
 	case OpStoragePartitionCreate:
 		return [][2]string{
 			{"table_read", "读取分区表"},
@@ -1554,6 +1561,13 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 			// 一条"规则下发了、来宾没配上"的：这是排查"绑了却不通"时最需要
 			// 区分的一种情况。
 			{Address: "2001:db8:1::10/64", Family: "ipv6", Configured: false, Reachable: false, Detail: "来宾内未配置该地址"},
+		}
+
+	case OpTemplatePreprocess:
+		data[TemplatePreprocessDataKey] = TemplatePreprocessInfo{
+			Steps:          []string{"install_agent", "inject_ssh_key", "reset_machine_id"},
+			SizeDeltaBytes: 120 << 20,
+			Message:        "预处理完成",
 		}
 
 	case OpStoragePartitions:
