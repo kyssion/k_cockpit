@@ -6,6 +6,7 @@ import { AppLayout } from '@/layout/AppLayout'
 import { DashboardPage } from '@/views/dashboard/DashboardPage'
 import { LoginPage } from '@/views/auth/LoginPage'
 import { ForgotPasswordPage } from '@/views/auth/ForgotPasswordPage'
+import { InvitePage } from '@/views/auth/InvitePage'
 import { SetupPage } from '@/views/auth/SetupPage'
 import { NetworkPage } from '@/views/network/NetworkPage'
 import { NetworkPage2 } from '@/views/network/NetworkPage2'
@@ -80,6 +81,10 @@ export const router = createBrowserRouter([
       // 找回密码是**公开**路由：处于这个状态的人拿不出任何凭据，
       // 要求登录才能找回等于没有这个功能。
       { path: '/forgot', element: <ForgotPasswordPage /> },
+      // 接受邀请同样是**公开**路由：受邀人此刻还没有账号，要求登录才能
+      // 注册等于没有这个功能。它在初始化之外、登录之外，是唯一一条"未登录
+      // 也能进"的写操作入口。
+      { path: '/invite/:token', element: <InvitePage /> },
       // 独立控制台窗口：**不带布局**。控制台要占满屏幕才好用，而布局里的
       // 侧栏、标签栏与顶栏会各吃掉一条。它仍需要登录（Cookie 由浏览器自动
       // 带上，因此新开的窗口同样是已登录状态）。

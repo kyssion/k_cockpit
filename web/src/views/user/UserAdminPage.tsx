@@ -12,6 +12,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 
 import { ApiError, NetworkError } from '@/api/client'
+import { INVITE_STATUS_LABEL, INVITE_STATUS_TONE, inviteApi, type InviteView } from '@/api/invite'
 import { vmApi, vmOwnerApi } from '@/api/vm'
 import {
   ROLE_LABEL,
@@ -250,6 +251,8 @@ export function UserAdminPage() {
           </table>
         </div>
       )}
+
+      <InviteSection />
 
       <CreateUserModal
         open={createOpen}
@@ -609,6 +612,251 @@ function AssignVMModal({
 
         {error && <p className="text-sm text-danger">{error}</p>}
         {users.isError && <p className="text-sm text-ink-3">用户列表加载失败，不影响分配。</p>}
+      </div>
+    </Modal>
+  )
+}
+
+
+/**
+ * InviteSection 邀请注册（F-1-10）。
+ *
+ * 链接只在**创建与重发时返回一次**，之后列表里看不到它 —— 这是刻意的：链接会出现在
+ * 邮件与聊天记录里（都是不可控的地方），库里只留哈希，重发还会把旧链接作废。
+ */
+function InviteSection() {
+  const queryClient = useQueryClient()
+  const [createOpen, setCreateOpen] = useState(false)
+  const [link, setLink] = useState('')
+  const [error, setError] = useState('')
+
+  const list = useQuery({ queryKey: ['invites'], queryFn: inviteApi.list })
+
+  const revoke = useMutation({
+    mutationFn: (id: number) => inviteApi.revoke(id),
+    onSuccess: () => {
+      setError('')
+      void queryClient.invalidateQueries({ queryKey: ['invites'] })
+    },
+    onError: (err) => setError(describe(err)),
+  })
+
+  const resend = useMutation({
+    mutationFn: (id: number) => inviteApi.resend(id),
+    onSuccess: (v) => {
+      setError('')
+      if (v.link) setLink(v.link)
+      void queryClient.invalidateQueries({ queryKey: ['invites'] })
+    },
+    onError: (err) => setError(describe(err)),
+  })
+
+  const items = list.data?.items ?? []
+
+  return (
+    <section className="rounded-card border border-line">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-2.5">
+        <div>
+          <h2 className="text-sm font-medium text-ink-2">邀请注册</h2>
+          <p className="mt-0.5 text-xs text-ink-3">
+            发出一条有期限的邀请链接；受邀人自己设密码，管理员从头到尾不知道它。
+          </p>
+        </div>
+        <Button size="sm" onClick={() => setCreateOpen(true)}>
+          新建邀请
+        </Button>
+      </div>
+
+      <div className="px-4 py-3">
+        {error && (
+          <p role="alert" className="mb-2 rounded-control bg-danger/10 px-3 py-2 text-sm text-danger">
+            {error}
+          </p>
+        )}
+
+        {/* 刚生成的链接必须在显眼处：这是唯一一次能看到它的机会。 */}
+        {link && (
+          <div className="mb-3 flex flex-col gap-1 rounded-control bg-success/10 px-3 py-2">
+            <span className="text-sm text-success">
+              邀请链接已生成，请复制并转交给对方（仅显示一次）。
+            </span>
+            <code className="kc-mono break-all text-xs text-ink-2">{link}</code>
+          </div>
+        )}
+
+        {items.length === 0 ? (
+          <p className="text-base text-ink-3">还没有邀请记录。</p>
+        ) : (
+          <table className="w-full border-collapse text-base">
+            <thead>
+              <tr className="text-left text-xs text-ink-3">
+                <th className="px-2 py-1.5 font-normal">邮箱</th>
+                <th className="px-2 py-1.5 font-normal">角色</th>
+                <th className="px-2 py-1.5 font-normal">状态</th>
+                <th className="px-2 py-1.5 font-normal">有效期</th>
+                <th className="px-2 py-1.5 text-right font-normal">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((it) => (
+                <tr key={it.id} className="border-t border-line">
+                  <td className="px-2 py-1.5 text-ink">{it.email}</td>
+                  <td className="px-2 py-1.5 text-ink-2">{it.role === 'admin' ? '管理员' : '租户'}</td>
+                  <td className="px-2 py-1.5">
+                    <StatusBadge tone={INVITE_STATUS_TONE[it.status]}>
+                      {INVITE_STATUS_LABEL[it.status]}
+                    </StatusBadge>
+                  </td>
+                  <td className="px-2 py-1.5 text-ink-3">{relativeTime(it.expires_at)}</td>
+                  <td className="px-2 py-1.5 text-right">
+                    {it.status !== 'accepted' && (
+                      <>
+                        <button
+                          className="text-sm text-brand hover:underline disabled:text-ink-3 disabled:no-underline"
+                          disabled={resend.isPending}
+                          onClick={() => resend.mutate(it.id)}
+                        >
+                          重发
+                        </button>
+                        <button
+                          className="ml-3 text-sm text-danger hover:underline disabled:text-ink-3 disabled:no-underline"
+                          disabled={revoke.isPending}
+                          onClick={() => revoke.mutate(it.id)}
+                        >
+                          撤销
+                        </button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <CreateInviteModal
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onCreated={(v) => {
+          setCreateOpen(false)
+          setError('')
+          if (v.link) setLink(v.link)
+          void queryClient.invalidateQueries({ queryKey: ['invites'] })
+        }}
+      />
+    </section>
+  )
+}
+
+/**
+ * CreateInviteModal 新建邀请。
+ *
+ * 配额在这里一起定：先给额度再让人进来，而不是进来之后再谈额度 —— 那时他已经能建
+ * 机器了。
+ */
+function CreateInviteModal({
+  open,
+  onClose,
+  onCreated,
+}: {
+  open: boolean
+  onClose: () => void
+  onCreated: (v: InviteView) => void
+}) {
+  const [email, setEmail] = useState('')
+  const [role, setRole] = useState('tenant')
+  const [quotaEnabled, setQuotaEnabled] = useState(false)
+  const [quotaGB, setQuotaGB] = useState('')
+  const [remark, setRemark] = useState('')
+  const [error, setError] = useState('')
+
+  const create = useMutation({
+    mutationFn: () =>
+      inviteApi.create({
+        email: email.trim(),
+        role,
+        quota_enabled: quotaEnabled,
+        quota_bytes: quotaEnabled ? Number(quotaGB) * 1024 * 1024 * 1024 : 0,
+        remark: remark.trim() || undefined,
+      }),
+    onSuccess: onCreated,
+    onError: (err) => setError(describe(err)),
+  })
+
+  return (
+    <Modal
+      open={open}
+      title="新建邀请"
+      description="生成一条邀请链接，发给受邀人让他自己完成注册。"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            取消
+          </Button>
+          <Button
+            size="sm"
+            loading={create.isPending}
+            disabled={!email.trim() || (quotaEnabled && !(Number(quotaGB) > 0))}
+            onClick={() => create.mutate()}
+          >
+            生成邀请
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3">
+        <Input
+          label="受邀人邮箱"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="someone@example.com"
+        />
+
+        <label className="flex flex-col gap-1">
+          <span className="text-sm text-ink-2">角色</span>
+          <select
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            className="h-9 rounded-control border border-line-strong bg-sunken px-2 text-base text-ink"
+          >
+            <option value="tenant">租户</option>
+            <option value="admin">管理员</option>
+          </select>
+        </label>
+
+        <label className="flex cursor-pointer items-start gap-2 text-sm text-ink-2">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={quotaEnabled}
+            onChange={(e) => setQuotaEnabled(e.target.checked)}
+          />
+          <span>
+            同时设定存储配额
+            <span className="block text-xs text-ink-3">额度在受邀人进来之前就定好；不设定表示不限额。</span>
+          </span>
+        </label>
+
+        {quotaEnabled && (
+          <Input
+            label="配额（GB）"
+            type="number"
+            value={quotaGB}
+            onChange={(e) => setQuotaGB(e.target.value)}
+            placeholder="例如 100"
+          />
+        )}
+
+        <Input label="备注（可选）" value={remark} onChange={(e) => setRemark(e.target.value)} />
+
+        {error && <p role="alert" className="text-sm text-danger">{error}</p>}
+
+        <p className="text-xs text-ink-3">
+          链接默认三天有效。过期后可「重发」——重发会生成新链接并把旧链接作废。
+        </p>
       </div>
     </Modal>
   )
