@@ -12,7 +12,9 @@ docs/
 ├── 01-product/                    # 产品层：做什么、为谁做
 │   ├── PRD.md                     # 产品需求文档（功能清单 F-x-xx 与优先级）
 │   ├── CAPABILITY_MAP.md          # 能力地图：分层、依赖关系、跨切面、覆盖度对照
-│   └── ROADMAP.md                 # 路线图与里程碑
+│   ├── ROADMAP.md                 # 路线图与里程碑
+│   ├── GAP_CLOSURE.md             # 能力补齐清单：对标 QVMConsole 的差距核对与进度
+│   └── DEMO_PLAN.md               # 演示优先实施规划：批次、逐项分工与 mock 边界
 ├── 02-architecture/               # 架构层：怎么做
 │   ├── ARCHITECTURE.md            # 整体架构设计
 │   ├── TECH_STACK.md              # 技术选型与理由
