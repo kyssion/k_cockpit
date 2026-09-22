@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -84,6 +85,19 @@ type createParams struct {
 	// 不在这里回查模板表：任务可能排很久才执行，那时模板已被删除或改名，
 	// 回查会得到空值或另一份路径。**入队那一刻的路径才是这次要用的**。
 	TemplateDiskPath string `json:"template_disk_path,omitempty"`
+	// NICCount 是要创建的网口总数（含主网口）。
+	NICCount int `json:"nic_count"`
+	// PCIAddresses 是创建时一并直通的 PCI 设备地址。
+	PCIAddresses []string `json:"pci_addresses"`
+	// FloppyFileID 是软盘镜像文件。
+	FloppyFileID *int64 `json:"floppy_file_id"`
+	// CPU 拓扑：0 表示不指定。
+	CPUSockets int `json:"cpu_sockets"`
+	CPUCores   int `json:"cpu_cores"`
+	CPUThreads int `json:"cpu_threads"`
+	// 默认关闭的两个高级开关。
+	HideKVM    bool `json:"hide_kvm"`
+	NestedVirt bool `json:"nested_virt"`
 }
 
 // newCreateParams 由创建请求构造任务参数。
@@ -102,6 +116,14 @@ func newCreateParams(
 		DiskFormat: req.DiskFormat, DiskBus: req.DiskBus, NicModel: req.NicModel,
 		OSType: req.OSType, OSVariant: req.OSVariant,
 		MachineType: req.MachineType, Firmware: req.Firmware,
+
+		// CPU 拓扑与两个默认关闭的高级开关。它们在 newCreateParams 里原样
+		// 传递，不做兜底：0 / false 本身就是"不指定 / 不开"的合法取值。
+		CPUSockets: req.CPUSockets, CPUCores: req.CPUCores, CPUThreads: req.CPUThreads,
+		HideKVM: req.HideKVM, NestedVirt: req.NestedVirt,
+		NICCount:     req.NICCount,
+		PCIAddresses: req.PCIAddresses,
+		FloppyFileID: req.FloppyFileID,
 		// 第一次开机就该是什么样：随创建一起下发，建好再设要走来宾自动化，
 		// 而那要求 Guest Agent 已在运行——对刚装好的系统不成立。
 		Hostname:        req.Hostname,
@@ -258,7 +280,10 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 		NicModel:   orDefault(p.NicModel, "virtio"),
 		OSType:     orDefault(p.OSType, "linux"),
 		// 具体版本可为空：多数机器是从镜像装的，只有识别过或手选才有值。
-		OSVariant:       p.OSVariant,
+		OSVariant:  p.OSVariant,
+		CPUSockets: p.CPUSockets, CPUCores: p.CPUCores, CPUThreads: p.CPUThreads,
+		HideKVM: p.HideKVM, NestedVirt: p.NestedVirt,
+
 		MachineType:     orDefault(p.MachineType, "q35"),
 		Firmware:        orDefault(p.Firmware, "bios"),
 		BootOrder:       orDefault(p.BootOrder, "disk,cdrom,network"),
@@ -315,10 +340,30 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 		log.Printf("[vm] 写入主网口失败 vm=%d: %v", vm.ID, err)
 	}
 
+	// 额外的网口。主网口之外还要几块，在创建时一次建好，而不是让用户事
+	// 后一块块补。
+	if err := e.createExtraInterfaces(ctx, &vm, p); err != nil {
+		log.Printf("[vm] 写入额外网口失败 vm=%d: %v", vm.ID, err)
+	}
+
+	// 直通设备：机器此刻还是关着的，正是挂载它们最省事的时机——直通不支持
+	// 热插拔，建好再挂要先关机。
+	if err := e.attachPassthrough(ctx, &vm, p); err != nil {
+		// 与网口同理：直通失败不算创建失败，机器本身仍然可用。
+		log.Printf("[vm] 挂载直通设备失败 vm=%d: %v", vm.ID, err)
+	}
+
 	// ISO 安装：把镜像挂到光驱，否则新机器空盘无法引导。
 	if p.ISOFileID > 0 {
 		if err := e.attachISO(ctx, &vm, p.ISOFileID); err != nil {
 			log.Printf("[vm] 挂载安装镜像失败 vm=%d: %v", vm.ID, err)
+		}
+	}
+
+	// 软盘镜像：与光驱同理，只是它挂在软驱上。
+	if p.FloppyFileID != nil && *p.FloppyFileID > 0 {
+		if err := e.attachFloppy(ctx, &vm, *p.FloppyFileID); err != nil {
+			log.Printf("[vm] 挂载软盘镜像失败 vm=%d: %v", vm.ID, err)
 		}
 	}
 
@@ -410,6 +455,96 @@ func (e *CreateExecutor) attachISO(ctx context.Context, vm *model.VM, fileID int
 		Params: map[string]any{
 			"action": "attach", "vm_id": vm.ID, "vm_name": vm.Name,
 			"order_no": 0, "bus": row.Bus, "iso_file_id": isoID,
+		},
+	})
+	return err
+}
+
+// createExtraInterfaces 创建主网口之外的网口。
+//
+// 只写控制面记录，不下发：创建任务稍后会下发整机的定义，而这块网卡会被
+// 一并带上。这里再下发一次等于把同一块网卡配两遍。
+func (e *CreateExecutor) createExtraInterfaces(
+	ctx context.Context, vm *model.VM, p createParams,
+) error {
+	if p.NICCount <= 1 {
+		return nil
+	}
+	if p.NICCount > defaultInterfaceLimit {
+		return api.ValidationFailed(
+			"网口数量不能超过 " + strconv.Itoa(defaultInterfaceLimit) + "（这是一台机器的网卡上限）")
+	}
+	for i := 1; i < p.NICCount; i++ {
+		mac := MACFor(vm.ID, i)
+		nic := model.VMInterface{
+			VMID: vm.ID, NodeID: vm.NodeID, Order: i,
+			Model: vm.NicModel, MAC: &mac,
+			IsPrimary: false,
+		}
+		if err := e.db.WithContext(ctx).Create(&nic).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// attachPassthrough 在创建时挂载直通设备。
+//
+// 先绑定（bind 到 vfio-pci）、成功之后再写记录：绑定失败意味着设备不存在、
+// 已被占用或 IOMMU 分组冲突，而**这些判断只有节点能做**。先写记录会留下一
+// 条"挂了但实际没挂上"的数据——那比不写更糟。
+func (e *CreateExecutor) attachPassthrough(
+	ctx context.Context, vm *model.VM, p createParams,
+) error {
+	if len(p.PCIAddresses) == 0 {
+		return nil
+	}
+	for _, addr := range p.PCIAddresses {
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			continue
+		}
+		result, err := e.agent.Execute(ctx, agent.Operation{
+			Kind:   agent.OpHostPCIBind,
+			NodeID: vm.NodeID,
+			Target: addr,
+			Params: map[string]any{"bind": true, "vm_id": vm.ID},
+		})
+		if err != nil || result == nil || !result.Success {
+			// 逐个失败逐个记，继续处理剩下的：一次失败的直通不该让后面的
+			// 设备也不挂。
+			log.Printf("[vm] 绑定直通设备失败 vm=%d addr=%s: %v", vm.ID, addr, err)
+			continue
+		}
+		row := model.VMPassthrough{
+			VMID: vm.ID, NodeID: vm.NodeID, PCIAddress: addr,
+			AttachedAt: time.Now(),
+		}
+		if err := e.db.WithContext(ctx).Create(&row).Error; err != nil {
+			log.Printf("[vm] 写入直通记录失败 vm=%d addr=%s: %v", vm.ID, addr, err)
+		}
+	}
+	return nil
+}
+
+// attachFloppy 挂上软盘镜像。
+//
+// 软盘是**独立于光驱**的一类设备：把它塞进光驱那张表会让"这台机器挂了
+// 哪些可移动介质"这个问题有两个答案，而且 vm_cdrom 的 bus 里也没有
+// "floppy"——硬加进去等于让一个字段同时表达设备和总线两件事。
+func (e *CreateExecutor) attachFloppy(ctx context.Context, vm *model.VM, fileID int64) error {
+	fid := fileID
+	if err := e.db.WithContext(ctx).Model(&model.VM{}).
+		Where("id = ?", vm.ID).
+		Updates(map[string]any{"floppy_file_id": fid, "updated_at": time.Now()}).Error; err != nil {
+		return err
+	}
+	_, err := e.agent.Execute(ctx, agent.Operation{
+		Kind:   agent.OpVMFloppyApply,
+		NodeID: vm.NodeID,
+		Target: vm.Name,
+		Params: map[string]any{
+			"action": "attach", "vm_id": vm.ID, "vm_name": vm.Name, "file_id": fid,
 		},
 	})
 	return err

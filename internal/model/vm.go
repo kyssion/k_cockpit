@@ -155,7 +155,24 @@ type VM struct {
 
 	// --- 高级设置（f-2-05「高级设置」子选项卡）---
 
-	CPUType         string `gorm:"column:cpu_type;size:32;not null;default:host"`
+	CPUType string `gorm:"column:cpu_type;size:32;not null;default:host"`
+
+	// CPU 拓扑：sockets × cores × threads。
+	//
+	// 0 表示不指定（由 vcpu 数量自由展开）。它与 vcpu 的关系在创建时校验：
+	// 三者之积必须等于 vcpu，否则来宾里看到的核数与资源配额对不上。
+	CPUSockets int `gorm:"column:cpu_sockets;not null;default:0"`
+	CPUCores   int `gorm:"column:cpu_cores;not null;default:0"`
+	CPUThreads int `gorm:"column:cpu_threads;not null;default:0"`
+
+	// HideKVM 让来宾看不到虚拟化特征。默认 false：它有代价（失去部分半虚拟化
+	// 优化），只有确实需要时才开。
+	HideKVM bool `gorm:"column:hide_kvm;not null;default:false"`
+	// NestedVirt 允许在虚拟机里再跑虚拟机。默认 false：开销是实打实的。
+	NestedVirt bool `gorm:"column:nested_virt;not null;default:false"`
+
+	// FloppyFileID 指向「我的存储」里的软盘镜像文件。
+	FloppyFileID    *int64 `gorm:"column:floppy_file_id"`
 	CPULimitPercent int    `gorm:"column:cpu_limit_percent;not null;default:0"`
 	MemoryHugepages bool   `gorm:"not null;default:false"`
 	// APIC / PAE 同样是 default:true 的字段：创建时如果传 false 会被省略

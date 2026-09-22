@@ -490,7 +490,29 @@ type CreateRequest struct {
 	// 为什么不在矩阵里：矩阵描述的是"一个值"，而数据盘是一组结构（大小 +
 	// 格式 + 驱动），且数量不定。硬塞进矩阵会得到 data_disk_1_size 这种
 	// 上限写死在键名里的设计。
-	DataDisks       []DataDiskSpec
+	DataDisks []DataDiskSpec
+	// CPU 拓扑：0 表示不指定；三者之积需等于 vCPU（由 validateCreateExtras 校验）。
+	//
+	// 只给"核数"是不够的：有些系统的授权与调度按**路数**计算，同样 8 线程，
+	// "2 路 4 核"与"1 路 8 核"在来宾里不是一回事。
+	CPUSockets int
+	CPUCores   int
+	CPUThreads int
+	// HideKVM / NestedVirt 默认关闭：它们都有实打实的代价，只有确实需要才开。
+	HideKVM    bool
+	NestedVirt bool
+	// NICCount 是要一并创建的网口数量（含主网口）。0 / 1 都表示只建主网口。
+	//
+	// 它存在的理由：多网卡机器（内网 + 公网 + 管理网）建好之后再加，要一块块
+	// 填；创建时一次给够能把这些配置留在同一份记录里。
+	NICCount int
+	// PCIAddresses 是创建时一并直通的 PCI 设备地址。
+	//
+	// 直通设备**不支持热插拔**，因此创建时（机器还是关着的）是挂载它们最省事
+	// 的时机之一；建好再挂要先关机。
+	PCIAddresses []string
+	// FloppyFileID 指向「我的存储」里的软盘镜像。
+	FloppyFileID    *int64
 	MachineType     string
 	Firmware        string
 	SecureBoot      bool

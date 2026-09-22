@@ -233,6 +233,12 @@ func stagePlan(op Operation) [][2]string {
 			{"reachability", "检查连通性"},
 		}
 
+	case OpVMFloppyApply:
+		return [][2]string{
+			{"floppy_prepare", "准备软盘镜像"},
+			{"floppy_attach", "挂到软驱"},
+		}
+
 	case OpStoragePartitionCreate:
 		return [][2]string{
 			{"table_read", "读取分区表"},

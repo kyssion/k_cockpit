@@ -323,6 +323,32 @@ var editFields = []EditField{
 	{
 		// CPU 亲和性（绑核）。它决定 vCPU 实际跑在哪些物理核上，与"给多少核"
 		// 是同一类决策，因此放在同一处。
+		Key: "cpu_sockets", Label: "CPU 路数（sockets）", Kind: EditKindNumber, Group: EditGroupHardware,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "0",
+		Min: 0, Max: 16,
+		Hint: "与「每路核数」「每核线程数」之积需等于 vCPU 数量。留 0 表示不指定。",
+	},
+	{
+		Key: "cpu_cores", Label: "每路核数（cores）", Kind: EditKindNumber, Group: EditGroupHardware,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "0",
+		Min: 0, Max: 256,
+	},
+	{
+		Key: "cpu_threads", Label: "每核线程数（threads）", Kind: EditKindNumber, Group: EditGroupHardware,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "0",
+		Min: 0, Max: 8,
+	},
+	{
+		Key: "hide_kvm", Label: "隐藏虚拟化特征", Kind: EditKindBoolean, Group: EditGroupAdvanced,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "false",
+		Hint: "让来宾检测不到自己运行在虚拟机上。代价是失去部分半虚拟化优化，仅在确有需要时开启。",
+	},
+	{
+		Key: "nested_virt", Label: "嵌套虚拟化", Kind: EditKindBoolean, Group: EditGroupAdvanced,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true, Default: "false",
+		Hint: "允许在这台虚拟机里再运行虚拟机。开销是实打实的，默认关闭。",
+	},
+	{
 		Key: "cpu_affinity", Label: "CPU 亲和性（绑核）", Kind: EditKindText, Group: EditGroupAdvanced,
 		RequiresNode: true, InCreate: true,
 		Hint: "形如 0-3 或 0,2,4。留空表示不绑核，由调度器自行选择物理核。",
@@ -509,6 +535,11 @@ var columnToField = map[string]string{
 	"cpu_type":          "CPUType",
 	"cpu_limit_percent": "CPULimitPercent",
 	"cpu_affinity":      "CPUAffinity",
+	"cpu_sockets":       "CPUSockets",
+	"cpu_cores":         "CPUCores",
+	"cpu_threads":       "CPUThreads",
+	"hide_kvm":          "HideKVM",
+	"nested_virt":       "NestedVirt",
 	"memory_hugepages":  "MemoryHugepages",
 	"apic":              "APIC",
 	"pae":               "PAE",

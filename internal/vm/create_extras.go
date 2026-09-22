@@ -66,6 +66,25 @@ func validateCreateExtras(req CreateRequest) error {
 			return api.InvalidParameter("初始密码不能包含换行")
 		}
 	}
+
+	// CPU 拓扑：要填就填全，且乘积必须等于 vCPU。
+	//
+	// 只填一部分是没有意义的——来宾里看到的核数会与配额对不上，而这种不一致
+	// 要等到装完系统才能发现。
+	if req.CPUSockets > 0 || req.CPUCores > 0 || req.CPUThreads > 0 {
+		if req.CPUSockets <= 0 || req.CPUCores <= 0 || req.CPUThreads <= 0 {
+			return api.InvalidParameter("CPU 拓扑要填就填全：路数 / 每路核数 / 每核线程数")
+		}
+		if req.CPUSockets*req.CPUCores*req.CPUThreads != req.VCPU {
+			return api.InvalidParameter(
+				"CPU 拓扑之积（" + strconv.Itoa(req.CPUSockets) + "×" + strconv.Itoa(req.CPUCores) + "×" +
+					strconv.Itoa(req.CPUThreads) + "）必须等于 vCPU 数量 " + strconv.Itoa(req.VCPU))
+		}
+	}
+	if req.NICCount < 0 || req.NICCount > defaultInterfaceLimit {
+		return api.InvalidParameter(
+			"网口数量需在 0 到 " + strconv.Itoa(defaultInterfaceLimit) + " 之间")
+	}
 	return nil
 }
 
