@@ -21,6 +21,7 @@ import {
   TEMPLATE_STATUS_TONE,
   templateApi,
   templateMaintainApi,
+  templatePreprocessApi,
   TEMPLATE_MAINTAIN_LABEL,
   type DeleteStrategy,
   type TemplateMaintainAction,
@@ -48,6 +49,7 @@ export function TemplatePage() {
   // "这条链上有几代、谁派生自谁"——这两件事在扁平列表里看不出来。
   const [view, setView] = useState<'list' | 'family'>('list')
   const [maintainTarget, setMaintainTarget] = useState<TemplateView | null>(null)
+  const [preprocessTarget, setPreprocessTarget] = useState<TemplateView | null>(null)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const [exportTarget, setExportTarget] = useState<TemplateView | null>(null)
@@ -308,6 +310,13 @@ export function TemplatePage() {
                       >
                         维护
                       </button>
+                      {/* 离线预处理：改写镜像内容（装 agent、注入 SSH 公钥、清 machine-id） */}
+                      <button
+                        className="text-sm text-ink-2 hover:underline"
+                        onClick={() => setPreprocessTarget(t)}
+                      >
+                        预处理
+                      </button>
                     </span>
                   </td>
                 </tr>
@@ -357,6 +366,22 @@ export function TemplatePage() {
           </table>
         )}
       </section>
+
+      <PreprocessModal
+        template={preprocessTarget}
+        onClose={() => setPreprocessTarget(null)}
+        onSubmitted={(m) => {
+          setPreprocessTarget(null)
+          setError('')
+          setNotice(m)
+          void queryClient.invalidateQueries({ queryKey: ['templates'] })
+          void queryClient.invalidateQueries({ queryKey: ['tasks'] })
+        }}
+        onError={(m) => {
+          setPreprocessTarget(null)
+          setError(m)
+        }}
+      />
 
       <MaintainModal
         template={maintainTarget}
@@ -1167,6 +1192,142 @@ function countDescendants(id: number, childrenOf: Map<number, TemplateView[]>): 
     n += 1 + countDescendants(c.id, childrenOf)
   }
   return n
+}
+
+/**
+ * PreprocessModal 离线预处理（F-3-06）。
+ *
+ * 选项做成开关而不是模式：这几项可以任意组合，而标准 / 完整的表达力不够——每次要做什么取决于那个镜像本身缺什么。
+ *
+ * reset_machine_id 的后果必须写清：克隆出的机器不重置会在网络里被当成同一台。
+ */
+function PreprocessModal({
+  template,
+  onClose,
+  onSubmitted,
+  onError,
+}: {
+  template: TemplateView | null
+  onClose: () => void
+  onSubmitted: (msg: string) => void
+  onError: (msg: string) => void
+}) {
+  const [installAgent, setInstallAgent] = useState(true)
+  const [injectSSHKey, setInjectSSHKey] = useState(false)
+  const [resetMachineID, setResetMachineID] = useState(true)
+  const [removeCloudInit, setRemoveCloudInit] = useState(false)
+  const [acknowledged, setAcknowledged] = useState(false)
+  const [seeded, setSeeded] = useState<number | null>(null)
+
+  if (seeded !== (template?.id ?? null)) {
+    setSeeded(template?.id ?? null)
+    setInstallAgent(true)
+    setInjectSSHKey(false)
+    setResetMachineID(true)
+    setRemoveCloudInit(false)
+    setAcknowledged(false)
+  }
+
+  const run = useMutation({
+    mutationFn: () =>
+      templatePreprocessApi.run(template?.id ?? 0, {
+        install_agent: installAgent,
+        inject_ssh_key: injectSSHKey,
+        reset_machine_id: resetMachineID,
+        remove_cloud_init: removeCloudInit,
+        acknowledge: acknowledged,
+      }),
+    onSuccess: () => onSubmitted('已提交预处理'),
+    onError: (err) => onError(describe(err)),
+  })
+
+  const anyStep = installAgent || injectSSHKey || resetMachineID || removeCloudInit
+
+  return (
+    <Modal
+      open={template !== null}
+      title={`预处理「${template?.name ?? ''}」`}
+      description="这些动作会改写模板镜像的内容，失败时由节点还原。"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            取消
+          </Button>
+          <Button
+            size="sm"
+            loading={run.isPending}
+            disabled={!anyStep || !acknowledged}
+            onClick={() => run.mutate()}
+          >
+            提交
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-2.5">
+        <label className="flex cursor-pointer items-start gap-2 text-sm text-ink-2">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={installAgent}
+            onChange={(e) => setInstallAgent(e.target.checked)}
+          />
+          <span>安装来宾代理（qemu-guest-agent）</span>
+        </label>
+
+        <label className="flex cursor-pointer items-start gap-2 text-sm text-ink-2">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={injectSSHKey}
+            onChange={(e) => setInjectSSHKey(e.target.checked)}
+          />
+          <span>注入 SSH 公钥</span>
+        </label>
+
+        <label className="flex cursor-pointer items-start gap-2 text-sm text-ink-2">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={resetMachineID}
+            onChange={(e) => setResetMachineID(e.target.checked)}
+          />
+          <span>
+            重置 machine-id
+            <span className="block text-xs text-ink-3">
+              克隆出来的机器若不重置，它们在网络里会被当成同一台（DHCP 拿到同一个地址）。
+            </span>
+          </span>
+        </label>
+
+        <label className="flex cursor-pointer items-start gap-2 text-sm text-ink-2">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={removeCloudInit}
+            onChange={(e) => setRemoveCloudInit(e.target.checked)}
+          />
+          <span>
+            清理 cloud-init 残留
+            <span className="block text-xs text-ink-3">
+              让下次开机重新走初始化。
+            </span>
+          </span>
+        </label>
+
+        <label className="flex cursor-pointer items-start gap-2 text-sm text-ink-2">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={acknowledged}
+            onChange={(e) => setAcknowledged(e.target.checked)}
+          />
+          <span>我已知悉这些动作会改写模板镜像</span>
+        </label>
+      </div>
+    </Modal>
+  )
 }
 
 function describe(error: unknown): string {

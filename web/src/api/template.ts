@@ -310,3 +310,19 @@ export const templateMaintainApi = {
       acknowledge,
     }),
 }
+
+/**
+ * 离线预处理（F-3-06）：判定与执行都在节点侧——要挂载镜像并改写里面的内容，控制面既没有工具链也不挂载镜像，这里只把选项固化进任务参数。
+ */
+export interface PreprocessInput {
+  install_agent?: boolean
+  inject_ssh_key?: boolean
+  reset_machine_id?: boolean
+  remove_cloud_init?: boolean
+  acknowledge?: boolean
+}
+
+export const templatePreprocessApi = {
+  run: (id: number, input: PreprocessInput) =>
+    post<{ task_id: number; status: string }>(`/api/v1/templates/${id}/preprocess`, input),
+}
