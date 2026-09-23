@@ -427,7 +427,15 @@ func main() {
 	createExec.SetEncryptionKey(credKey)
 	guestExec.SetEncryptionKey(credKey)
 
-	h := server.Default(server.WithHostPorts(cfg.HTTP.Addr()))
+	// Hertz 默认只收 4 MiB 的请求体，而分片上传的**每一片**是 8 MiB
+	// （见 web/src/api/userstorage.ts 的 CHUNK_SIZE）。不放开这个上限，
+	// 每一片都会在服务端被直接拒掉（413），界面只能显示一句「上传失败」——
+	// 而小于 4 MiB 的文件照样能传，于是这看起来像是"偶发"。
+	// 留一倍余量：调大前端分片时不必同时改这里。
+	h := server.Default(
+		server.WithHostPorts(cfg.HTTP.Addr()),
+		server.WithMaxRequestBodySize(16<<20),
+	)
 	router.Register(h, router.Deps{
 		DB:            db,
 		Auth:          authSvc,

@@ -15,6 +15,7 @@ import {
 } from '@/api/vm'
 import { Button } from '@/components/common/Button'
 import { EmptyState, PageLoading } from '@/components/common/Feedback'
+import { Icon } from '@/components/common/Icon'
 import { Input } from '@/components/common/Input'
 import { Modal } from '@/components/common/Modal'
 import { CreateVmWizard } from './CreateVmWizard'
@@ -233,24 +234,37 @@ export function VmListPage() {
           </p>
         </div>
         <Button size="sm" onClick={() => setCreateOpen(true)}>
-          创建虚拟机
+          <span className="flex items-center gap-1.5">
+            <Icon name="plus" className="h-3.5 w-3.5" />
+            创建虚拟机
+          </span>
         </Button>
       </header>
 
-      <form onSubmit={submitSearch} className="flex flex-wrap items-center gap-2">
-        <input
-          value={keyword}
-          onChange={(e) => setKeyword(e.target.value)}
-          placeholder="搜索名称"
-          className="h-8 w-64 rounded-control border border-line-strong bg-sunken px-3 text-base text-ink placeholder:text-ink-3 focus:outline-none focus-visible:border-brand"
-        />
-        <Button variant="secondary" size="sm" type="submit">
-          搜索
-        </Button>
+      {/* 搜索与视图偏好放进同一条工具栏：它们都是「怎么看这批机器」，
+          拆成两行会让页面顶部散成互不相干的几块。 */}
+      <div className="flex flex-wrap items-center gap-2 rounded-card border border-line bg-raised px-3 py-2.5">
+        <form onSubmit={submitSearch} className="flex items-center gap-2">
+          <div className="relative">
+            <Icon
+              name="search"
+              className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-3"
+            />
+            <input
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+              placeholder="搜索名称"
+              className="h-9 w-56 rounded-control border border-line-strong bg-sunken pl-8 pr-3 text-base text-ink placeholder:text-ink-3 focus:outline-none focus-visible:border-brand sm:w-72"
+            />
+          </div>
+          <Button variant="secondary" size="sm" type="submit">
+            搜索
+          </Button>
+        </form>
 
         {/* 视图与分组是**偏好**而不是筛选条件：它们不改变看到哪些机器，
             只改变怎么看。因此单独成组、与搜索区分开。 */}
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
           <Segmented
             value={view}
             onChange={changeView}
@@ -270,7 +284,7 @@ export function VmListPage() {
             ]}
           />
         </div>
-      </form>
+      </div>
 
       {vms.isPending && <PageLoading />}
 
@@ -725,7 +739,9 @@ function VmRow({
   return (
     <tr
       className={
-        (selected ? 'border-t border-line bg-brand/5' : 'border-t border-line hover:bg-raised') +
+        // 悬停用 sunken 而不是 raised：表格本身就在 raised 卡片里，
+        // 同色悬停等于没有反馈。
+        (selected ? 'border-t border-line bg-brand/5' : 'border-t border-line hover:bg-sunken/70') +
         // 维护模式（G-37）：整行淡化但仍可读——它标注的是"这台机器现在
         // 动不了"，而淡化比隐藏诚实，比报错友好。
         (vm.node_maintenance ? ' opacity-60' : '')
@@ -777,7 +793,11 @@ function VmRow({
       <td className="kc-nums px-4 py-2.5 text-ink-2">
         {vm.vcpu} 核 · {formatMemory(vm.memory_mb)} · {vm.disk_gb} GB
       </td>
-      <UsageCell usage={vm.usage} />
+      {/* UsageCell 渲染的是行内内容，必须由这里给出单元格——直接把它放在
+          <tr> 下会生成 <tr><span>，DOM 非法且这一列会整体错位。 */}
+      <td className="px-4 py-2.5">
+        <UsageCell usage={vm.usage} />
+      </td>
       <td className="kc-mono px-4 py-2.5 text-ink-2">{vm.ip_summary || '—'}</td>
       <td className="px-4 py-2.5">
         <TagCell vmID={vm.id} tags={vm.tags} onEdit={onTags} />

@@ -36,6 +36,8 @@ export type IconName =
   | 'tuning'
   | 'diagnostics'
   | 'quota'
+  | 'search'
+  | 'plus'
 
 // 每个图形都用同一套坐标与描边参数，视觉上才像一套。
 const PATHS: Record<IconName, string> = {
@@ -66,6 +68,8 @@ const PATHS: Record<IconName, string> = {
   tuning: 'M2 5h6M11 5h3M2 11h3M8 11h6M11 3v4M5 9v4',
   diagnostics: 'M3 3h10v10H3zM5.5 8l1.5-2 1.5 3 1.5-2',
   quota: 'M2 12h12M4 12V8M8 12V5M12 12V9',
+  search: 'M7 2.5a4.5 4.5 0 100 9 4.5 4.5 0 000-9zM10.5 10.5L14 14',
+  plus: 'M8 3v10M3 8h10',
 }
 
 export function Icon({ name, className }: { name: IconName; className?: string }) {

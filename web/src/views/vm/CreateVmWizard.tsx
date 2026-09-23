@@ -9,6 +9,7 @@ import { passthroughApi, type PCIDevice } from '@/api/passthrough'
 import { userStorageApi, type FileView } from '@/api/userstorage'
 import { vmApi, type CreateFormField, type DataDiskInput } from '@/api/vm'
 import { Button } from '@/components/common/Button'
+import { Icon, type IconName } from '@/components/common/Icon'
 import { Input } from '@/components/common/Input'
 import { Modal } from '@/components/common/Modal'
 
@@ -112,15 +113,27 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
   const [clientToken] = useState(() => newToken())
 
   const nodes = useQuery({ queryKey: ['nodes'], queryFn: nodeApi.list, enabled: open })
+
+  // 目标节点：草稿里存过就用它，否则落到第一个在线节点。
+  //
+  // 必须是**派生值**而不是「effect 里 setState」：字段矩阵、镜像、模板、
+  // 网络、配额全都要按节点向后端取，节点为空时步骤只剩「创建方式 + 确认
+  // 信息」两屏、一个输入框都没有——用户看得见「还需要填写：虚拟机名、
+  // 节点、安装镜像」，却无处可填。
+  const activeNodeID =
+    nodeID > 0
+      ? nodeID
+      : (nodes.data?.find((n) => n.status === 'online')?.id ?? nodes.data?.[0]?.id ?? 0)
+
   const form = useQuery({
-    queryKey: ['vm-create-form', nodeID],
-    queryFn: () => vmApi.createForm(nodeID),
-    enabled: open && nodeID > 0,
+    queryKey: ['vm-create-form', activeNodeID],
+    queryFn: () => vmApi.createForm(activeNodeID),
+    enabled: open && activeNodeID > 0,
   })
   const templates = useQuery({
-    queryKey: ['templates', { node_id: nodeID, only_ready: true }],
-    queryFn: () => templateApi.list({ node_id: nodeID, only_ready: true }),
-    enabled: open && nodeID > 0 && mode === 'template',
+    queryKey: ['templates', { node_id: activeNodeID, only_ready: true }],
+    queryFn: () => templateApi.list({ node_id: activeNodeID, only_ready: true }),
+    enabled: open && activeNodeID > 0 && mode === 'template',
   })
 
   // 合并后的取值：后端默认值打底，用户改动覆盖其上。
@@ -156,7 +169,7 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
     mutationFn: () =>
       vmApi.create({
         name: name.trim(),
-        node_id: nodeID,
+        node_id: activeNodeID,
         vcpu: num(effective.vcpu, 2),
         memory_mb: num(effective.memory_mb, 2048),
         disk_gb: num(effective.disk_gb, 40),
@@ -301,82 +314,157 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
 
   const missing: string[] = []
   if (!name.trim()) missing.push('虚拟机名')
-  if (nodeID <= 0) missing.push('节点')
+  if (activeNodeID <= 0) missing.push('节点')
   if (mode === 'iso' && isoFileIDs.length === 0) missing.push('安装镜像')
   if (mode === 'template' && templateID <= 0) missing.push('模板')
   const blocked = (form.data?.prerequisites ?? []).filter((p) => !p.ok)
+
+  // 动作栏交给 Modal 的 footer：内容区自己滚动时，按钮不会跟着滚出视野。
+  const footer = submitted ? (
+    <div className="flex justify-end gap-2">
+      <Link to="/task">
+        <Button size="sm">查看任务</Button>
+      </Link>
+      <Button variant="secondary" size="sm" onClick={handleClose}>
+        留在本页
+      </Button>
+    </div>
+  ) : (
+    <div className="flex items-center justify-between gap-2">
+      <Button variant="secondary" size="sm" onClick={handleClose}>
+        取消
+      </Button>
+      <div className="flex gap-2">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => setStep((s) => Math.max(0, s - 1))}
+          disabled={step === 0}
+        >
+          上一步
+        </Button>
+        {steps[step]?.key === 'confirm' ? (
+          <Button
+            size="sm"
+            loading={create.isPending}
+            disabled={missing.length > 0 || blocked.length > 0}
+            onClick={() => create.mutate()}
+          >
+            提交创建
+          </Button>
+        ) : (
+          <Button size="sm" onClick={() => setStep((s) => Math.min(steps.length - 1, s + 1))}>
+            下一步
+          </Button>
+        )}
+      </div>
+    </div>
+  )
 
   return (
     <Modal
       open={open}
       title={submitted ? '创建任务已提交' : '创建虚拟机'}
-      description={
-        submitted
-          ? '任务正在执行，完成后虚拟机才会出现在列表中。'
-          : '按步骤填写配置。创建是异步操作，提交后可在任务中心查看进度。'
-      }
+      description={submitted ? undefined : '创建是异步操作，提交后可在任务中心查看进度。'}
       onClose={handleClose}
+      size="xl"
+      bodyClassName="p-0"
+      footer={footer}
     >
       {submitted ? (
-        <div className="flex flex-col gap-3">
+        <div className="px-6 py-8">
           <p className="text-base text-ink-2">
             共提交 {submitted.length} 个任务：{submitted.map((id) => `#${id}`).join('、')}
           </p>
-          <div className="flex gap-2">
-            <Link to="/task">
-              <Button size="sm">查看任务</Button>
-            </Link>
-            <Button variant="secondary" size="sm" onClick={handleClose}>
-              留在本页
-            </Button>
-          </div>
         </div>
       ) : (
-        <div className="flex flex-col gap-4">
-          <StepBar steps={steps} current={step} onJump={setStep} />
+        <div className="flex min-h-[520px] flex-col md:flex-row">
+          <StepRail steps={steps} current={step} onJump={setStep} />
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5 md:max-h-[58vh]">
+            <StepHeader stepKey={steps[step]?.key} fallback={steps[step]?.label ?? ''} />
 
           {step === 0 && (
-            <div className="flex flex-col gap-3">
-              <ModeCard
-                active={mode === 'iso'}
-                title="ISO 安装"
-                desc="挂上镜像从零安装系统。适用于需要自定义分区与安装选项的场景。"
-                onClick={() => setMode('iso')}
-              />
-              <ModeCard
-                active={mode === 'template'}
-                title="模板克隆"
-                desc="从已制备好的模板复制一台，开机即用。最快的方式。"
-                onClick={() => setMode('template')}
-              />
-              {/* G-34：两条导入路径已接通（文件真实上传 + 转换产出模板）。
-                  它们不在向导内完成——导入是一个独立的长任务流程，
-                  引导到导入页而不是把整个流程塞进弹窗。 */}
-              <ModeCard
-                title="导入已有磁盘"
-                desc="把已有的 qcow2 / vmdk 等磁盘上传并转换为模板。"
-                onClick={() => {
-                  handleClose()
-                  navigate('/import')
-                }}
-              />
-              <ModeCard
-                title="导入 OVF / OVA 虚拟机包"
-                desc="从其它虚拟化平台导出的整机包导入，配置从包内解析。"
-                onClick={() => {
-                  handleClose()
-                  navigate('/import')
-                }}
-              />
+            <div className="flex flex-col gap-5">
+              {/* 节点放在第一步：它决定后面各步能填什么（存储池、网络、镜像、
+                  架构都由节点决定），而字段矩阵本身也要按节点向后端要。 */}
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="wizard-node" className="text-sm font-medium text-ink-2">
+                  目标节点
+                </label>
+                <select
+                  id="wizard-node"
+                  value={activeNodeID}
+                  onChange={(e) => setNodeID(Number(e.target.value))}
+                  className="h-10 rounded-control border border-line-strong bg-raised px-3 text-base text-ink focus:outline-none focus-visible:border-brand"
+                >
+                  <option value={0}>请选择节点</option>
+                  {(nodes.data ?? []).map((n) => (
+                    <option key={n.id} value={n.id}>
+                      {n.name}
+                      {n.status !== 'online' ? '（离线）' : ''}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-sm text-ink-3">
+                  {nodes.isPending
+                    ? '正在读取节点…'
+                    : (nodes.data ?? []).length === 0
+                      ? '还没有接入任何节点。虚拟机的磁盘与网络都在宿主机上，需要先接入一台节点。'
+                      : '虚拟机建在哪台宿主机上。切换节点会重新加载该节点的可用配置。'}
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <p className="text-sm font-medium text-ink-2">创建方式</p>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <ModeCard
+                    icon="storage"
+                    active={mode === 'iso'}
+                    title="ISO 安装"
+                    desc="挂上镜像从零安装系统。适用于需要自定义分区与安装选项的场景。"
+                    onClick={() => setMode('iso')}
+                  />
+                  <ModeCard
+                    icon="template"
+                    active={mode === 'template'}
+                    title="模板克隆"
+                    desc="从已制备好的模板复制一台，开机即用。最快的方式。"
+                    onClick={() => setMode('template')}
+                  />
+                  {/* G-34：两条导入路径已接通（文件真实上传 + 转换产出模板）。
+                      它们不在向导内完成——导入是一个独立的长任务流程，
+                      引导到导入页而不是把整个流程塞进弹窗。 */}
+                  <ModeCard
+                    icon="volume"
+                    title="导入已有磁盘"
+                    desc="把已有的 qcow2 / vmdk 等磁盘上传并转换为模板。"
+                    onClick={() => {
+                      handleClose()
+                      navigate('/import')
+                    }}
+                  />
+                  <ModeCard
+                    icon="docs"
+                    title="导入 OVF / OVA 虚拟机包"
+                    desc="从其它虚拟化平台导出的整机包导入，配置从包内解析。"
+                    onClick={() => {
+                      handleClose()
+                      navigate('/import')
+                    }}
+                  />
+                </div>
+              </div>
 
               <Prerequisites form={form.data} />
             </div>
           )}
 
           {step > 0 && steps[step]?.key !== 'confirm' && (
-            <div className="flex flex-col gap-3">
-              {step === 1 && (
-                <>
+            <div className="flex flex-col gap-4">
+              {/* 名称与数量不在后端下发的矩阵里（它们是「这一次创建」的属性，
+                  不是虚拟机的配置项），但仍归在「基础信息」这一步。 */}
+              {steps[step]?.key === 'basic' && (
+                <Section title="虚拟机名称">
                   <Input
                     label="名称"
                     value={name}
@@ -388,25 +476,6 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
                         : '1-63 位字母、数字或连字符，同一节点内不可重名'
                     }
                   />
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="wizard-node" className="text-sm font-medium text-ink-2">
-                      节点
-                    </label>
-                    <select
-                      id="wizard-node"
-                      value={nodeID}
-                      onChange={(e) => setNodeID(Number(e.target.value))}
-                      className="h-9 rounded-control border border-line-strong bg-sunken px-3 text-base text-ink focus:outline-none focus-visible:border-brand"
-                    >
-                      <option value={0}>请选择节点</option>
-                      {(nodes.data ?? []).map((n) => (
-                        <option key={n.id} value={n.id}>
-                          {n.name}
-                          {n.status !== 'online' ? '（离线）' : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
                   <Input
                     label="数量"
                     type="number"
@@ -414,7 +483,7 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
                     onChange={(e) => setCount(Math.max(1, Number(e.target.value) || 1))}
                     hint="一次最多 5 台：每台都要写入完整镜像，同时进行会让宿主机存储持续占满。"
                   />
-                </>
+                </Section>
               )}
 
               {steps[step]?.key === 'disk' && mode === 'iso' && (
@@ -474,7 +543,7 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
 
               {steps[step]?.key === 'disk' && (
                 <FloppyPicker
-                  nodeID={nodeID}
+                  nodeID={activeNodeID}
                   value={floppyFileID}
                   onChange={setFloppyFileID}
                 />
@@ -588,19 +657,23 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
 
               {steps[step]?.key === 'advanced' && (
                 <PassthroughPicker
-                  nodeID={nodeID}
+                  nodeID={activeNodeID}
                   selected={pciAddresses}
                   onChange={setPciAddresses}
                 />
               )}
 
-              {fieldsOf(steps[step]?.key ?? '').map((f) => (
-                <Field
-                  key={f.key}
-                  field={f}
-                  value={effective[f.key]}
-                  onChange={(v) => setValueLinked(f.key, v)}
-                />
+              {sectionsOf(steps[step]?.key ?? '', fieldsOf(steps[step]?.key ?? '')).map((sec) => (
+                <Section key={sec.title} title={sec.title}>
+                  {sec.fields.map((f) => (
+                    <Field
+                      key={f.key}
+                      field={f}
+                      value={effective[f.key]}
+                      onChange={(v) => setValueLinked(f.key, v)}
+                    />
+                  ))}
+                </Section>
               ))}
             </div>
           )}
@@ -639,31 +712,7 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
             </div>
           )}
 
-          {error && <p className="text-base text-danger">{error}</p>}
-
-          <div className="flex items-center justify-between gap-2 border-t border-line pt-3">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setStep((s) => Math.max(0, s - 1))}
-              disabled={step === 0}
-            >
-              上一步
-            </Button>
-            {steps[step]?.key === 'confirm' ? (
-              <Button
-                size="sm"
-                loading={create.isPending}
-                disabled={missing.length > 0 || blocked.length > 0}
-                onClick={() => create.mutate()}
-              >
-                提交创建
-              </Button>
-            ) : (
-              <Button size="sm" onClick={() => setStep((s) => Math.min(steps.length - 1, s + 1))}>
-                下一步
-              </Button>
-            )}
+          {error && <p className="mt-3 text-base text-danger">{error}</p>}
           </div>
         </div>
       )}
@@ -671,8 +720,13 @@ export function CreateVmWizard({ open, onClose }: { open: boolean; onClose: () =
   )
 }
 
-/** 步骤条。步骤由后端下发，因此这里不硬编码「共 9 步」。 */
-function StepBar({
+/**
+ * 步骤栏。桌面端竖排在左（配置项多的时候，横排胶囊会挤成两行且看不出进度），
+ * 窄屏回落成顶部横向。
+ *
+ * 步骤本身由后端下发，因此这里只做呈现：不硬编码「共 9 步」。
+ */
+function StepRail({
   steps,
   current,
   onJump,
@@ -682,36 +736,143 @@ function StepBar({
   onJump: (i: number) => void
 }) {
   return (
-    <ol className="flex flex-wrap gap-1.5">
-      {steps.map((s, i) => (
-        <li key={s.key}>
-          <button
-            type="button"
-            onClick={() => onJump(i)}
-            className={
-              'rounded-pill border px-2.5 py-1 text-xs ' +
-              (i === current
-                ? 'border-brand bg-brand/10 text-brand'
-                : i < current
-                  ? 'border-line-strong text-ink-2'
-                  : 'border-line text-ink-3')
-            }
-          >
-            {i + 1}. {s.label}
-          </button>
-        </li>
-      ))}
-    </ol>
+    <nav className="border-b border-line bg-sunken/60 px-3 py-3 md:w-[196px] md:shrink-0 md:border-b-0 md:border-r md:px-3 md:py-5">
+      <ol className="flex gap-1.5 overflow-x-auto md:flex-col md:gap-0.5 md:overflow-visible">
+        {steps.map((s, i) => {
+          const done = i < current
+          const active = i === current
+          return (
+            <li key={s.key} className="relative md:flex-1">
+              <button
+                type="button"
+                onClick={() => onJump(i)}
+                className={
+                  'flex w-full items-center gap-2.5 whitespace-nowrap rounded-control px-2.5 py-2 text-left text-sm transition-colors ' +
+                  (active
+                    ? 'bg-brand/10 font-medium text-brand'
+                    : done
+                      ? 'text-ink-2 hover:bg-line/40'
+                      : 'text-ink-3 hover:bg-line/40')
+                }
+              >
+                <span
+                  className={
+                    'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[11px] ' +
+                    (active
+                      ? 'border-brand bg-brand text-white'
+                      : done
+                        ? 'border-brand/40 bg-brand/15 text-brand'
+                        : 'border-line-strong text-ink-3')
+                  }
+                >
+                  {done ? '✓' : i + 1}
+                </span>
+                <span className="md:truncate">{s.label}</span>
+              </button>
+            </li>
+          )
+        })}
+      </ol>
+    </nav>
   )
 }
 
+/** 每一步的标题与一句说明。后端只下发步骤名，这里补齐「这一步在配什么」。 */
+const STEP_META: Record<string, { title: string; desc: string }> = {
+  mode: { title: '选择创建方式', desc: '先定节点，再选一条最适合当前需求的途径。' },
+  basic: { title: '基础信息', desc: '名称与数量——它们决定这批机器在列表里怎么被识别。' },
+  hardware: { title: '硬件规格', desc: 'CPU、内存与虚拟化引擎参数。默认值可直接用。' },
+  disk: { title: '存储介质', desc: '系统盘容量、格式、总线与 IO 限制。' },
+  network: { title: '网络设置', desc: '网卡型号、接入的网络与安全组。' },
+  boot: { title: '系统配置', desc: '操作系统、引导方式与首次开机的初始化。' },
+  advanced: { title: '高级选项', desc: 'CPU 特性、设备型号与电源行为。不确定就保持默认。' },
+  passthru: { title: '硬件直通', desc: '把宿主机的 PCI 设备整块交给这台虚拟机。' },
+  confirm: { title: '确认信息', desc: '核对一遍再提交。创建是异步任务，提交后可在任务中心看进度。' },
+}
+
+function StepHeader({ stepKey, fallback }: { stepKey?: string; fallback: string }) {
+  const meta = stepKey ? STEP_META[stepKey] : undefined
+  return (
+    <header className="mb-4">
+      <h3 className="text-md font-semibold text-ink">{meta?.title ?? fallback}</h3>
+      {meta?.desc && <p className="mt-1 text-sm text-ink-3">{meta.desc}</p>}
+    </header>
+  )
+}
+
+/** 一步之内的内容分区。同一件事的字段放在一张卡片里，避免一长条平铺。 */
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="rounded-card border border-line bg-raised px-4 py-3.5">
+      <h4 className="mb-3 text-sm font-medium text-ink-2">{title}</h4>
+      <div className="flex flex-col gap-3.5">{children}</div>
+    </section>
+  )
+}
+
+/**
+ * 一步之内的二级分区。
+ *
+ * 后端只下发到「步骤」这一层（9 步），但一步里有十几个字段时必须再分层，
+ * 否则用户面对的是没有结构的一长列。这里按字段 key 归组，**未命中的字段
+ * 落进「其他」**——后端将来加了字段，它照样会出现，只是没有专属标题。
+ */
+const FIELD_SECTIONS: Record<string, { title: string; keys: string[] }[]> = {
+  basic: [{ title: '分组与备注', keys: ['group_name', 'remark'] }],
+  hardware: [
+    {
+      title: 'CPU 与内存',
+      keys: ['vcpu', 'memory_mb', 'cpu_sockets', 'cpu_cores', 'cpu_threads', 'cpu_hotplug', 'memory_hotplug'],
+    },
+    { title: '架构', keys: ['arch'] },
+  ],
+  disk: [
+    { title: '系统盘', keys: ['disk_gb', 'disk_format', 'disk_bus'] },
+    { title: 'IOPS 限制', keys: ['disk_iops_total', 'disk_iops_read', 'disk_iops_write'] },
+    { title: '吞吐限制', keys: ['disk_bytes_total', 'disk_bytes_read', 'disk_bytes_write'] },
+  ],
+  network: [{ title: '网卡与地址', keys: ['nic_model', 'static_ip'] }],
+  boot: [
+    {
+      title: '操作系统与引导',
+      keys: ['os_type', 'os_variant', 'machine_type', 'firmware', 'secure_boot', 'boot_order'],
+    },
+    { title: '首次启动', keys: ['hostname', 'initial_password', 'init_mode', 'auto_start', 'watchdog'] },
+  ],
+  advanced: [
+    {
+      title: 'CPU 特性',
+      keys: ['cpu_type', 'hide_kvm', 'nested_virt', 'cpu_affinity', 'cpu_limit_percent', 'apic', 'pae'],
+    },
+    { title: '设备与电源', keys: ['video_model', 'rtc_mode', 'freeze_on_start'] },
+  ],
+}
+
+function sectionsOf(group: string, fields: CreateFormField[]): { title: string; fields: CreateFormField[] }[] {
+  const defs = FIELD_SECTIONS[group]
+  if (!defs) return fields.length > 0 ? [{ title: '配置项', fields }] : []
+  const used = new Set<string>()
+  const out = defs
+    .map((d) => {
+      const fs = fields.filter((f) => d.keys.includes(f.key))
+      fs.forEach((f) => used.add(f.key))
+      return { title: d.title, fields: fs }
+    })
+    .filter((s) => s.fields.length > 0)
+  const rest = fields.filter((f) => !used.has(f.key))
+  if (rest.length > 0) out.push({ title: '其他', fields: rest })
+  return out
+}
+
 function ModeCard({
+  icon,
   title,
   desc,
   active,
   disabled,
   onClick,
 }: {
+  icon: IconName
   title: string
   desc: string
   active?: boolean
@@ -724,19 +885,27 @@ function ModeCard({
       disabled={disabled}
       onClick={onClick}
       className={
-        'rounded-card border px-4 py-3 text-left ' +
+        'group flex flex-col items-start gap-2 rounded-card border px-4 py-4 text-left transition-all ' +
         (disabled
           ? 'cursor-not-allowed border-line bg-sunken opacity-60'
           : active
-            ? 'border-brand bg-brand/5'
-            : 'border-line-strong hover:border-brand/50')
+            ? 'border-brand bg-brand/5 shadow-2'
+            : 'border-line-strong bg-raised hover:-translate-y-0.5 hover:border-brand/60 hover:shadow-2')
       }
     >
-      <p className="text-md font-medium text-ink">
+      <span
+        className={
+          'flex h-8 w-8 items-center justify-center rounded-control ' +
+          (active ? 'bg-brand/15 text-brand' : 'bg-sunken text-ink-3 group-hover:text-brand')
+        }
+      >
+        <Icon name={icon} className="h-4 w-4" />
+      </span>
+      <span className="text-base font-medium text-ink">
         {title}
         {disabled && <span className="ml-2 text-xs text-ink-3">尚未提供</span>}
-      </p>
-      <p className="mt-0.5 text-base text-ink-3">{desc}</p>
+      </span>
+      <span className="text-sm leading-relaxed text-ink-3">{desc}</span>
     </button>
   )
 }

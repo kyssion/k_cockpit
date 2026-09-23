@@ -9,8 +9,15 @@ interface ModalProps {
   onClose: () => void
   children: ReactNode
   footer?: ReactNode
-  /** 宽度档位：表单用 md，展示命令或大段文本用 lg。 */
-  size?: 'md' | 'lg'
+  /** 宽度档位：表单用 md / lg，带侧边步骤的向导用 xl。 */
+  size?: 'md' | 'lg' | 'xl'
+  /**
+   * 内容区的额外类名。
+   *
+   * 默认内容区自带内边距与滚动；向导这类**自己管滚动与分栏**的内容需要
+   * 覆盖掉它（`p-0` + 固定高度），否则会出现「弹窗内又套一层滚动条」。
+   */
+  bodyClassName?: string
   /**
    * 是否允许用 Esc 关闭。默认允许——键盘用户不该被弹窗困住。
    *
@@ -20,7 +27,11 @@ interface ModalProps {
   dismissable?: boolean
 }
 
-const sizes = { md: 'max-w-[420px]', lg: 'max-w-[640px]' }
+const sizes = {
+  md: 'max-w-[420px]',
+  lg: 'max-w-[640px]',
+  xl: 'max-w-[1040px]',
+}
 
 export function Modal({
   open,
@@ -30,6 +41,7 @@ export function Modal({
   children,
   footer,
   size = 'md',
+  bodyClassName,
   dismissable = true,
 }: ModalProps) {
   // Esc 关闭：键盘用户不该被弹窗困住。
@@ -60,7 +72,7 @@ export function Modal({
           {description && <p className="mt-1 text-sm text-ink-3">{description}</p>}
         </header>
 
-        <div className="max-h-[60vh] overflow-y-auto px-5 py-4">{children}</div>
+        <div className={bodyClassName ?? 'max-h-[60vh] overflow-y-auto px-5 py-4'}>{children}</div>
 
         <footer className="flex justify-end gap-2 border-t border-line px-5 py-3">
           {footer ?? (
