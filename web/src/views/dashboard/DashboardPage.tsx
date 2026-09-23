@@ -13,10 +13,14 @@ import {
   type TuningStateView,
   type TuningView,
 } from '@/api/dashboard'
+import { monitorApi, RANGES, type RangeKey } from '@/api/monitor'
 import { nodeApi } from '@/api/node'
 import { Button } from '@/components/common/Button'
 import { EmptyState, PageLoading } from '@/components/common/Feedback'
+import { Icon, type IconName } from '@/components/common/Icon'
+import { Segmented } from '@/components/common/Segmented'
 import { StatusBadge } from '@/components/common/StatusBadge'
+import { TimeSeriesChart } from '@/components/common/TimeSeriesChart'
 import { useSessionStore } from '@/stores/session'
 import { MyQuotaPanel } from './MyQuotaPanel'
 import { cn } from '@/utils/cn'
@@ -46,14 +50,43 @@ export function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <header>
-        <h1 className="text-lg font-semibold text-ink">工作台</h1>
-        <p className="mt-1 text-base text-ink-3">
-          当前登录：<span className="text-ink-2">{user?.username}</span>
-          <span className="ml-2 rounded-pill border border-line-strong px-2 py-0.5 text-xs text-ink-2">
-            {user?.role === 'admin' ? '管理员' : '租户'}
-          </span>
-        </p>
+      {/* 首屏第一行回答「现在怎么样」而不是重复一遍菜单名：问候 + 角色
+          + 一句状态。状态点与文字配合，颜色不单独承担含义。 */}
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold text-ink">
+            {greeting()}，{user?.username}
+          </h1>
+          <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-base text-ink-3">
+            <span className="flex items-center gap-1.5">
+              <span
+                aria-hidden="true"
+                className={cn(
+                  'h-1.5 w-1.5 rounded-full',
+                  (summary.data?.alerts?.length ?? 0) > 0 ? 'bg-warning' : 'bg-success',
+                )}
+              />
+              {(summary.data?.alerts?.length ?? 0) > 0 ? '有需要关注的事项' : '系统运行正常'}
+            </span>
+            {summary.data && (
+              <>
+                <span className="text-ink-3/50">·</span>
+                <span>{summary.data.vms.running} 台虚拟机运行中</span>
+                {summary.data.nodes && (
+                  <>
+                    <span className="text-ink-3/50">·</span>
+                    <span>
+                      {summary.data.nodes.online}/{summary.data.nodes.total} 个节点在线
+                    </span>
+                  </>
+                )}
+              </>
+            )}
+            <span className="rounded-pill border border-line-strong px-2 py-0.5 text-xs text-ink-2">
+              {user?.role === 'admin' ? '管理员' : '租户'}
+            </span>
+          </p>
+        </div>
       </header>
 
       {summary.isPending && <PageLoading />}
@@ -70,6 +103,7 @@ export function DashboardPage() {
 
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <StatCard
+              icon="vm"
               label={user?.role === 'admin' ? '虚拟机' : '我的虚拟机'}
               value={summary.data.vms.total}
               detail={`${summary.data.vms.running} 台运行中`}
@@ -77,6 +111,7 @@ export function DashboardPage() {
             />
             {summary.data.nodes ? (
               <StatCard
+                icon="node"
                 label="节点"
                 value={summary.data.nodes.total}
                 detail={`${summary.data.nodes.online} 个在线`}
@@ -84,18 +119,21 @@ export function DashboardPage() {
               />
             ) : (
               <StatCard
+                icon="vm"
                 label="已关机"
                 value={summary.data.vms.stopped}
                 detail={summary.data.vms.other > 0 ? `${summary.data.vms.other} 台非运行态` : '没有非运行态的机器'}
               />
             )}
             <StatCard
+              icon="task"
               label="进行中的任务"
               value={summary.data.tasks.active}
               detail="含结果未定的任务"
               to="/task"
             />
             <StatCard
+              icon="alert"
               label="近 24 小时失败"
               value={summary.data.tasks.failed_24h}
               detail={summary.data.tasks.failed_24h > 0 ? '建议查看失败原因' : '最近一天没有失败'}
@@ -107,6 +145,8 @@ export function DashboardPage() {
           {user?.role === 'admin' && (
             <HostCard host={summary.data.host} allocation={summary.data.allocation} />
           )}
+
+          {user?.role === 'admin' && <ResourceTrendCard />}
 
           {/* G-32：普通用户的配额视角。管理员走平台视图（上方的宿主机资源
               卡），配额是「我的额度还剩多少」的问题，两类卡片并存会让
@@ -191,17 +231,9 @@ export function DashboardPage() {
  */
 function StatusBanner({ data }: { data: DashboardSummary }) {
   const alerts = data.alerts ?? []
-  if (alerts.length === 0) {
-    return (
-      <div className="rounded-card border border-success/30 bg-success/10 px-4 py-3">
-        <p className="text-md font-medium text-success">系统运行正常</p>
-        <p className="mt-0.5 text-base text-ink-2">
-          {data.vms.running} 台虚拟机运行中
-          {data.nodes ? ` · ${data.nodes.online}/${data.nodes.total} 个节点在线` : ''}
-        </p>
-      </div>
-    )
-  }
+  // 正常时不再单独占一条横幅：状态已经在上方的问候行里用「一个点 + 一句话」
+  // 表达了，再来一条绿色大条只是重复占用首屏最贵的位置。
+  if (alerts.length === 0) return null
 
   const danger = alerts.some((a) => a.level === 'danger')
   return (
@@ -233,31 +265,54 @@ function StatusBanner({ data }: { data: DashboardSummary }) {
   )
 }
 
+/**
+ * StatCard 一个统计数。
+ *
+ * 图标不是装饰：四张卡的数字长得一样，扫视时先认出「这是哪一类」再读数字，
+ * 比每次都得看一遍标签快。图标底色按语义分色，但**只有失败那类在数字上
+ * 用颜色**——其余数字保持中性色，否则整屏都在喊。
+ */
 function StatCard({
+  icon,
   label,
   value,
+  unit,
   detail,
   to,
   tone = 'default',
 }: {
+  icon: IconName
   label: string
   value: number
+  unit?: string
   detail?: string
   to?: string
   tone?: 'default' | 'danger'
 }) {
+  const alert = tone === 'danger' && value > 0
   const body = (
     <>
-      <p className="text-base text-ink-3">{label}</p>
-      <p
-        className={cn(
-          'kc-nums mt-1 text-xl font-semibold',
-          tone === 'danger' && value > 0 ? 'text-danger' : 'text-ink',
-        )}
-      >
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-base text-ink-3">{label}</p>
+        <span
+          aria-hidden="true"
+          className={cn(
+            'flex h-7 w-7 shrink-0 items-center justify-center rounded-control',
+            alert
+              ? 'bg-danger/12 text-danger'
+              : to
+                ? 'bg-brand/10 text-brand'
+                : 'bg-sunken text-ink-2',
+          )}
+        >
+          <Icon name={icon} className="h-3.5 w-3.5" />
+        </span>
+      </div>
+      <p className={cn('kc-nums mt-2 text-2xl font-semibold', alert ? 'text-danger' : 'text-ink')}>
         {value}
+        {unit && <span className="ml-0.5 text-md font-normal text-ink-3">{unit}</span>}
       </p>
-      {detail && <p className="mt-0.5 text-xs text-ink-3">{detail}</p>}
+      {detail && <p className="mt-1 text-xs text-ink-3">{detail}</p>}
     </>
   )
 
@@ -267,11 +322,116 @@ function StatCard({
   return (
     <Link
       to={to}
-      className="block rounded-card border border-line bg-surface p-4 hover:border-brand/40"
+      className="block rounded-card border border-line bg-surface p-4 transition-colors hover:border-brand/40"
     >
       {body}
     </Link>
   )
+}
+
+/**
+ * ResourceTrendCard 宿主机资源走势。
+ *
+ * 与「宿主机资源」是同一份数据的两种尺度：那边回答「此刻多少」，这边回答
+ * 「这段时间是什么形状」——「现在 90%」和「一路涨到 90%」要采取的行动不同。
+ * 数据来自采集器写入的指标明细（不是实时探测），因此拿不到时如实说明，
+ * 不留一个空白框让人以为图表没加载出来。
+ */
+function ResourceTrendCard() {
+  const nodes = useQuery({ queryKey: ['nodes'], queryFn: nodeApi.list })
+  const [nodeID, setNodeID] = useState(0)
+  const [range, setRange] = useState<RangeKey>('1h')
+
+  const effectiveNodeID = nodeID || nodes.data?.[0]?.id || 0
+  const series = useQuery({
+    queryKey: ['dashboard-host-series', effectiveNodeID, range],
+    queryFn: () => monitorApi.host(effectiveNodeID, range),
+    enabled: effectiveNodeID > 0,
+    // 采集间隔是一分钟，跟得再紧也只是重复读同一批点。
+    refetchInterval: 60000,
+  })
+
+  if (nodes.isPending) return null
+  const nodeList = nodes.data ?? []
+  if (nodeList.length === 0) return null
+
+  const points = series.data?.points ?? []
+  const cpu = points.map((p) => ({ at: p.at, value: p.cpu_percent }))
+  const mem = points.map((p) => ({
+    at: p.at,
+    value: p.mem_total_mb > 0 ? (p.mem_used_mb / p.mem_total_mb) * 100 : 0,
+  }))
+  const percent = (v: number) => `${v.toFixed(0)}%`
+  const latest = (list: { value: number }[]): number | null => {
+    const last = list[list.length - 1]
+    return last ? last.value : null
+  }
+
+  const chart = (title: string, list: { at: string; value: number }[], tone: 'primary' | 'success') => (
+    <div>
+      <div className="mb-2 flex items-baseline justify-between gap-2">
+        <p className="text-sm text-ink-2">{title}</p>
+        {latest(list) !== null && (
+          <p className="kc-nums text-sm text-ink-3">当前 {percent(latest(list) as number)}</p>
+        )}
+      </div>
+      <TimeSeriesChart
+        points={list}
+        intervalSeconds={series.data?.interval_seconds}
+        format={percent}
+        tone={tone}
+        emptyHint="这段时间没有采集到数据"
+      />
+    </div>
+  )
+
+  return (
+    <section className="rounded-card border border-line bg-surface">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
+        <div>
+          <h2 className="text-md font-medium text-ink">资源走势</h2>
+          <p className="mt-0.5 text-xs text-ink-3">
+            采集器每分钟写入一次；与上方「宿主机资源」是同一份数据的不同尺度。
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {nodeList.length > 1 && (
+            <select
+              value={effectiveNodeID}
+              onChange={(e) => setNodeID(Number(e.target.value))}
+              aria-label="节点"
+              className="h-8 rounded-control border border-line-strong bg-sunken px-2 text-sm text-ink"
+            >
+              {nodeList.map((n) => (
+                <option key={n.id} value={n.id}>
+                  {n.name}
+                </option>
+              ))}
+            </select>
+          )}
+          <Segmented
+            value={range}
+            onChange={setRange}
+            options={RANGES.map((r) => ({ value: r.key, label: r.label.replace('近 ', '') }))}
+          />
+        </div>
+      </div>
+
+      <div className="grid gap-4 px-4 py-4 lg:grid-cols-2">
+        {chart('CPU 使用率', cpu, 'primary')}
+        {chart('内存使用率', mem, 'success')}
+      </div>
+    </section>
+  )
+}
+
+/** 按本地时间给一句问候。 */
+function greeting(): string {
+  const h = new Date().getHours()
+  if (h < 6) return '凌晨好'
+  if (h < 12) return '上午好'
+  if (h < 18) return '下午好'
+  return '晚上好'
 }
 
 /**

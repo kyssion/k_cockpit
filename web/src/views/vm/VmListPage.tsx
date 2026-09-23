@@ -18,6 +18,7 @@ import { EmptyState, PageLoading } from '@/components/common/Feedback'
 import { Icon } from '@/components/common/Icon'
 import { Input } from '@/components/common/Input'
 import { Modal } from '@/components/common/Modal'
+import { Segmented } from '@/components/common/Segmented'
 import { CreateVmWizard } from './CreateVmWizard'
 import { StatusBadge } from '@/components/common/StatusBadge'
 import { vmTagApi } from '@/api/vmtag'
@@ -1082,43 +1083,6 @@ function SortableTh({
         <span className="ml-1 text-xs">{on ? (desc ? '↓' : '↑') : '↕'}</span>
       </button>
     </th>
-  )
-}
-
-/**
- * Segmented 是视图 / 分组切换。
- *
- * 用单选按钮的语义（而不是一排普通按钮）：同一时刻只有一种生效，而把它
- * 做成可多选的样子会让人以为可以同时按状态和模板分组。
- */
-function Segmented<T extends string>({
-  value,
-  onChange,
-  options,
-}: {
-  value: T
-  onChange: (v: T) => void
-  options: { value: T; label: string }[]
-}) {
-  return (
-    <div className="inline-flex overflow-hidden rounded-control border border-line-strong">
-      {options.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          onClick={() => onChange(o.value)}
-          aria-pressed={value === o.value}
-          className={
-            'px-2.5 py-1 text-sm ' +
-            (value === o.value
-              ? 'bg-brand/10 text-brand'
-              : 'text-ink-2 hover:bg-raised hover:text-ink')
-          }
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
   )
 }
 
