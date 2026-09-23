@@ -27,7 +27,7 @@ func NewStorage(svc *storage.Service, guard *risk.Guard) *Storage {
 
 // Disks 返回节点的块设备清单（API-044）。
 func (h *Storage) Disks(ctx context.Context, c *app.RequestContext) {
-	nodeID, err := namedPathID(c, "nodeId", "节点 ID")
+	nodeID, err := namedPathID(c, "id", "节点 ID")
 	if err != nil {
 		api.Fail(c, err)
 		return
@@ -43,7 +43,7 @@ func (h *Storage) Disks(ctx context.Context, c *app.RequestContext) {
 
 // ListPools 返回节点的存储池列表（API-045）。
 func (h *Storage) ListPools(ctx context.Context, c *app.RequestContext) {
-	nodeID, err := namedPathID(c, "nodeId", "节点 ID")
+	nodeID, err := namedPathID(c, "id", "节点 ID")
 	if err != nil {
 		api.Fail(c, err)
 		return

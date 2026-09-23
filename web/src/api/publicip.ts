@@ -216,7 +216,7 @@ export const publicIPExtraApi = {
     get<{ items: IPv6PrefixView[] }>('/api/v1/public-ips/ipv6-prefixes', { node_id: nodeID }),
 
   reloadRules: (nodeID: number) =>
-    post<ReloadResultView>('/api/v1/public-ips/reload', { node_id: nodeID }),
+    post<ReloadResultView>(`/api/v1/public-ips/reload?node_id=${nodeID}`),
 
   guestStatus: (vmID: number) =>
     get<{ items: GuestIPView[] }>(`/api/v1/vms/${vmID}/public-ips/guest-status`),

@@ -52,7 +52,7 @@ export const userStorageApi = {
   get: (nodeID: number) => get<StorageView>('/api/v1/my-storage', { node_id: nodeID }),
 
   /** 开通存储空间。幂等——已开通时直接返回，不重复写库。 */
-  ensure: (nodeID: number) => post<StorageView>('/api/v1/my-storage', { node_id: nodeID }),
+  ensure: (nodeID: number) => post<StorageView>(`/api/v1/my-storage?node_id=${nodeID}`),
 
   listFiles: (nodeID: number, category?: FileCategory) =>
     get<{ items: FileView[] }>('/api/v1/my-storage/files', {

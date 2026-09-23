@@ -4,7 +4,7 @@
  * 契约以 docs/03-api/API.md 为准；令牌只经 HttpOnly Cookie 下发，
  * 响应体中不含令牌，前端也不需要保存它。
  */
-import { del, get, post } from './client'
+import { del, get, post, put } from './client'
 
 export type UserRole = 'admin' | 'tenant'
 
@@ -121,7 +121,7 @@ export const authApi = {
   sendEmailCode: (email: string) => post<void>('/api/v1/auth/email/code', { email }),
 
   /** 已登录：确认绑定邮箱。 */
-  confirmEmail: (email: string, code: string) => post<void>('/api/v1/auth/email', { email, code }),
+  confirmEmail: (email: string, code: string) => put<void>('/api/v1/auth/email', { email, code }),
 
   /**
    * 发起找回密码。

@@ -40,15 +40,15 @@ type HostFirewallInfo struct {
 // 让界面上出现一堆没人看的列。
 type HostConnection struct {
 	// RemoteAddr 是远端地址（IP:端口）。它是关闭连接时的**唯一标识**。
-	RemoteAddr string
-	LocalPort  int
-	Protocol   string
-	State      string
+	RemoteAddr string `json:"remote_addr"`
+	LocalPort  int    `json:"local_port"`
+	Protocol   string `json:"protocol"`
+	State      string `json:"state"`
 	// Process 是占用该连接的进程名——判断"这是不是我自己那条 SSH"要靠它。
-	Process string
+	Process string `json:"process"`
 	// Own 为 true 表示这条连接来自当前请求方。
 	//
 	// 节点无从知道请求方是谁，因此这个标记由**控制面**在返回前填上。
 	// 关掉自己那条连接会让人以为面板挂了，而界面上必须能提前看出来。
-	Own bool
+	Own bool `json:"own"`
 }

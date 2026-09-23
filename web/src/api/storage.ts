@@ -151,5 +151,5 @@ export const storageExtraApi = {
   unmountPool: (id: number) =>
     post<{ task_id: number; status: string }>(`/api/v1/storage-pools/${id}/unmount`),
 
-  trim: (nodeID: number) => post<TrimResultView>('/api/v1/storage/trim', { node_id: nodeID }),
+  trim: (nodeID: number) => post<TrimResultView>(`/api/v1/storage/trim?node_id=${nodeID}`),
 }

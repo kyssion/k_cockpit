@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/cloudwego/hertz/pkg/app"
 
@@ -179,9 +180,12 @@ func (h *UserStorage) GetUpload(ctx context.Context, c *app.RequestContext) {
 // 元信息"，一个会变的摘要放在那里容易被中间件按不透明的方式处理。
 func (h *UserStorage) PutChunkData(ctx context.Context, c *app.RequestContext) {
 	uploadID := c.Param("uploadID")
-	index, err := namedPathID(c, "index", "分片序号")
-	if err != nil {
-		api.Fail(c, err)
+	// 分片序号是 **0 基**，因此不能走 namedPathID —— 它按「ID 必须大于 0」
+	// 校验，会把第一片（序号 0）判成非法：整个上传在第一步就传不上去，
+	// 而错误信息「分片序号不合法」听起来像是客户端算错了序号。
+	index, err := strconv.Atoi(c.Param("index"))
+	if err != nil || index < 0 {
+		api.Fail(c, api.InvalidParameter("分片序号不合法"))
 		return
 	}
 	body := c.Request.Body()

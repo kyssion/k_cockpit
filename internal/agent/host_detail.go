@@ -22,13 +22,16 @@ const (
 const HostHardwareDataKey = "host_hardware"
 
 // MemSlot 是一个内存插槽。
+//
+// json tag 不可省：这些类型会被直接嵌进 HTTP 响应（API.md §1.2 要求响应
+// 字段统一用下划线），缺 tag 时序列化出的是 Go 字段名。
 type MemSlot struct {
 	// Index 是插槽编号，从 1 开始——界面上显示"插槽 2"比显示索引 1
 	// 更接近机箱上贴的那个号。
-	Index     int
-	SizeMB    int64
-	Populated bool
-	Label     string
+	Index     int    `json:"index"`
+	SizeMB    int64  `json:"size_mb"`
+	Populated bool   `json:"populated"`
+	Label     string `json:"label"`
 }
 
 // HostHardware 是宿主机的硬件构成。
@@ -37,14 +40,14 @@ type MemSlot struct {
 // 必须分开：空列表会被读成"这台机器没有内存条"，而实际只是节点没实现
 // 这个操作。
 type HostHardware struct {
-	CPUModel       string
-	Sockets        int
-	CoresPerSocket int
-	ThreadsPerCore int
+	CPUModel       string `json:"cpu_model"`
+	Sockets        int    `json:"sockets"`
+	CoresPerSocket int    `json:"cores_per_socket"`
+	ThreadsPerCore int    `json:"threads_per_core"`
 	// CorePercent 是每个逻辑核心的占用百分比，顺序即核心编号。
-	CorePercent []float64
-	MemSlots    []MemSlot
-	Unavailable string
+	CorePercent []float64 `json:"core_percent"`
+	MemSlots    []MemSlot `json:"mem_slots"`
+	Unavailable string    `json:"unavailable"`
 }
 
 // HostNetStatsDataKey 是网络统计结果的键。
@@ -52,22 +55,22 @@ const HostNetStatsDataKey = "host_netstats"
 
 // BridgeStat 是一个网桥的收发统计。
 type BridgeStat struct {
-	Name      string
-	RxBytes   int64
-	TxBytes   int64
-	RxPackets int64
-	TxPackets int64
+	Name      string `json:"name"`
+	RxBytes   int64  `json:"rx_bytes"`
+	TxBytes   int64  `json:"tx_bytes"`
+	RxPackets int64  `json:"rx_packets"`
+	TxPackets int64  `json:"tx_packets"`
 }
 
 // HostNetStats 是宿主机上的网络规则与计数。
 type HostNetStats struct {
 	// NATRules 是 NAT 网关规则条数。
-	NATRules int
+	NATRules int `json:"nat_rules"`
 	// SwitchIngressBytes / SwitchEgressBytes 是虚拟交换机的入/出口字节数。
-	SwitchIngressBytes int64
-	SwitchEgressBytes  int64
+	SwitchIngressBytes int64 `json:"switch_ingress_bytes"`
+	SwitchEgressBytes  int64 `json:"switch_egress_bytes"`
 	// DNATRules 是 iptables DNAT 规则条数。
-	DNATRules   int
-	Bridges     []BridgeStat
-	Unavailable string
+	DNATRules   int          `json:"dnat_rules"`
+	Bridges     []BridgeStat `json:"bridges"`
+	Unavailable string       `json:"unavailable"`
 }

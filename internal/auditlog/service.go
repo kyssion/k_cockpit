@@ -248,17 +248,24 @@ type Facets struct {
 
 // Facets 返回该调用者**可见范围内**出现过的动作与资源类型。
 func (s *Service) Facets(ctx context.Context, v authz.Viewer) (*Facets, error) {
-	base := s.db.WithContext(ctx).Model(&model.AuditLog{})
-	if !v.IsAdmin {
-		base = base.Where("operator_id = ?", v.UserID)
+	// 两次查询各自从零构造。**不能共用一个 `base`**：GORM 的链式调用会把
+	// Distinct / Order 累积到同一 Statement 上，于是第二次查询会带上第一次的
+	// `ORDER BY action`，在 PostgreSQL 下变成 `SELECT DISTINCT resource_type …
+	// ORDER BY action` —— 那是非法语句（SQLITE 能过，PG 报 42P10）。
+	scoped := func() *gorm.DB {
+		q := s.db.WithContext(ctx).Model(&model.AuditLog{})
+		if !v.IsAdmin {
+			q = q.Where("operator_id = ?", v.UserID)
+		}
+		return q
 	}
 
 	var actions, types []string
-	if err := base.Distinct("action").Order("action").Pluck("action", &actions).Error; err != nil {
+	if err := scoped().Distinct("action").Order("action").Pluck("action", &actions).Error; err != nil {
 		log.Printf("[auditlog] 查询动作列表失败: %v", err)
 		return nil, api.Internal()
 	}
-	if err := base.Distinct("resource_type").Order("resource_type").
+	if err := scoped().Distinct("resource_type").Order("resource_type").
 		Pluck("resource_type", &types).Error; err != nil {
 		log.Printf("[auditlog] 查询资源类型失败: %v", err)
 		return nil, api.Internal()

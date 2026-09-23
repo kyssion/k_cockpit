@@ -132,7 +132,7 @@ export const netMaintainApi = {
     post<{ task_id: number; status: string }>('/api/v1/networks/ports/release', input),
 
   resetCounters: (nodeID: number) =>
-    post<{ reset: number; message: string }>('/api/v1/networks/counters/reset', { node_id: nodeID }),
+    post<{ reset: number; message: string }>(`/api/v1/networks/counters/reset?node_id=${nodeID}`),
 
   applyIPv6Policy: (input: { node_id: number; protect: boolean; trusted_prefixes: string[] }) =>
     post<{ applied: boolean; message: string; trusted: string[] }>(

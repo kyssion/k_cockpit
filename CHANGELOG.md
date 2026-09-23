@@ -211,6 +211,15 @@
 - 脚手架阶段的示例模型（`model.User`）与示例接口（`/api/v1/users` 系列）：与正式表结构不兼容，保留会让自动迁移给正式表加错列
 - 启动时的自动迁移与 `DB_AUTO_MIGRATE` 配置项：表结构统一由 `internal/database/migrations/` 下的 SQL 迁移管理，服务启动不建表
 
+### Fixed
+- **接口字段命名不符合契约，导致页面读不到数据**（API.md §1.2 要求响应字段用下划线）：`internal/agent` 中直接嵌入 HTTP 响应的结构体缺 json tag，序列化出的是 Go 字段名 —— `GET /dashboard/host-detail` 的 `hardware` / `netstats`（`MemSlots`、`NATRules`…）与 `GET /host-firewall/connections` 的连接清单（`RemoteAddr`、`LocalPort`…）均受影响，前者会让工作台首页整页崩在 `hardware.mem_slots.map`
+- **存储接口的路径参数名与路由不一致**：`GET /nodes/:id/disks`、`GET /nodes/:id/storage-pools` 读的是 `nodeId` 而路由给的是 `id`，两个接口恒返回 400「节点 ID不合法」，存储池页面因此加载不出磁盘与池列表
+- **审计筛选项接口在 PostgreSQL 下 500**：`internal/auditlog` 复用同一个 GORM 查询对象构造两次 DISTINCT，第二次被带上第一次的 `ORDER BY action`，在 PG 上是非法语句（42P10）
+- **前端“确认绑定邮箱”用了 POST**，后端是 `PUT /auth/email`，提交必然不匹配
+- **开发代理吞掉前端页面路由**：`web/vite.config.ts` 的 `/api` 前缀会把 `/api-keys`、`/api-docs` 也转发给控制面，直接打开或刷新这两个页面拿到的是后端 404；改为只代理 `/api/v1`
+- **分片上传的第一片永远传不上去**：`PutChunkData` 用 `namedPathID` 解析分片序号，而它按「ID 必须大于 0」校验，把 0 基的第一片（序号 0）判成非法 —— 于是「我的存储」上传文件、导入镜像、导入模板包三条链路都在第一步 400，还会留下一个 `pending` 上传会话，让同一个目标在 24 小时内只能收到 409「已有一个进行中的上传」（前端没有取消或续传的入口）。序号改为按 0 基解析，与服务层的校验口径一致
+- **四个写接口把 `node_id` 放在请求体、后端却从查询参数读**，后端一律读到 0：开通存储空间 → 404「节点不存在」、重载公网 IP 规则 / 重置流量计数 / 回收空间（trim）→ 400「必须指定 node_id」。按项目既有惯例改成 `?node_id=`（`capture`、`firewall`、`host-firewall` 等写接口都这么传）
+
 <!--
 ## [0.1.0] - YYYY-MM-DD
 
