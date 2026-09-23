@@ -38,12 +38,17 @@ func TestInitialCredentialRoundTrip(t *testing.T) {
 	vmRow := waitForVMNamed(t, db, "cred-vm")
 
 	viewer := authz.Viewer{UserID: 7}
-	cred, err := svc.InitialCredentialOf(ctx, vmRow.ID, viewer, "alice", "10.0.0.1")
-	if err != nil {
-		t.Fatalf("读取凭据失败: %v", err)
-	}
-	if !cred.Has {
-		t.Fatal("创建时给了初始密码，凭据却不存在")
+	// 凭据由执行器在**虚拟机记录落库之后**写入，两步之间存在窗口：直接读会
+	// 随负载偶发地读到「还没写」（这个用例此前正是这样间歇失败的）。与
+	// waitForVMNamed 等其它异步链路保持同一写法：轮询等它出现。
+	var cred *vm.InitialCredentialView
+	var readErr error
+	waitFor(t, "初始凭据落库", func() bool {
+		cred, readErr = svc.InitialCredentialOf(ctx, vmRow.ID, viewer, "alice", "10.0.0.1")
+		return readErr == nil && cred.Has
+	})
+	if readErr != nil {
+		t.Fatalf("读取凭据失败: %v", readErr)
 	}
 	if cred.Username != "root" {
 		t.Errorf("用户名 = %q, 期望 root（按 Linux 推断）", cred.Username)
@@ -119,14 +124,16 @@ func TestInitialCredentialCoexistsWithConsolePassword(t *testing.T) {
 		t.Fatalf("设置控制台密码失败: %v", err)
 	}
 
-	var count int64
-	if err := db.Table("vm_credential").Where("vm_id = ?", vmRow.ID).
-		Count(&count).Error; err != nil {
-		t.Fatalf("统计凭据行失败: %v", err)
-	}
-	if count != 2 {
-		t.Fatalf("凭据行数 = %d, 期望 2（控制台 + 初始登录）", count)
-	}
+	// 初始凭据由创建执行器异步写入，与控制台密码的写入可能交错：直接 count
+	// 会读到「只写了一行」的中间态。轮询等两行都到位（超时即失败）。
+	waitFor(t, "控制台密码与初始凭据两行都在", func() bool {
+		var n int64
+		if err := db.Table("vm_credential").Where("vm_id = ?", vmRow.ID).
+			Count(&n).Error; err != nil {
+			return false
+		}
+		return n == 2
+	})
 
 	// 两个用途各自读回的都是自己的密码。
 	cred, err := svc.InitialCredentialOf(

@@ -24,6 +24,13 @@ func newEnv(t *testing.T) (*gorm.DB, *computequota.Service) {
 	if err != nil {
 		t.Fatalf("打开测试库失败: %v", err)
 	}
+	// 连接必须在测试结束时关闭：Windows 不允许删除仍被占用的数据库文件，
+	// 不关连接会让 t.TempDir() 的自动清理失败，进而把测试判为失败。
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
 	// 数量型维度要连 vm_snapshot / port_forward / public_ip_binding，
 	// 因此这几张表也要建出来——配额统计现在依赖它们。
 	if err := db.AutoMigrate(&model.ComputeQuota{}, &model.VM{}, &model.User{}, &model.AuditLog{},

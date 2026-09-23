@@ -28,6 +28,13 @@ func newEnv(t *testing.T) (*gorm.DB, *emergency.Tool) {
 	if err != nil {
 		t.Fatalf("打开测试库失败: %v", err)
 	}
+	// 连接必须在测试结束时关闭：Windows 不允许删除仍被占用的数据库文件，
+	// 不关连接会让 t.TempDir() 的自动清理失败，进而把测试判为失败。
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
 	if err := db.AutoMigrate(&model.User{}, &model.AuditLog{}); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}

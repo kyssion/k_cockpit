@@ -34,6 +34,12 @@ func TestPostgresSchema(t *testing.T) {
 	if err != nil {
 		t.Skipf("无法连接 PostgreSQL，跳过: %v", err)
 	}
+	// 这是集成测试：连的是真实实例，不关连接会一直占用到进程退出。
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
 
 	var tableCount int64
 	if err := db.Raw(

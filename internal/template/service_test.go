@@ -48,6 +48,13 @@ func newTestEnv(t *testing.T, status string) (*template.Service, *gorm.DB) {
 	if err != nil {
 		t.Fatalf("打开测试库失败: %v", err)
 	}
+	// 连接必须在测试结束时关闭：Windows 不允许删除仍被占用的数据库文件，
+	// 不关连接会让 t.TempDir() 的自动清理失败，进而把测试判为失败。
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
 	// StorageFile 与 TemplateExport 也要建：导入的来源是「我的存储」里的
 	// 模板包，导出产物记在 template_export。
 	if err := db.AutoMigrate(
