@@ -1114,12 +1114,7 @@ function SystemTab({
           <Link to="/task" className="text-sm text-brand hover:underline">
             全部任务 →
           </Link>
-              <ResizeDiskModal
-        open={resizeOpen}
-        vm={vm}
-        onClose={() => setResizeOpen(false)}
-      />
-</div>
+        </div>
 
         {tasks.length === 0 && (
           <EmptyState title="没有相关任务" description="对该虚拟机的操作会记录在这里。" />
@@ -1145,6 +1140,15 @@ function SystemTab({
           </table>
         )}
       </section>
+
+      {/* 弹窗挂在 Tab 内容的末尾，而不是嵌进上面那张卡的标题栏里——
+          混在标题栏里读起来像是「最近任务」的一部分，而且一旦弹窗改成
+          内联渲染（非 portal），它就会真的出现在那一行里。 */}
+      <ResizeDiskModal
+        open={resizeOpen}
+        vm={vm}
+        onClose={() => setResizeOpen(false)}
+      />
     </>
   )
 }

@@ -68,7 +68,7 @@ export function TrashPage() {
   return (
     <div className="flex flex-col gap-4">
       <header>
-        <h1 className="text-lg font-semibold text-ink">回收站</h1>
+        <h1 className="text-xl font-semibold text-ink">回收站</h1>
         <p className="mt-1 text-base text-ink-3">
           删除的虚拟机会先到这里：记录保留、磁盘未动，可以恢复。
           <span className="text-ink-2">彻底删除</span>

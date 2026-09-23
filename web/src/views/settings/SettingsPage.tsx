@@ -72,7 +72,7 @@ export function SettingsPage() {
   return (
     <div className="flex max-w-[760px] flex-col gap-5">
       <header>
-        <h1 className="text-lg font-semibold text-ink">系统设置</h1>
+        <h1 className="text-xl font-semibold text-ink">系统设置</h1>
         <p className="mt-1 text-base text-ink-3">
           标为「环境变量」的项由部署配置指定，面板中不可修改——
           环境变量代表部署者的意图，界面上的改动不应悄悄覆盖它。

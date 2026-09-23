@@ -69,7 +69,7 @@ export function StorageVolumePage() {
     <div className="flex flex-col gap-5">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-ink">存储卷</h1>
+          <h1 className="text-xl font-semibold text-ink">存储卷</h1>
           <p className="mt-1 text-base text-ink-3">
             把多块物理盘聚合成一个卷。带
             <span className="text-ink-2">镜像</span>

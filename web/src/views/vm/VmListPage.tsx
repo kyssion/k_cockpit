@@ -229,7 +229,7 @@ export function VmListPage() {
     <div className="flex flex-col gap-4">
       <header className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-ink">虚拟机</h1>
+          <h1 className="text-xl font-semibold text-ink">虚拟机</h1>
           <p className="mt-1 text-base text-ink-3">
             共 {total} 台。状态来自最近一次与虚拟化层对账的结果。
           </p>

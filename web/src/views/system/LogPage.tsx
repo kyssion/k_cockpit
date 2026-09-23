@@ -114,7 +114,7 @@ export function LogPage() {
     <div className="flex flex-col gap-5">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-ink">日志</h1>
+          <h1 className="text-xl font-semibold text-ink">日志</h1>
           <p className="mt-1 text-base text-ink-3">
             服务端运行日志。
             <span className="text-ink-2">敏感字段在写入时就被脱敏</span>

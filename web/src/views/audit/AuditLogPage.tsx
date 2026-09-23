@@ -69,7 +69,7 @@ export function AuditLogPage() {
   return (
     <div className="flex flex-col gap-5">
       <header>
-        <h1 className="text-lg font-semibold text-ink">审计日志</h1>
+        <h1 className="text-xl font-semibold text-ink">审计日志</h1>
         <p className="mt-1 text-base text-ink-3">
           记录不可修改也<span className="text-ink-2">不可删除</span>——这正是审计的意义。
           普通账号只能看到自己的操作记录。

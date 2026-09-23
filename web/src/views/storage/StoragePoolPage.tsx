@@ -76,7 +76,7 @@ export function StoragePoolPage() {
     <div className="flex flex-col gap-5">
       <header className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-ink">存储池</h1>
+          <h1 className="text-xl font-semibold text-ink">存储池</h1>
           <p className="mt-1 text-base text-ink-3">
             存储池是把节点上的一块设备格式化并挂载后提供的存储空间。创建会
             <span className="text-warning">销毁设备上的原有数据</span>，操作前需要完成二次验证。

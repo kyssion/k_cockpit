@@ -105,7 +105,7 @@ export function UserAdminPage() {
     <div className="flex flex-col gap-5">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-ink">用户管理</h1>
+          <h1 className="text-xl font-semibold text-ink">用户管理</h1>
           <p className="mt-1 text-base text-ink-3">
             建号、封禁、删除。<span className="text-ink-2">封禁会级联</span>：撤销该用户的全部会话，并把正在运行的虚拟机标记停止。
           </p>

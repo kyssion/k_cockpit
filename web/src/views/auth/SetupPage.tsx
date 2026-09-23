@@ -77,7 +77,7 @@ export function SetupPage() {
     <div className="flex min-h-full items-center justify-center bg-base px-4 py-10">
       <div className="w-full max-w-[460px]">
         <header className="mb-6 text-center">
-          <h1 className="text-lg font-semibold text-ink">初始化 K Cockpit</h1>
+          <h1 className="text-xl font-semibold text-ink">初始化 K Cockpit</h1>
           <p className="mt-1 text-sm text-ink-3">创建首个管理员账号以完成部署</p>
         </header>
 

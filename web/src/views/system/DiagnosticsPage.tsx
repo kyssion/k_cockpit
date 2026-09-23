@@ -46,7 +46,7 @@ export function DiagnosticsPage() {
   return (
     <div className="flex flex-col gap-5">
       <header>
-        <h1 className="text-lg font-semibold text-ink">诊断导出</h1>
+        <h1 className="text-xl font-semibold text-ink">诊断导出</h1>
         <p className="mt-1 text-base text-ink-3">
           按分类导出一个排障包（zip），供离线分析或发给支持。
         </p>

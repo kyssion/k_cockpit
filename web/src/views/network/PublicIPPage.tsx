@@ -139,7 +139,7 @@ export function PublicIPPage() {
     <div className="flex flex-col gap-5">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-ink">公网 IP</h1>
+          <h1 className="text-xl font-semibold text-ink">公网 IP</h1>
           <p className="mt-1 text-base text-ink-3">
             一个地址在同一时刻只能指向一台虚拟机——这是网络层的事实。
             要把地址从一台机器挪到另一台（故障转移），用「迁移」。

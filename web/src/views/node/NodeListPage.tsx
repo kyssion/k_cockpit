@@ -49,7 +49,7 @@ export function NodeListPage() {
     <div className="flex flex-col gap-4">
       <header className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-ink">节点管理</h1>
+          <h1 className="text-xl font-semibold text-ink">节点管理</h1>
           <p className="mt-1 text-base text-ink-3">
             接入宿主机后，节点上的虚拟机、存储与网络资源才可被管理。
           </p>

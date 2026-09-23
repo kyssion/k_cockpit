@@ -66,7 +66,7 @@ export function TaskListPage() {
     <div className="flex flex-col gap-4">
       <header className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-ink">任务中心</h1>
+          <h1 className="text-xl font-semibold text-ink">任务中心</h1>
           <p className="mt-1 text-base text-ink-3">
             所有耗时操作都以任务形式执行，共 {total} 条。
           </p>

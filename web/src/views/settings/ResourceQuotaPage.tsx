@@ -85,7 +85,7 @@ export function ResourceQuotaPage() {
     <div className="flex flex-col gap-5">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-ink">资源配额</h1>
+          <h1 className="text-xl font-semibold text-ink">资源配额</h1>
           <p className="mt-1 text-base text-ink-3">
             按用户限制月流量与月运行时长。超限后按设定处置：
             <span className="text-ink-2">限速</span>（还能用但变慢）或

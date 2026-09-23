@@ -70,7 +70,7 @@ export function SecurityGroupPage() {
     <div className="flex flex-col gap-5">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-ink">安全组</h1>
+          <h1 className="text-xl font-semibold text-ink">安全组</h1>
           {/* 这句话必须显眼：它是这块最容易误解的地方。多组叠加生效，
               用户自然会想「那拒绝规则会覆盖允许吗」——答案是没有拒绝规则。 */}
           <p className="mt-1 text-base text-ink-3">

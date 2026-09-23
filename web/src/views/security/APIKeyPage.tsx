@@ -47,7 +47,7 @@ export function APIKeyPage() {
   return (
     <div className="flex max-w-3xl flex-col gap-5">
       <header>
-        <h1 className="text-lg font-semibold text-ink">API 凭证</h1>
+        <h1 className="text-xl font-semibold text-ink">API 凭证</h1>
         <p className="mt-1 text-base text-ink-3">
           用 API Key 调用接口时可以不带会话 Cookie，
           <span className="text-ink-2">但也不会触发二次验证</span>。

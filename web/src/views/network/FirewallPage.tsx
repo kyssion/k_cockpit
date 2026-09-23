@@ -152,7 +152,7 @@ export function FirewallPage() {
     <div className="flex flex-col gap-5">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-ink">防火墙</h1>
+          <h1 className="text-xl font-semibold text-ink">防火墙</h1>
           <p className="mt-1 text-base text-ink-3">
             节点级策略作用在该节点上的所有虚拟机。默认处置为
             <span className="text-ink-2">拒绝</span>，未被规则放行的来源一律不通；

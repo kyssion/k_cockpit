@@ -56,7 +56,7 @@ export function ApiDocsPage() {
   return (
     <div className="flex flex-col gap-4">
       <header>
-        <h1 className="text-lg font-semibold text-ink">API 文档</h1>
+        <h1 className="text-xl font-semibold text-ink">API 文档</h1>
         <p className="mt-1 text-base text-ink-3">
           共 {list.data?.endpoints.length ?? 0} 个接口，清单由服务端从已注册的路由生成。
           参数的含义、鉴权要求与错误码以{' '}

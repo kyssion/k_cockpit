@@ -85,7 +85,7 @@ export function LoginPage() {
     <div className="flex min-h-full items-center justify-center bg-base px-4 py-10">
       <div className="w-full max-w-[360px]">
         <header className="mb-6 text-center">
-          <h1 className="text-lg font-semibold text-ink">K Cockpit</h1>
+          <h1 className="text-xl font-semibold text-ink">K Cockpit</h1>
           <p className="mt-1 text-sm text-ink-3">虚拟机管理面板</p>
         </header>
 

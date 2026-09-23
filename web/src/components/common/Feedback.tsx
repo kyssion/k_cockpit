@@ -46,7 +46,7 @@ export function Placeholder({ title, planned }: { title: string; planned?: strin
   return (
     <div className="flex h-full flex-col">
       <header className="mb-4">
-        <h1 className="text-lg font-semibold text-ink">{title}</h1>
+        <h1 className="text-xl font-semibold text-ink">{title}</h1>
       </header>
       <div className="flex flex-1 items-center justify-center rounded-card border border-dashed border-line-strong">
         <div className="text-center">

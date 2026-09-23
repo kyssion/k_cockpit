@@ -104,7 +104,7 @@ export function MyStoragePage() {
       <div className="flex flex-col gap-5">
         <header className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h1 className="text-lg font-semibold text-ink">我的存储</h1>
+            <h1 className="text-xl font-semibold text-ink">我的存储</h1>
             <p className="mt-1 text-base text-ink-3">
               存储空间按<span className="text-ink-2">节点</span>开通——磁盘就在那台宿主机上，你在 A 节点的文件与 B 节点无关。
             </p>
@@ -135,7 +135,7 @@ export function MyStoragePage() {
     <div className="flex flex-col gap-5">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-ink">我的存储</h1>
+          <h1 className="text-xl font-semibold text-ink">我的存储</h1>
           <p className="mt-1 text-base text-ink-3">
             上传的文件会计入你的存储配额。相同内容的文件会自动<span className="text-ink-2">秒传</span>——不必重复传输。
           </p>

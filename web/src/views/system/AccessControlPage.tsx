@@ -51,7 +51,7 @@ export function AccessControlPage() {
   return (
     <div className="flex flex-col gap-5">
       <header>
-        <h1 className="text-lg font-semibold text-ink">访问控制</h1>
+        <h1 className="text-xl font-semibold text-ink">访问控制</h1>
         <p className="mt-1 text-base text-ink-3">
           控制面板是否接受公网访问，以及是否开启开发模式。
         </p>

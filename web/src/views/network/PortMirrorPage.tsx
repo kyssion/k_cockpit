@@ -90,7 +90,7 @@ export function PortMirrorPage() {
     <div className="flex flex-col gap-5">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-ink">端口镜像</h1>
+          <h1 className="text-xl font-semibold text-ink">端口镜像</h1>
           <p className="mt-1 text-base text-ink-3">
             把来源接口的流量复制到空交换机上供分析。
             启用后会有一个

@@ -27,7 +27,7 @@ export function AboutPage() {
   return (
     <div className="flex flex-col gap-4">
       <header>
-        <h1 className="text-lg font-semibold text-ink">关于项目</h1>
+        <h1 className="text-xl font-semibold text-ink">关于项目</h1>
         <p className="mt-1 text-base text-ink-3">
           K Cockpit —— 面向宿主机的虚拟机控制面板，控制面与节点代理（agent）分离部署。
         </p>

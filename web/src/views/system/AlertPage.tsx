@@ -60,7 +60,7 @@ export function AlertPage() {
     <div className="flex flex-col gap-4">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-ink">告警中心</h1>
+          <h1 className="text-xl font-semibold text-ink">告警中心</h1>
           <p className="mt-1 text-base text-ink-3">
             共 {items.length} 条，其中未确认 {list.data?.active ?? 0} 条
             {list.data?.danger ? `（${list.data.danger} 条严重）` : ''}。

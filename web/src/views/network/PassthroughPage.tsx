@@ -60,7 +60,7 @@ export function PassthroughPage() {
     <div className="flex flex-col gap-5">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-ink">硬件直通</h1>
+          <h1 className="text-xl font-semibold text-ink">硬件直通</h1>
           <p className="mt-1 text-base text-ink-3">
             把 PCIe 设备（显卡、网卡、NVMe）直接交给虚拟机使用。
             <span className="text-ink-2">

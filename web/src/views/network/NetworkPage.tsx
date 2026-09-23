@@ -103,7 +103,7 @@ export function NetworkPage() {
     <div className="flex max-w-[880px] flex-col gap-5">
       <header className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-ink">网络中心</h1>
+          <h1 className="text-xl font-semibold text-ink">网络中心</h1>
           <p className="mt-1 text-base text-ink-3">
             节点的网络后端与能力状态。缺少依赖不会影响面板本身，只会让对应的网络功能不可用。
           </p>

@@ -43,7 +43,7 @@ export function SchedulerPage() {
   return (
     <div className="flex flex-col gap-5">
       <header>
-        <h1 className="text-lg font-semibold text-ink">调度器</h1>
+        <h1 className="text-xl font-semibold text-ink">调度器</h1>
         <p className="mt-1 text-base text-ink-3">
           系统内置的周期性工作。这里
           <span className="text-ink-2">只记录实际发生的动作</span>

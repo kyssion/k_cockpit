@@ -60,7 +60,7 @@ export function CapturePage() {
     <div className="flex flex-col gap-5">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-ink">抓包诊断</h1>
+          <h1 className="text-xl font-semibold text-ink">抓包诊断</h1>
           <p className="mt-1 text-base text-ink-3">
             在指定网口上抓取一段时间的流量。抓包文件含完整流量内容，因此
             <span className="text-ink-2">24 小时后自动从节点上删除</span>

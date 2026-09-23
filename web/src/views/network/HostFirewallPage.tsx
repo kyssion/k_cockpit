@@ -124,7 +124,7 @@ export function HostFirewallPage() {
     <div className="flex flex-col gap-5">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-ink">宿主机防火墙</h1>
+          <h1 className="text-xl font-semibold text-ink">宿主机防火墙</h1>
           <p className="mt-1 text-base text-ink-3">
             控制谁能连上这台宿主机——SSH、面板端口、节点上直接对外的服务。
             它与

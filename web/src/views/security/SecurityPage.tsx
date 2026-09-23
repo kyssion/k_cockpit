@@ -64,7 +64,7 @@ export function SecurityPage() {
   return (
     <div className="flex max-w-[720px] flex-col gap-4">
       <header>
-        <h1 className="text-lg font-semibold text-ink">安全中心</h1>
+        <h1 className="text-xl font-semibold text-ink">安全中心</h1>
         <p className="mt-1 text-base text-ink-3">
           删除虚拟机、移除节点等操作会造成不可逆的结果，执行前需要完成一次二次验证。
         </p>

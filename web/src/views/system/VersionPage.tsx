@@ -28,7 +28,7 @@ export function VersionPage() {
   return (
     <div className="flex flex-col gap-5">
       <header>
-        <h1 className="text-lg font-semibold text-ink">版本与关于</h1>
+        <h1 className="text-xl font-semibold text-ink">版本与关于</h1>
         <p className="mt-1 text-base text-ink-3">
           面板版本、构建信息与依赖清单。遇到问题时，这里的内容通常是第一个要看的。
         </p>

@@ -60,7 +60,7 @@ export function ImportPage() {
     <div className="flex max-w-[880px] flex-col gap-5">
       <header className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-ink">导入</h1>
+          <h1 className="text-xl font-semibold text-ink">导入</h1>
           <p className="mt-1 text-base text-ink-3">
             导入已有磁盘或 OVA 包，产出**一个模板**——之后就能用它克隆出多台
             虚拟机，而不是只能开一台。

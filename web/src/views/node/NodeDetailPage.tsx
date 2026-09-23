@@ -91,7 +91,7 @@ export function NodeDetailPage() {
 
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-lg font-semibold text-ink">{node.name}</h1>
+            <h1 className="text-xl font-semibold text-ink">{node.name}</h1>
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
               <StatusBadge tone={NODE_STATUS_TONE[node.status]}>
                 {NODE_STATUS_LABEL[node.status]}
