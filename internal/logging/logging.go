@@ -289,8 +289,26 @@ func (l *Logger) rotate() {
 }
 
 func (l *Logger) openFile() error {
+	return l.openFileWith(os.O_CREATE | os.O_WRONLY | os.O_APPEND)
+}
+
+// openFileTruncated 以**截断**方式重新打开当前日志文件。
+//
+// Purge 用它替代「对已打开句柄调用 Truncate」：Windows 上以 O_APPEND 打开的
+// 句柄只拿到 FILE_APPEND_DATA 权限，而截断需要写权限，会被拒绝为 Access denied；
+// 由自己关闭再以 O_TRUNC 打开，两端结果一致（文件保留、内容清空）。
+// 这里**不加 O_APPEND**：在 Windows 上它与 O_TRUNC 的创建语义相冲突。
+// 文件已清空，新句柄从偏移 0 顺序写入即可。
+//
+// 「文件保留」正是这个功能要的语义——删除会让旧句柄指向一个不存在的 inode。
+func (l *Logger) openFileTruncated() error {
+	return l.openFileWith(os.O_CREATE | os.O_WRONLY | os.O_TRUNC)
+}
+
+// openFileWith 打开当前日志文件并接管句柄。调用方须持有锁。
+func (l *Logger) openFileWith(flag int) error {
 	path := filepath.Join(l.opts.Dir, l.opts.FileName)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(path, flag, 0o600)
 	if err != nil {
 		return fmt.Errorf("打开日志文件失败: %w", err)
 	}
@@ -495,13 +513,14 @@ func (l *Logger) Purge() (int64, error) {
 
 	freed += l.fileSize
 	if l.file != nil {
-		if err := l.file.Truncate(0); err != nil {
+		// 关闭后以 O_TRUNC 重开，而不是对当前句柄 Truncate：见 openFileTruncated。
+		if err := l.file.Close(); err != nil {
+			return freed, fmt.Errorf("关闭日志文件失败: %w", err)
+		}
+		l.file = nil
+		if err := l.openFileTruncated(); err != nil {
 			return freed, fmt.Errorf("清空日志文件失败: %w", err)
 		}
-		if _, err := l.file.Seek(0, 0); err != nil {
-			return freed, fmt.Errorf("重置写入位置失败: %w", err)
-		}
-		l.fileSize = 0
 	}
 	return freed, nil
 }

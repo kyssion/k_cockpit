@@ -131,6 +131,9 @@ func (s *Service) MountShare(
 		// 默认用目录名做 tag：用户在来宾里 `mount -t 9p <目录名>` 时
 		// 一眼能对上是哪个共享。目录名为空或含非法字符时拒绝，而不是
 		// 硬凑一个——凑出来的 tag 用户猜不到，只能去页面里查。
+		// hostPath 是被管宿主机上的 POSIX 路径，所以取目录名用 path 而不是
+		// filepath：后者按控制面本机的分隔符计算，Windows 上会把整串路径
+		// 当成一个文件名，默认 tag 因此永远不合法。
 		tag = path.Base(hostPath)
 	}
 	if !tagRe.MatchString(tag) {
@@ -292,7 +295,10 @@ func (s *Service) storageRoot(ctx context.Context, userID, nodeID int64) (string
 		// 失去意义，用户填 "etc" 就指向了 /etc。
 		return "", api.ValidationFailed("你的存储空间尚未初始化，无法共享目录")
 	}
-	return filepath.Clean(*us.RootPath), nil
+	// 存储根是**被管宿主机**上的路径，一律按 POSIX 语义处理：用 filepath
+	// 会掺进控制面本机平台的差异（Windows 上会把 `/srv/users/7` 变成
+	// `\srv\users\7`），而后续的 path.Base、前缀检查都只认斜杠。
+	return path.Clean(*us.RootPath), nil
 }
 
 // resolveUnderRoot 把用户给的相对路径解析成存储根下的绝对路径。
@@ -334,9 +340,10 @@ func resolveUnderRoot(root, rel string) (string, error) {
 		return "", api.InvalidParameter("路径不能指向存储根之外")
 	}
 
-	full := filepath.Clean(filepath.Join(root, filepath.FromSlash(clean)))
+	// 拼接同样按 POSIX 语义：结果要原样下发给宿主机，不能带控制面本机的分隔符。
+	full := path.Join(root, clean)
 	// 3) 前缀检查（带分隔符，避免 /data 与 /database 这类前缀混淆）。
-	if full != root && !strings.HasPrefix(full, root+string(filepath.Separator)) {
+	if full != root && !strings.HasPrefix(full, root+"/") {
 		return "", api.InvalidParameter("路径超出了你的存储根")
 	}
 	return full, nil
