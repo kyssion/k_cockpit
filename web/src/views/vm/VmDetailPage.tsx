@@ -78,6 +78,7 @@ import {
   type VmView,
 } from '@/api/vm'
 import { Button } from '@/components/common/Button'
+import { Icon } from '@/components/common/Icon'
 import { Meter } from '@/components/common/Meter'
 import { EmptyState, PageLoading } from '@/components/common/Feedback'
 import { Input } from '@/components/common/Input'
@@ -278,10 +279,12 @@ export function VmDetailPage() {
         <Link to="/vm" className="w-fit text-sm text-ink-3 hover:text-brand">
           ← 返回虚拟机列表
         </Link>
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-lg font-semibold text-ink">{vm.name}</h1>
-            <div className="mt-1.5 flex items-center gap-2">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="text-xl font-semibold text-ink">{vm.name}</h1>
+            {/* 元信息行集中在标题下：节点、地址、规格是「这台机器是什么」的
+                三件事，原先散在下方几张卡里，核对时得在页面上来回找。 */}
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-ink-3">
               <StatusBadge tone={VM_STATUS_TONE[vm.status]}>
                 {VM_STATUS_LABEL[vm.status]}
               </StatusBadge>
@@ -296,6 +299,14 @@ export function VmDetailPage() {
               {!vm.present && (
                 <span className="text-xs text-warning">虚拟化层已不存在</span>
               )}
+              <span className="flex items-center gap-1">
+                <Icon name="node" className="h-3.5 w-3.5" />
+                {nodeName ?? `节点 #${vm.node_id}`}
+              </span>
+              <span className="kc-mono">{vm.ip_summary || '未分配地址'}</span>
+              <span className="kc-nums">
+                {vm.vcpu} 核 · {formatMemory(vm.memory_mb)} · {vm.disk_gb} GB
+              </span>
             </div>
           </div>
 
@@ -327,6 +338,9 @@ export function VmDetailPage() {
                 </Button>
               </Link>
             )}
+            {/* 分隔：左边是日常操作（电源、控制台），右边是改配置 / 不可逆的
+                那几个。原先十来个按钮等宽排成一排，删除和开机看起来一样重。 */}
+            <span aria-hidden="true" className="mx-0.5 h-5 w-px self-center bg-line" />
             {/* 锁定的开关。加锁是收紧、解锁是放松——只有后者需要验证，
                 因此这里就是一次普通的调用。 */}
             {vm.locked ? (
@@ -876,7 +890,16 @@ function VmHero({ vm }: { vm: VmView }) {
         }
       >
         {!running ? (
-          <p className="text-sm text-ink-3">虚拟机未运行，无实时指标。</p>
+          // 停机时没有指标，但卡片不该因此空着：把创建时定下的规格摆出来，
+          // 那是这张卡在停机状态下唯一诚实且有用的内容。
+          <div className="flex flex-col gap-2">
+            <p className="text-sm text-ink-3">虚拟机未运行，无实时指标。以下是设定的规格：</p>
+            <dl className="flex flex-col gap-2">
+              <HeroRow label="vCPU">{vm.vcpu} 核</HeroRow>
+              <HeroRow label="内存">{formatMemory(vm.memory_mb)}</HeroRow>
+              <HeroRow label="磁盘">{vm.disk_gb} GB</HeroRow>
+            </dl>
+          </div>
         ) : stats.isError ? (
           // 采集失败要说清楚是「没读到」而不是显示 0%——0% 看起来是
           // 「机器很闲」，而实际是「不知道」。
