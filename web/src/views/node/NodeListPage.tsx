@@ -107,6 +107,19 @@ export function NodeListPage() {
                     {node.enroll_state === 'pending' && (
                       <span className="ml-2 text-xs text-warning">等待接入</span>
                     )}
+                    {/* 模拟节点必须一眼认出来：它的磁盘、虚拟机与指标全由
+                        internal/agent 的 mock 实现产生（固定值，不是真实负载）。
+                        不标出来，一套跑在假数据上的面板看起来和真有节点时
+                        一模一样——那正是最容易被误判的情形。
+                        判据是版本号前缀（mock 实现的自报版本形如 mock-0.1.0）。 */}
+                    {node.agent_version?.startsWith('mock') && (
+                      <span
+                        className="ml-2 rounded-pill border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-xs text-warning"
+                        title="该节点由 mock 实现扮演：设备、虚拟机与监控指标都是模拟值，不代表真实宿主机"
+                      >
+                        模拟
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-2.5">
                     <StatusBadge

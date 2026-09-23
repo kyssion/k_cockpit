@@ -355,6 +355,12 @@ function ResourceTrendCard() {
   const nodeList = nodes.data ?? []
   if (nodeList.length === 0) return null
 
+  // 模拟节点上报的是固定值（见 internal/agent/mock.go），走势会是一条直线。
+  // 这与「这段时间没采到数据」完全不同，必须说清楚是数据源的性质。
+  const mockNode = nodeList
+    .find((n) => n.id === effectiveNodeID)
+    ?.agent_version?.startsWith('mock')
+
   const points = series.data?.points ?? []
   const cpu = points.map((p) => ({ at: p.at, value: p.cpu_percent }))
   const mem = points.map((p) => ({
@@ -391,7 +397,15 @@ function ResourceTrendCard() {
         <div>
           <h2 className="text-md font-medium text-ink">资源走势</h2>
           <p className="mt-0.5 text-xs text-ink-3">
-            采集器每分钟写入一次；与上方「宿主机资源」是同一份数据的不同尺度。
+            {mockNode ? (
+              // 模拟节点的指标是固定值，「一条直线」与「没采到数据」是两回事，
+              // 不说明的话，用户会去排查采集器。
+              <span className="text-warning">
+                该节点由 mock 实现扮演：指标为固定值，不会随真实负载变化
+              </span>
+            ) : (
+              '采集器每分钟写入一次；与上方「宿主机资源」是同一份数据的不同尺度。'
+            )}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
