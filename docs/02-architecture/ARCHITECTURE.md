@@ -233,6 +233,21 @@ agent 重连 → 上报能力与运行态快照
 
 **网络要求**：默认只需 **agent → 控制面的出向连通**；如启用直连模式，再开放 agent 的入站端口。
 
+**平台支持**：
+
+| 组件 | 生产运行 | 开发 / 测试 | 约束来源 |
+|---|---|---|---|
+| 节点代理 | **仅 Linux** | 仅 Linux | 直接操作 libvirt/KVM 与 `iptables`/`nftables`/OVS/9p/`qemu-img` 等 Linux 用户态工具，Windows 无等价物；形态为 systemd 服务。**WSL2 不构成 Windows 支持**：WSL2 自身是虚拟机，其内的 agent 管不到 Windows 宿主机的硬件虚拟化 |
+| 控制面 | Linux（可容器化，单二进制亦可直接运行） | Linux + **Windows** | 代码无平台专有依赖（无 build tag、无 `syscall`、无外部命令调用，libvirt 相关均为经 agent 下发的字符串/XML）；约束在于**被管宿主机路径必须按 POSIX 语义处理** |
+| 前端 | 浏览器（静态资源由控制面托管） | Linux + Windows | 构建链（Vite / tsc / oxlint）跨平台；import 路径大小写必须严格——Windows 文件系统不敏感，Linux 敏感 |
+| 数据库 | PostgreSQL 14+ | SQLite（默认，纯 Go 驱动、无需 CGO）或 PostgreSQL | 生产不使用 SQLite |
+
+> **两个维度不能混**：控制面自身运行的操作系统，与被管宿主机的操作系统是**两回事**。所有 libvirt / 9p / iptables 相关的路径与命令都属于后者（Linux），与前者的平台无关。
+>
+> 由此得出一条硬规则：控制面中凡涉及**被管宿主机路径**的字符串处理，一律使用 `path` 语义（`path.Clean` / `path.Join` / `path.Base`），**不得使用 `filepath`**——后者会掺入控制面本机平台的分隔符，在 Windows 上会把 `/srv/users/7/data` 变成 `\srv\users\7\data`，使 `path.Base` 取到的"目录名"变成整串路径（F-5-06 目录共享因此完全不可用，属实际发生过的缺陷）。
+>
+> 控制面改用 `filepath` 处理**自身**文件系统路径（如日志目录、SQLite 文件）则是正确的——判断依据是"这个路径属于谁"。
+
 ---
 
 ## 8. 已知限制与技术债
@@ -253,3 +268,4 @@ agent 重连 → 上报能力与运行态快照
 |---|---|---|---|
 | 2026-09-15 | 按**控制面 / 节点代理**架构填充：整体架构与期望态/运行态划分、控制面与 agent 的分层职责与禁止事项、模块划分、5 个关键流程（纳管 / 创建 / 采集 / 断连对账 / 跨节点迁移）、横切关注点、部署架构与已知技术债 | AI | [0005](../06-decisions/0005-control-plane-node-agent-architecture.md) |
 | 2026-09-15 | §8 已知限制移除「前端技术栈未定」（已由 [ADR-0006](../06-decisions/0006-frontend-tech-stack.md) 定稿） | AI | [0006](../06-decisions/0006-frontend-tech-stack.md) |
+| 2026-09-24 | §7 部署架构补充**平台支持**矩阵（agent 仅 Linux、控制面开发期支持 Windows、前端与数据库）及「被管宿主机路径一律 `path` 语义」规则 | AI | — |

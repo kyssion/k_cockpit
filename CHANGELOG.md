@@ -231,6 +231,8 @@
 - **创建虚拟机向导的字段矩阵永不加载**：向导的步骤与 42 个字段全部来自 `create-form`，而该请求要 `node_id > 0` 才发出，节点选择器却硬编码在后一步里 —— 于是第一次打开只有「创建方式 + 确认信息」两屏、0 个输入框，用户看得见「还需要填写：虚拟机名、节点、安装镜像」却无处可填。节点选择器移到第一步，默认节点按「草稿 → 首个在线节点」派生
 - **分片上传的每一片是 8 MiB，而 Hertz 默认只收 4 MiB**：超过 4 MiB 的文件必然 413，小于 4 MiB 的照常通过，表现像偶发故障。请求体上限放到 16 MiB，与前端 `CHUNK_SIZE` 留一倍余量
 - **虚拟机列表的「占用」列漏了 `<td>`**：渲染成 `<tr><span>`（DOM 非法），且该列之后整体错位
+- **Windows 上「目录共享」必然失败（被管宿主机路径误用了控制面本机语义）**：`internal/storage/share.go` 用 `filepath` 处理**被管宿主机**的路径，Windows 上 `/srv/users/7/data` 会被转成 `\srv\users\7\data`，而紧随其后的 `path.Base` 只认斜杠、于是把整串路径当成目录名，默认 tag 校验必然失败（`tag 只能由字母、数字…`）——不显式填 tag 的挂载 100% 不可用。改为统一走 `path` 语义（`path.Clean` / `path.Join` / `path.Base`），并在代码与架构文档中写明判断依据；Linux 上行为不变
+- **Windows 上「清理日志」必然失败**：`internal/logging` 的 `Purge` 依赖对已打开句柄做 `Truncate(0)`，而 Windows 上以 `O_APPEND` 打开的句柄只有 `FILE_APPEND_DATA` 权限，截断会被拒绝为 `Access denied`。改为**关闭句柄后以 `O_TRUNC` 重新打开**——文件保留、内容清空，语义与 Linux 一致（不删文件本身，否则旧句柄会指向不存在的 inode）
 
 <!--
 ## [0.1.0] - YYYY-MM-DD

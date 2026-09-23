@@ -50,6 +50,17 @@
 - 新增第三方依赖必须先说明理由并获确认。
 - 关键选型的历史理由见 [`docs/06-decisions/`](docs/06-decisions/README.md)，**不得违背既有 ADR**。
 
+**平台支持**（完整依据见 [`docs/02-architecture/ARCHITECTURE.md`](docs/02-architecture/ARCHITECTURE.md) §7）：
+
+| 组件 | 生产运行 | 开发 / 测试 | 约束 |
+|---|---|---|---|
+| 节点代理（agent） | **仅 Linux** | 仅 Linux | 依赖 libvirt/KVM 与 `iptables`/`nftables`/OVS/9p 等 Linux 工具链；systemd 托管。**WSL2 不构成 Windows 支持** |
+| 控制面 | Linux（可容器化） | Linux + **Windows** | 无平台专有依赖；被管宿主机路径一律 `path` 语义（见第 5 节） |
+| 前端 | 浏览器 | Linux + Windows | import 路径大小写必须严格（Windows 不敏感、Linux 敏感） |
+| 数据库 | PostgreSQL 14+ | SQLite（默认，纯 Go、无需 CGO） | 生产不使用 SQLite |
+
+> **两个维度不能混**：控制面自身运行的操作系统，与被管宿主机（`agent` 所在机器）的操作系统是两回事。所有 libvirt/9p/iptables 相关的路径与命令都属于后者。
+
 ---
 
 ## 3. 常用命令
@@ -174,6 +185,7 @@ k_cockpit/
 - **注释**：解释「为什么」，不复述「做了什么」。公共 API 必须有文档注释。
 - **依赖**：新增第三方依赖**必须先说明理由并获确认**，不得擅自引入。
 - **系统资源操作**：禁止硬编码系统账号、属主、设备路径与服务名，必须「探测 + 回退」（例如 QEMU 属主在不同发行版是 `libvirt-qemu:kvm` 或 `qemu:qemu`）。
+- **路径语义**：先判断「这个路径属于谁」——**被管宿主机**的路径（用户存储根、共享 `HostPath`、一切要下发给 agent 的路径）一律用 `path`（`path.Clean` / `path.Join` / `path.Base`），因为宿主机是 Linux 而控制面可能在 Windows 上开发；**控制面自身文件系统**的路径（日志目录、SQLite 文件、测试临时目录）才用 `filepath`。
 - **杀进程 / 删资源**：执行 `kill`、`pkill`、批量删除前必须校验归属（PID 文件、systemd unit、进程名 + 参数指纹），**禁止仅凭端口/IP 占用**判断「这是别人的进程」。
 - **自愈逻辑**：启动期与周期性的 `Restore*` / `Reconcile*` / `Ensure*` 必须**幂等**，且单步失败只降级告警、不阻断主流程。
 - **外部状态先检查**：不可变标记（`chattr +i`）、链式依赖、外部快照链等，必须先探测再操作，并给出可执行的修复提示。
