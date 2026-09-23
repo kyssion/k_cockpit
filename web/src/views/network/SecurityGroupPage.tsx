@@ -320,7 +320,7 @@ function EffectivePanel({
               </thead>
               <tbody>
                 {preview.rules.map((r, i) => (
-                  <tr key={i} className="border-t border-line">
+                  <tr key={i} className="border-t border-line transition-colors hover:bg-sunken/70">
                     <td className="py-1.5 text-ink-2">{DIRECTION_LABEL[r.direction]}</td>
                     <td className="kc-mono py-1.5 text-ink">{ruleText(r)}</td>
                     {/* 来源是这张表存在的理由：没有它，用户只能去每个组里翻。 */}

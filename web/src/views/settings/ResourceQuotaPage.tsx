@@ -431,7 +431,7 @@ function ComputeQuotaSection({
           </thead>
           <tbody>
             {items.map((q) => (
-              <tr key={q.user_id} className="border-t border-line">
+              <tr key={q.user_id} className="border-t border-line transition-colors hover:bg-sunken/70">
                 <td className="px-4 py-2 text-ink-2">
                   {q.username || `#${q.user_id}`}
                   {!q.has_quota && <span className="ml-2 text-xs text-ink-3">未设配额</span>}

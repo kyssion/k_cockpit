@@ -124,7 +124,7 @@ export function VersionPage() {
               </thead>
               <tbody>
                 {deps.map((d) => (
-                  <tr key={d.path} className="border-t border-line">
+                  <tr key={d.path} className="border-t border-line transition-colors hover:bg-sunken/70">
                     <td className="kc-mono px-3 py-1.5 text-ink-2">{d.path}</td>
                     <td className="px-3 py-1.5 text-ink-3">{d.version}</td>
                   </tr>

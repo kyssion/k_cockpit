@@ -169,7 +169,7 @@ export function UserAdminPage() {
             </thead>
             <tbody>
               {items.map((u) => (
-                <tr key={u.id} className="border-t border-line">
+                <tr key={u.id} className="border-t border-line transition-colors hover:bg-sunken/70">
                   <td className="px-4 py-2.5">
                     <span className="text-ink">{u.username}</span>
                     {u.totp_enabled && (
@@ -699,7 +699,7 @@ function InviteSection() {
             </thead>
             <tbody>
               {items.map((it) => (
-                <tr key={it.id} className="border-t border-line">
+                <tr key={it.id} className="border-t border-line transition-colors hover:bg-sunken/70">
                   <td className="px-2 py-1.5 text-ink">{it.email}</td>
                   <td className="px-2 py-1.5 text-ink-2">{it.role === 'admin' ? '管理员' : '租户'}</td>
                   <td className="px-2 py-1.5">

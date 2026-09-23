@@ -101,7 +101,7 @@ export function ImportPage() {
             </thead>
             <tbody>
               {items.map((i) => (
-                <tr key={i.id} className="border-t border-line">
+                <tr key={i.id} className="border-t border-line transition-colors hover:bg-sunken/70">
                   <td className="px-4 py-2.5 text-ink">{i.name}</td>
                   <td className="px-4 py-2.5 text-ink-2">
                     <span className="block text-sm">{i.source_filename}</span>

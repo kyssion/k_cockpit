@@ -394,7 +394,7 @@ function StorageTab({ nodeID }: { nodeID: number }) {
             </thead>
             <tbody>
               {(disks.data ?? []).map((d) => (
-                <tr key={d.device_id} className="border-t border-line">
+                <tr key={d.device_id} className="border-t border-line transition-colors hover:bg-sunken/70">
                   <td className="px-4 py-2.5">
                     <span className="font-medium text-ink">{d.path}</span>
                     <span className="ml-2 text-xs text-ink-3">{d.device_id}</span>

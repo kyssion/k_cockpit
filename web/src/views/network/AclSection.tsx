@@ -80,7 +80,7 @@ export function AclSection({ nodeID, onError }: { nodeID: number; onError: (msg:
           </thead>
           <tbody>
             {items.map((r) => (
-              <tr key={r.id} className="border-t border-line">
+              <tr key={r.id} className="border-t border-line transition-colors hover:bg-sunken/70">
                 <td className="kc-nums px-4 py-2.5 text-ink-2">{r.priority}</td>
                 <td className="px-4 py-2.5">
                   <StatusBadge tone={r.action === 'allow' ? 'success' : 'danger'}>

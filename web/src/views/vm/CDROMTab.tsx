@@ -115,7 +115,7 @@ export function CDROMTab({ vmID, nodeID }: { vmID: number; nodeID: number }) {
             </thead>
             <tbody>
               {items.map((c) => (
-                <tr key={c.id} className="border-t border-line">
+                <tr key={c.id} className="border-t border-line transition-colors hover:bg-sunken/70">
                   <td className="kc-mono px-3 py-2 text-ink-2">{c.device}</td>
                   <td className="px-3 py-2">
                     {/* **空的光驱与没有光驱是两回事**：前者在来宾里看得到一个

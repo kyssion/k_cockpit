@@ -215,7 +215,7 @@ export function TemplatePage() {
             </thead>
             <tbody>
               {(templates.data ?? []).map((t) => (
-                <tr key={t.id} className="border-t border-line">
+                <tr key={t.id} className="border-t border-line transition-colors hover:bg-sunken/70">
                   <td className="px-4 py-2.5">
                     <span className="font-medium text-ink">{t.name}</span>
                     {/* 版本与族：v1/v2/v3 是"第几代"，比一句"派生自 #N"更能

@@ -220,7 +220,7 @@ export function NetworkPage() {
               </thead>
               <tbody>
                 {networks.data.map((nw) => (
-                  <tr key={nw.id} className="border-t border-line">
+                  <tr key={nw.id} className="border-t border-line transition-colors hover:bg-sunken/70">
                     <td className="px-4 py-2.5">
                       <span className="text-ink">{nw.name}</span>
                       {nw.is_system && <span className="ml-2 text-xs text-brand">系统</span>}

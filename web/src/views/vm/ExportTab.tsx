@@ -118,7 +118,7 @@ export function ExportTab({ vm }: { vm: VmView }) {
             </thead>
             <tbody>
               {items.map((e) => (
-                <tr key={e.id} className="border-t border-line">
+                <tr key={e.id} className="border-t border-line transition-colors hover:bg-sunken/70">
                   <td className="px-4 py-2.5">
                     <span className="text-ink">
                       {EXPORT_FORMAT_HINT[e.format]?.label ?? e.format}

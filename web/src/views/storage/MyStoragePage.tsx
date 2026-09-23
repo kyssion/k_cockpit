@@ -192,7 +192,7 @@ export function MyStoragePage() {
             </thead>
             <tbody>
               {(files.data?.items ?? []).map((f) => (
-                <tr key={f.id} className="border-t border-line">
+                <tr key={f.id} className="border-t border-line transition-colors hover:bg-sunken/70">
                   <td className="px-4 py-2.5">
                     <span className="text-ink">{f.filename}</span>
                     {/* ISO 的识别结果就显示在文件名下面：它是「用这个镜像建机器」

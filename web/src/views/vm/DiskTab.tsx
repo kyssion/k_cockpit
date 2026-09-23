@@ -103,7 +103,7 @@ export function DiskTab({ vmID }: { vmID: number }) {
             </thead>
             <tbody>
               {disks.map((d) => (
-                <tr key={d.dev} className="border-t border-line">
+                <tr key={d.dev} className="border-t border-line transition-colors hover:bg-sunken/70">
                   <td className="kc-mono px-3 py-2 text-ink-2">
                     {d.dev}
                     {d.is_system && <span className="ml-2 text-xs text-ink-3">系统盘</span>}

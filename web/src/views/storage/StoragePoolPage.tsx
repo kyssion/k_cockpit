@@ -805,7 +805,7 @@ function PartitionModal({
             </thead>
             <tbody>
               {items.map((p: PartitionView) => (
-                <tr key={p.index} className="border-t border-line">
+                <tr key={p.index} className="border-t border-line transition-colors hover:bg-sunken/70">
                   <td className="kc-mono px-2 py-1.5 text-ink">
                     {p.path}
                     {p.system && <span className="ml-1.5 text-xs text-ink-3">系统</span>}

@@ -253,7 +253,7 @@ export function PublicIPPage() {
             </thead>
             <tbody>
               {items.map((ip) => (
-                <tr key={ip.id} className="border-t border-line">
+                <tr key={ip.id} className="border-t border-line transition-colors hover:bg-sunken/70">
                   <td className="px-4 py-2.5">
                     <input
                       type="checkbox"

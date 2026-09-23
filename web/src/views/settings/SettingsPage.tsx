@@ -447,7 +447,7 @@ function RequestLogPanel() {
                 </thead>
                 <tbody>
                   {items.map((it: RequestLogItem) => (
-                    <tr key={it.id} className="border-t border-line">
+                    <tr key={it.id} className="border-t border-line transition-colors hover:bg-sunken/70">
                       <td className="px-2 py-1.5 text-ink-3">{relativeTime(it.at)}</td>
                       <td className="px-2 py-1.5 text-ink-2">{it.username || '—'}</td>
                       <td className="px-2 py-1.5 text-ink-2">{it.method}</td>

@@ -110,7 +110,7 @@ export function SchedulerPage() {
               </thead>
               <tbody>
                 {(events.data?.items ?? []).map((e) => (
-                  <tr key={e.id} className="border-t border-line">
+                  <tr key={e.id} className="border-t border-line transition-colors hover:bg-sunken/70">
                     <td className="whitespace-nowrap px-3 py-2 text-ink-3">
                       {formatAgo(e.at)}
                     </td>
