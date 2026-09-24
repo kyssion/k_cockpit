@@ -304,6 +304,9 @@ go.work
 go.work.sum
 # 编译产物目录
 bin/
+# `go build ./cmd/server`（未加 -o）会在仓库根落一个 server 二进制。
+# 前导斜杠锚定根目录，避免误伤 cmd/server/ 源码目录。规范构建走 -o bin/server。
+/server
 # 本地数据目录（SQLite 数据文件）
 data/
 # SQLite 运行时产物（WAL / 共享内存）
