@@ -32,6 +32,7 @@ import (
 	"k_cockpit/internal/invite"
 	"k_cockpit/internal/logging"
 	"k_cockpit/internal/mailer"
+	"k_cockpit/internal/maintenance"
 	"k_cockpit/internal/monitor"
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/networkbridge"
@@ -159,11 +160,16 @@ type Deps struct {
 	Search *search.Service
 	// Alert 提供告警中心（F-8-07）。
 	Alert *alert.Service
+	// Maintenance 提供站点级维护模式（G-46）。
+	Maintenance *maintenance.Service
 
 	SecureCookie bool
 	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
 	// 仅在 AGENT_TRANSPORT=mock 时开启；该开关为 mock 专用。
 	SimulateAgent bool
+	// InputFilterEnabled 返回输入侧防护（请求过滤）是否开启；nil 时恒开。
+	// 做成函数而不是布尔：开关来自系统设置，需要每次请求现读。
+	InputFilterEnabled func() bool
 }
 
 // Register 注册全局中间件与全部路由。
@@ -176,6 +182,7 @@ func Register(h *server.Hertz, deps Deps) {
 	if deps.ReqLog != nil {
 		h.Use(handler.RequestLogger(deps.ReqLog))
 	}
+	h.Use(api.SecurityHeaders(), api.InputFilter(deps.InputFilterEnabled))
 	h.Use(api.RequestID(), api.Recover(), api.AccessLog())
 
 	h.GET("/health", handler.Health(deps.DB))
@@ -237,12 +244,18 @@ func Register(h *server.Hertz, deps Deps) {
 	searchHandler := handler.NewSearch(deps.Search)
 	alertHandler := handler.NewAlert(deps.Alert)
 	importerHandler := handler.NewImporter(deps.Importer)
+	maintenanceHandler := handler.NewMaintenance(deps.Maintenance, deps.Risk)
 
 	// 挂上 API 凭证认证：客户端可用 `Authorization: Bearer kc_...` 代替会话 Cookie。
 	//
 	// 注销、改密码这类会话管理接口在凭证认证下会拿到 nil 会话，它们的既有
 	// 判空逻辑因此会正确地拒绝——不会出现「用 API Key 把自己登出」这种操作。
 	authMW := auth.NewMiddleware(deps.Auth).WithAPIKey(deps.APIKey)
+	// 一次性动作令牌（G-53）：让下载直链可以通过 URL 里的 action_token
+	// 完成认证。nil 时不启用（与 API 凭证同一模式）。
+	if deps.APIKey != nil {
+		authMW = authMW.WithActionToken(deps.APIKey)
+	}
 	// 认证接口都计为真实用户活动：它们由用户显式操作触发，不是后台轮询。
 	requireAuth := authMW.Require(auth.Real)
 	adminOnly := authz.Admin()
@@ -323,6 +336,11 @@ func Register(h *server.Hertz, deps Deps) {
 		// 它纯粹是控制面的标志，所有拦截都发生在受理那一刻；做成任务会
 		// 制造一个「界面说维护中、操作仍被受理」的窗口。
 		v1.PATCH("/nodes/:id/maintenance", requireAuth, adminOnly, nodeHandler.SetMaintenance)
+		// 站点级维护（G-46）：逐节点接管 + 汇总。进入需要二次验证（handler
+		// 内调用 guard），退出只解除本次接管的节点、无破坏性，不再多一道验证。
+		v1.GET("/maintenance", requireAuth, adminOnly, maintenanceHandler.Status)
+		v1.POST("/maintenance/enter", requireAuth, adminOnly, maintenanceHandler.Enter)
+		v1.POST("/maintenance/exit", requireAuth, adminOnly, maintenanceHandler.Exit)
 		// 控制台对外地址：决定能否生成 SPICE 连接文件。
 		v1.PATCH("/nodes/:id/console-host", requireAuth, adminOnly, nodeHandler.SetConsoleHost)
 
@@ -377,6 +395,8 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.POST("/networks/ports/release", requireAuth, adminOnly, networkHandler.ReleasePort)
 		v1.POST("/networks/counters/reset", requireAuth, adminOnly, networkHandler.ResetCounters)
 		v1.POST("/networks/ipv6/policy", requireAuth, adminOnly, networkHandler.ApplyIPv6Policy)
+		// 全局带宽总限（G-44）：把设置值下发到节点上行。
+		v1.POST("/networks/global-bandwidth/apply", requireAuth, adminOnly, networkHandler.ApplyGlobalBandwidth)
 		v1.DELETE("/vpc-switches/:id", requireAuth, adminOnly, networkHandler.DeleteSwitch)
 
 		// 系统设置（F-9-01）：**仅管理员**（R-014）。设置变更不得成为

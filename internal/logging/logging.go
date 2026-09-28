@@ -14,10 +14,14 @@
 package logging
 
 import (
+	"bytes"
+	"compress/gzip"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -172,6 +176,20 @@ func (l *Logger) SetLevel(level Level) {
 	l.opts.Level = level
 }
 
+// SetKeepFiles 调整保留的归档数（不含当前文件）。
+//
+// 保留数来自系统设置（logging.keep_files），缩小它不会立刻删文件——
+// 已有的归档在下一次轮转时按新上限收敛。日志文件是排障依据，为了
+// "设置页面上数字立刻变小"而顺手删掉历史归档，代价与收益不成比例。
+func (l *Logger) SetKeepFiles(n int) {
+	if n <= 0 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.opts.KeepFiles = n
+}
+
 // Level 返回当前级别。
 func (l *Logger) Level() Level {
 	l.mu.Lock()
@@ -261,8 +279,10 @@ func (l *Logger) writeFile(text string) {
 
 // rotate 轮转当前文件。
 //
-// 命名用序号后缀 .1 .2 ...，而**不是**时间戳：序号让"哪个更旧"一眼可见，
-// 而时间戳命名在按名字排序时会得到正确的顺序、却在人肉翻看时多一道换算。
+// 归档采用「序号 + gzip」：kc.log 压缩为 kc.log.1.gz，旧的依次后移。序号让
+// "哪个更旧"一眼可见；压缩把归档的磁盘占用降到原来的十分之一上下——日志
+// 的主要体积是高度重复的时间戳与模块前缀，正是 gzip 最擅长的内容。
+// 压缩失败时退回纯改名（kc.log.1），宁可多占空间也不丢排障依据。
 func (l *Logger) rotate() {
 	if l.file == nil {
 		return
@@ -271,21 +291,80 @@ func (l *Logger) rotate() {
 
 	base := filepath.Join(l.opts.Dir, l.opts.FileName)
 	// 丢掉最旧的那个。
-	oldest := fmt.Sprintf("%s.%d", base, l.opts.KeepFiles)
+	oldest := fmt.Sprintf("%s.%d.gz", base, l.opts.KeepFiles)
 	_ = os.Remove(oldest)
-	// 依次后移。
+	// 依次后移。历史版本留下的未压缩归档一并后移，升级后自然收敛成 .gz。
 	for i := l.opts.KeepFiles - 1; i >= 1; i-- {
 		src := fmt.Sprintf("%s.%d", base, i)
 		dst := fmt.Sprintf("%s.%d", base, i+1)
 		if _, err := os.Stat(src); err == nil {
 			_ = os.Rename(src, dst)
 		}
+		src = src + ".gz"
+		dst = dst + ".gz"
+		if _, err := os.Stat(src); err == nil {
+			_ = os.Rename(src, dst)
+		}
 	}
-	_ = os.Rename(base, base+".1")
+	// 保留数被调小后，超出上限的归档在上面的后移里够不到，这里统一清扫。
+	// 上限取一个远超合理配置的值：清的是"确定超出任何配置"的序号，多试
+	// 几次 os.Remove 的代价可以忽略。
+	for i := l.opts.KeepFiles + 1; i <= maxArchiveSweep; i++ {
+		_ = os.Remove(fmt.Sprintf("%s.%d", base, i))
+		_ = os.Remove(fmt.Sprintf("%s.%d.gz", base, i))
+	}
+	if err := compressFile(base, base+".1.gz"); err != nil {
+		_, _ = os.Stderr.WriteString("日志归档压缩失败: " + err.Error() + "\n")
+		_ = os.Rename(base, base+".1")
+	}
 
 	if err := l.openFile(); err != nil {
 		_, _ = os.Stderr.WriteString("日志轮转后重开失败: " + err.Error() + "\n")
 	}
+}
+
+// maxArchiveSweep 是轮转时清扫超出保留数归档的序号上限。
+//
+// 设置项允许的最大保留数是 60；这里留足余量，保证任何合法配置下「超出
+// 上限的归档」都能在一次轮转里被清掉。
+const maxArchiveSweep = 256
+
+// compressFile 把 src 压缩写到 dst，成功后删除 src。
+//
+// 先写临时文件再改名：压缩中途失败（磁盘满）会留下半个 gz，直接以目标名
+// 落地会让导出读到一段解不开的数据；走临时文件则失败时目标名根本不存在。
+func compressFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	tmp := dst + ".tmp"
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	gz := gzip.NewWriter(out)
+	if _, err := io.Copy(gz, in); err != nil {
+		_ = gz.Close()
+		_ = out.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := gz.Close(); err != nil {
+		_ = out.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Remove(src); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dst)
 }
 
 func (l *Logger) openFile() error {
@@ -412,8 +491,29 @@ func (l *Logger) rotatedFilesLocked() []RotatedFile {
 			ModTime:   info.ModTime().Format(time.RFC3339),
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	// 按序号而不是文件名排序：保留数超过 9 之后，字典序会把 kc.log.10.gz
+	// 排在 kc.log.2.gz 前面，而那是"最旧的排最前"的错觉来源。
+	sort.Slice(out, func(i, j int) bool {
+		return rotatedIndex(out[i].Name) < rotatedIndex(out[j].Name)
+	})
 	return out
+}
+
+// rotatedIndex 从归档文件名里取序号（kc.log.3.gz → 3）；取不出时排最后。
+func rotatedIndex(name string) int {
+	dot := strings.Index(name, ".")
+	if dot < 0 {
+		return 1 << 30
+	}
+	rest := name[dot+1:]
+	if i := strings.Index(rest, "."); i >= 0 {
+		rest = rest[:i]
+	}
+	n, err := strconv.Atoi(rest)
+	if err != nil {
+		return 1 << 30
+	}
+	return n
 }
 
 // TailQuery 是在线查看的筛选条件。
@@ -476,18 +576,36 @@ func (l *Logger) ExportText() (string, error) {
 	}
 
 	var b strings.Builder
-	// 轮转文件：序号大的更旧。
+	// 轮转文件：序号大的更旧。gz 与历史遗留的未压缩归档都读。
 	for i := len(rotated) - 1; i >= 0; i-- {
-		data, err := os.ReadFile(filepath.Join(dir, rotated[i].Name))
-		if err != nil {
-			continue
+		if data, err := readMaybeGz(filepath.Join(dir, rotated[i].Name)); err == nil {
+			b.Write(data)
 		}
-		b.Write(data)
 	}
 	if data, err := os.ReadFile(filepath.Join(dir, name)); err == nil {
 		b.Write(data)
 	}
 	return b.String(), nil
+}
+
+// readMaybeGz 读取一个日志文件；.gz 结尾的先解压。
+//
+// 解压失败时返回错误（调用方跳过该文件）：一个损坏的归档不该让整个导出
+// 失败——其它归档与当前文件仍然是完整的排障依据。
+func readMaybeGz(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.HasSuffix(path, ".gz") {
+		return data, nil
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer gz.Close()
+	return io.ReadAll(gz)
 }
 
 // Purge 删除全部轮转文件并清空当前文件，返回释放的字节数。

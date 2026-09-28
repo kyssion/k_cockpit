@@ -10,6 +10,7 @@ import (
 	"k_cockpit/internal/authz"
 	"k_cockpit/internal/computequota"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/settings"
 )
 
 // describeErr 取业务错误的面向用户文案。
@@ -125,9 +126,18 @@ func (s *Service) CreateFormOf(ctx context.Context, nodeID int64, v authz.Viewer
 		return nil, api.InvalidParameter("必须指定节点")
 	}
 
+	values := createValues()
+	// 默认磁盘 IOPS（G-45）来自系统设置而不是矩阵里的静态 "0"：向导里
+	// 预填它，用户看到的第一眼就是"这台机器会带上什么限速"，而不是提交
+	// 之后才发现被补了一个默认值。
+	if s.settings != nil {
+		if n := s.settings.Int(settings.KeyVMDefaultDiskIOPS, 0); n > 0 {
+			values["disk_iops_total"] = n
+		}
+	}
 	form := &CreateForm{
 		Fields:         createFields(),
-		Values:         createValues(),
+		Values:         values,
 		Groups:         createGroups,
 		ISOFiles:       []ISOOption{},
 		Switches:       []SwitchOption{},

@@ -154,7 +154,6 @@ func (h *Console) ConnectionFile(ctx context.Context, c *app.RequestContext) {
 
 	c.Response.Header.Set("Content-Type", "application/x-virt-viewer; charset=utf-8")
 	c.Response.Header.Set("Content-Disposition", `attachment; filename="`+file.Filename+`"`)
-	c.Response.Header.Set("X-Content-Type-Options", "nosniff")
 	// delete-this-file=1 已经写进文件内容，这里再标一次只是为了让中间的
 	// 下载管理器也不要把它留在"下载"目录里——那是一个含凭据的文件。
 	c.Response.Header.Set("Cache-Control", "no-store")

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"sort"
+	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
@@ -14,6 +15,16 @@ import (
 type Endpoint struct {
 	Method string `json:"method"`
 	Path   string `json:"path"`
+	// Summary 是一句话摘要（G-50）：优先取人工登记的覆盖表，其余按方法
+	// 与路径形状生成——自动生成的措辞覆盖 CRUD，个别接口以覆盖表校准。
+	Summary string `json:"summary"`
+	// Module 是模块名，与 API.md 的划分一致。
+	Module string `json:"module"`
+	// Auth 取值 public / user / admin（按注册处的显式数据表判定）。
+	Auth   string        `json:"auth"`
+	Params []apiDocParam `json:"params,omitempty"`
+	// Curl 是可复制的示例命令。
+	Curl string `json:"curl"`
 }
 
 // APIDocs 提供接口清单（F-9-07）。
@@ -34,7 +45,18 @@ func NewAPIDocs(h *server.Hertz) *APIDocs {
 		if r.Method == "OPTIONS" {
 			continue
 		}
-		out = append(out, Endpoint{Method: r.Method, Path: r.Path})
+		// 认证与摘要的匹配都以去掉 /api/v1 前缀的相对路径为键。
+		rel := strings.TrimPrefix(r.Path, "/api/v1")
+		e := Endpoint{
+			Method:  r.Method,
+			Path:    r.Path,
+			Summary: summarizeOf(r.Method, rel),
+			Module:  moduleOf(splitPath(rel)),
+			Auth:    authOf(rel, r.Method),
+			Params:  paramsOf(rel),
+		}
+		e.Curl = curlOf(r.Method, r.Path, e.Auth)
+		out = append(out, e)
 	}
 	// 排序：同一份数据每次都按同样的顺序返回，界面上的分组才不会跳动。
 	sort.Slice(out, func(i, j int) bool {

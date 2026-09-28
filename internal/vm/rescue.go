@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"path"
+	"strings"
 
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/audit"
 	"k_cockpit/internal/authz"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/settings"
 	"k_cockpit/internal/task"
 )
 
@@ -83,6 +86,31 @@ func (s *Service) EnterRescue(
 	}
 	snapshot := string(snap)
 
+	// 救援镜像（G-47）：设置里指定了就随指令下发，否则用节点内置的默认
+	// 镜像。路径按宿主机语义校验：相对 ISO 存放目录、不允许绝对路径，
+	// 前导斜杠之后 path.Clean 会消掉全部 ".." 段，根化的结果不可能是目录逃逸。
+	rescueISO := ""
+	if s.settings != nil {
+		rescueISO = strings.TrimSpace(s.settings.String(settings.KeyVMRescueISO, ""))
+	}
+	if rescueISO != "" &&
+		(strings.HasPrefix(rescueISO, "/") || path.Clean("/"+rescueISO) == "/") {
+		return nil, api.InvalidParameter("救援 ISO 路径不合法（必须是 ISO 存放目录内的相对路径）")
+	}
+
+	params := map[string]any{
+		"vm_id":   vm.ID,
+		"vm_name": vm.Name,
+		// 快照随任务一起持久化，而不是在受理时先写库：写入库意味着
+		// 任务失败时库里存着一份没有对应救援状态的快照，而退出时
+		// 会拿它去还原一台从未进入过救援的机器。
+		"snapshot":        snapshot,
+		"observed_status": current,
+	}
+	if rescueISO != "" {
+		params["rescue_iso"] = rescueISO
+	}
+
 	t, err := s.queue.Enqueue(ctx, task.Spec{
 		Type:         model.TaskVMRescueEnter,
 		NodeID:       vm.NodeID,
@@ -91,25 +119,21 @@ func (s *Service) EnterRescue(
 		ResourceName: vm.Name,
 		OwnerID:      ownerOf(vm, v),
 		CreatedBy:    v.UserID,
-		Params: map[string]any{
-			"vm_id":   vm.ID,
-			"vm_name": vm.Name,
-			// 快照随任务一起持久化，而不是在受理时先写库：写入库意味着
-			// 任务失败时库里存着一份没有对应救援状态的快照，而退出时
-			// 会拿它去还原一台从未进入过救援的机器。
-			"snapshot":        snapshot,
-			"observed_status": current,
-		},
+		Params:       params,
 	})
 	if err != nil {
 		return nil, err
 	}
 
+	auditParams := map[string]any{"task_id": t.ID}
+	if rescueISO != "" {
+		auditParams["rescue_iso"] = rescueISO
+	}
 	s.record(ctx, audit.Entry{
 		OperatorID: v.UserID, OperatorName: operatorName,
 		NodeID: vm.NodeID, ResourceType: "vm", ResourceID: vm.ID,
 		ResourceName: vm.Name, Action: "vm.rescue.enter",
-		Params: map[string]any{"task_id": t.ID}, Success: true, ClientIP: clientIP,
+		Params: auditParams, Success: true, ClientIP: clientIP,
 	})
 	return t, nil
 }

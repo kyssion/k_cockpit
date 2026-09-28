@@ -33,6 +33,12 @@ type APIKeyAuth interface {
 	Authenticate(ctx context.Context, plain, fromIP string) (*APIKeyPrincipal, error)
 }
 
+// ActionTokenAuth 是一次性动作令牌的消费入口（接口方向的理由同上）。
+type ActionTokenAuth interface {
+	// ConsumeActionToken 校验并消费令牌，返回它所属的用户 ID。
+	ConsumeActionToken(ctx context.Context, plain, purpose string) (int64, error)
+}
+
 // APIKeyPrincipal 是凭证校验通过后的身份。
 type APIKeyPrincipal struct {
 	UserID int64
@@ -45,6 +51,8 @@ type Middleware struct {
 	svc *Service
 	// apiKey 为 nil 时**不支持** API 凭证认证（如测试环境）。
 	apiKey APIKeyAuth
+	// actionToken 为 nil 时**不支持** URL 携带的一次性动作令牌。
+	actionToken ActionTokenAuth
 }
 
 // NewMiddleware 构造认证中间件。
@@ -58,6 +66,12 @@ func NewMiddleware(svc *Service) *Middleware {
 // 一个可选能力改动签名。
 func (m *Middleware) WithAPIKey(a APIKeyAuth) *Middleware {
 	m.apiKey = a
+	return m
+}
+
+// WithActionToken 挂上一次性动作令牌认证（理由同 WithAPIKey）。
+func (m *Middleware) WithActionToken(a ActionTokenAuth) *Middleware {
+	m.actionToken = a
 	return m
 }
 
@@ -82,6 +96,24 @@ func (m *Middleware) Require(activity Activity) app.HandlerFunc {
 				// 给了 Authorization 但校验不通过时**直接拒绝**，不再回落到
 				// Cookie。回落会让一个已撤销的 Key 在浏览器会话仍然有效时
 				// 继续「工作」，而用户以为自己已经把它撤销了。
+				api.Fail(c, errUnauthenticated)
+				c.Abort()
+				return
+			}
+		}
+
+		// 一次性动作令牌走查询参数 action_token：它存在的理由就是让
+		// `<a href>` 与下载器这类带不上自定义请求头的场景能通过 URL
+		// 完成认证。消费即失效，因此失败与成功一样都只发生一次。
+		//
+		// 顺序在 Cookie 之前、Bearer 之后：令牌是**一次性的**，若放在
+		// Cookie 之后，一个已登录的浏览器会先走 Cookie 把它留着不消费，
+		// 而用户复制这条 URL 到别处用时会撞上「已失效」。
+		if m.actionToken != nil {
+			if plain := string(c.Query(ActionTokenQuery)); plain != "" {
+				if m.authenticateByActionToken(ctx, c, plain) {
+					return
+				}
 				api.Fail(c, errUnauthenticated)
 				c.Abort()
 				return
@@ -172,6 +204,12 @@ func (m *Middleware) authenticateByKey(
 	return true
 }
 
+// ActionTokenQuery 是一次性动作令牌在 URL 里的查询参数名。
+//
+// 走查询参数而不是头：这个令牌的使用场景（浏览器直链下载、下载器）恰恰
+// 是"带不上头"的那些。令牌本身短期且一次性，进访问日志的风险由此封顶。
+const ActionTokenQuery = "action_token"
+
 // bearerToken 从 Authorization 头里取出 Bearer 令牌。
 func bearerToken(c *app.RequestContext) (string, bool) {
 	raw := string(c.GetHeader("Authorization"))
@@ -184,6 +222,28 @@ func bearerToken(c *app.RequestContext) (string, bool) {
 		return "", false
 	}
 	return token, true
+}
+
+// authenticateByActionToken 消费一次性令牌并注入用户，成功返回 true。
+//
+// 与 API 凭证一样**不设置会话**：动作令牌没有会话语义，且消费后立即失效。
+// 用途固定为 download——目前唯一的使用场景就是文件下载。
+func (m *Middleware) authenticateByActionToken(ctx context.Context, c *app.RequestContext, plain string) bool {
+	userID, err := m.actionToken.ConsumeActionToken(ctx, plain, "download")
+	if err != nil || userID <= 0 {
+		return false
+	}
+
+	var user model.User
+	if err := m.svc.db.WithContext(ctx).Where("id = ?", userID).First(&user).Error; err != nil {
+		return false
+	}
+	if user.Status != model.UserStatusActive {
+		return false
+	}
+
+	c.Set(ctxKeyUser, &user)
+	return true
 }
 
 // CurrentUser 返回当前登录用户；未认证时为 nil。

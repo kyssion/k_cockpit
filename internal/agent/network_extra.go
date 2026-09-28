@@ -25,6 +25,13 @@ const (
 	OpNetworkCounterReset OpKind = "network.counter.reset"
 	// OpNetworkIPv6Policy 下发 IPv6 保护策略与可信前缀。
 	OpNetworkIPv6Policy OpKind = "network.ipv6.policy"
+	// OpNetworkGlobalBandwidth 应用全局带宽总限（G-44）。
+	//
+	// 语义是**节点出向总限**：全部虚拟机的流量共享这一个额度，在宿主机的
+	// 上行做整形（OVS qos），而不是给某台机器限速。与其他两档的分工：
+	// 累计型配额（流量 / 时长）管"一段时间用多少"，交换机级限速管"这个
+	// 网络里跑多快"，这一档管"这台宿主机总共能出多少"。
+	OpNetworkGlobalBandwidth OpKind = "network.global_bandwidth.apply"
 )
 
 // SwitchActionDataKey 是交换机维护动作结果的键。
@@ -67,4 +74,17 @@ type IPv6PolicyInfo struct {
 	Message string
 	// Trusted 是节点实际接受的可信前缀（回显，便于核对有没有被规范化）。
 	Trusted []string
+}
+
+// GlobalBandwidthDataKey 是全局带宽下发结果的键。
+const GlobalBandwidthDataKey = "global_bandwidth"
+
+// GlobalBandwidthInfo 是全局带宽下发的结果。
+type GlobalBandwidthInfo struct {
+	Applied bool
+	// Mbps 是实际生效的总限（回显，便于核对取值有没有被节点规范化）。
+	Mbps int
+	// BurstMbps 是突发峰值；0 表示未启用突发额度。
+	BurstMbps int
+	Message   string
 }

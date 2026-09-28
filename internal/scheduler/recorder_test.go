@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -253,5 +254,59 @@ func TestRegisterBuiltinsCoversAllKeys(t *testing.T) {
 		if info.Name == "" || info.Description == "" || info.Group == "" {
 			t.Errorf("%s 的名称/分组/说明不能为空", key)
 		}
+	}
+}
+
+// TestRetentionRunOnce 覆盖保留期清理（G-48）：过期的事件被删、保留期内的
+// 留下，且只有真的删了才记事件。
+func TestRetentionRunOnce(t *testing.T) {
+	db, err := database.Open(config.DB{
+		Driver:       config.DriverSQLite,
+		Path:         filepath.Join(t.TempDir(), "retention.db"),
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	}, false)
+	if err != nil {
+		t.Fatalf("打开测试库失败: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	if err := db.AutoMigrate(&model.SchedulerEvent{}); err != nil {
+		t.Fatalf("建表失败: %v", err)
+	}
+
+	rec := scheduler.NewRecorder(db, nil)
+	loop := scheduler.NewRetentionLoop(db, rec, scheduler.RetentionOptions{KeepHours: func() int { return 24 }})
+
+	old := model.SchedulerEvent{SchedulerKey: scheduler.KeyTaskQueue, At: time.Now().Add(-48 * time.Hour)}
+	fresh := model.SchedulerEvent{SchedulerKey: scheduler.KeyTaskQueue, At: time.Now().Add(-time.Hour)}
+	if err := db.Create(&old).Error; err != nil || db.Create(&fresh).Error != nil {
+		t.Fatalf("造数据失败: %v", err)
+	}
+
+	deleted, err := loop.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("清理失败: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("应删除 1 条过期事件，实际 %d", deleted)
+	}
+	var remain int64
+	db.Model(&model.SchedulerEvent{}).Count(&remain)
+	if remain != 2 { // 剩下 fresh + 清理动作自身记的那条
+		t.Errorf("应保留 1 条未过期事件 + 1 条清理事件，实际 %d", remain)
+	}
+
+	// 没有过期事件时不产生新事件。
+	before := remain
+	if _, err := loop.RunOnce(context.Background()); err != nil {
+		t.Fatalf("第二次清理失败: %v", err)
+	}
+	db.Model(&model.SchedulerEvent{}).Count(&remain)
+	if remain != before {
+		t.Errorf("无过期事件时不应记录清理事件（%d → %d）", before, remain)
 	}
 }

@@ -26,6 +26,10 @@ const (
 	// GroupNotification 是邮件与通知设置。它曾长期是「未交付标签」——
 	// 直到发信能力落地之前，把半成品显示出来只会让人以为功能坏了（R-005）。
 	GroupNotification = "notification"
+	// GroupLogging 是日志归档策略（G-43）。
+	GroupLogging = "logging"
+	// GroupScheduler 是调度相关的运营旋钮（G-48）。
+	GroupScheduler = "scheduler"
 )
 
 // GroupInfo 是分组的展示信息。
@@ -47,6 +51,8 @@ var groups = []GroupInfo{
 	// 现在邮件能力已交付，分组随之进入清单——留着那个占位项只会让
 	// 「SMTP 服务器」孤零零地出现，而密码、端口、加密方式都不见了。
 	{Key: GroupNotification, Label: "通知", Order: 7},
+	{Key: GroupLogging, Label: "日志", Order: 8},
+	{Key: GroupScheduler, Label: "调度", Order: 9},
 }
 
 // Kind 是设置项的值类型。
@@ -82,6 +88,33 @@ const (
 const (
 	KeyVMStaleThreshold      = "vm.stale_threshold_seconds"
 	KeyStorageStaleThreshold = "storage.stale_threshold_minutes"
+	// KeySiteURL 是站点对外地址：拼邀请链接等「要发给站外的人」的链接时使用。
+	// 由 internal/settings 声明、internal/invite 消费。
+	KeySiteURL = "basic.site_url"
+	// KeyLogKeepFiles 是日志归档的保留数量（不含当前文件）。
+	// 由 internal/settings 声明、internal/logging 消费（经 main 装配）。
+	KeyLogKeepFiles = "logging.keep_files"
+	// KeyNetworkGlobalBandwidth / KeyNetworkGlobalBurst 是速率型全局带宽
+	// 总限（G-44）：全部虚拟机共享的节点出向总限与突发峰值。
+	// 由 internal/settings 声明、internal/network 消费（下发动作）。
+	KeyNetworkGlobalBandwidth = "network.global_bandwidth_mbps"
+	KeyNetworkGlobalBurst     = "network.global_burst_mbps"
+	// KeyVMDefaultDiskIOPS 是新建虚拟机时未显式填写 IOPS 的默认值（G-45）。
+	// 由 internal/settings 声明、internal/vm 消费（向导预填 + 受理兜底）。
+	KeyVMDefaultDiskIOPS = "vm.default_disk_iops"
+	// KeyVMRescueISO 是救援模式的启动镜像（G-47）：ISO 存放目录下的相对
+	// 路径；留空表示沿用节点的内置默认救援镜像。
+	KeyVMRescueISO = "vm.rescue_iso"
+	// KeySchedulerEventKeepHours 是调度事件的保留期（G-48）。
+	// 由 internal/settings 声明、internal/scheduler 消费（保留清理循环）。
+	KeySchedulerEventKeepHours = "scheduler.event_keep_hours"
+	// KeyStorageAutoTrim 是存储空间自动回收开关（G-52）。
+	// 由 internal/settings 声明、internal/storage 消费（trim 循环）。
+	KeyStorageAutoTrim = "storage.auto_trim_enabled"
+	// KeyNetworkPortRangeStart / End 是端口转发宿主机端口的自动分配范围
+	// （G-54）。由 internal/settings 声明、internal/vm 消费（受理时分配）。
+	KeyNetworkPortRangeStart = "network.port_range_start"
+	KeyNetworkPortRangeEnd   = "network.port_range_end"
 )
 
 // SMTP 相关设置项的键：由 internal/settings 声明、internal/mailer 消费。
@@ -146,6 +179,20 @@ var specs = []Spec{
 		Kind:         KindString,
 		Default:      "K Cockpit",
 		EnvVar:       "SITE_NAME",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+	},
+	{
+		// 站点对外地址：邀请链接要发给站外的人，相对路径对他们没有意义。
+		// 留空时邀请链接按相对路径返回，界面会提示管理员补上——猜一个错误
+		// 域名比给相对路径更糟（收件人点开是别人的站点）。
+		Key:          KeySiteURL,
+		Group:        GroupBasic,
+		Label:        "站点对外地址",
+		Description:  "拼进邀请链接等发给站外用户的地址，例如 https://panel.example.com。留空时链接为相对路径，站外无法直接打开。",
+		Kind:         KindString,
+		Default:      "",
+		EnvVar:       "SITE_URL",
 		Apply:        ApplyImmediate,
 		Rollbackable: true,
 	},
@@ -221,6 +268,36 @@ var specs = []Spec{
 		MaxValue:     intPtr(3600),
 		Unit:         "秒",
 	},
+	{
+		// 默认磁盘 IOPS（G-45）：向导会预填这个值；受理时三个 IOPS 项都
+		// 未填的请求也会用它兜底——"新机器默认带限速"由此成为一处配置，
+		// 而不是每台机器都要记得去改一遍。
+		Key:          KeyVMDefaultDiskIOPS,
+		Group:        GroupVM,
+		Label:        "默认磁盘 IOPS",
+		Description:  "新建虚拟机时预填的 IOPS 上限（总量）。0 表示默认不限制；显式填写了的请求不受它影响。",
+		Kind:         KindInt,
+		Default:      "0",
+		EnvVar:       "VM_DEFAULT_DISK_IOPS",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+		MinValue:     intPtr(0),
+		MaxValue:     intPtr(1000000),
+	},
+	{
+		// 救援系统 ISO（G-47）：救援模式此前只能用节点内置的默认镜像，
+		// 管理员换成自己维护的救援盘（SystemRescueCd、WinPE 等）没有入口。
+		// 是**宿主机上**的路径：相对 ISO 存放目录（storage.iso_dir）。
+		Key:          KeyVMRescueISO,
+		Group:        GroupVM,
+		Label:        "救援系统 ISO",
+		Description:  "救援模式启动用的镜像，相对 ISO 存放目录的路径（例如 rescue/systemrescue.iso）。留空用节点内置的默认救援镜像。",
+		Kind:         KindString,
+		Default:      "",
+		EnvVar:       "VM_RESCUE_ISO",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+	},
 
 	// --- 存储 ---
 	{
@@ -288,6 +365,20 @@ var specs = []Spec{
 		Unit:         "天",
 	},
 	{
+		// 输入侧防护（请求过滤）：拦路径穿越 / 空字节 / 扫描器探测与
+		// 异常 Content-Type。默认开——它是安全边界；提供开关是为了排查
+		// 「某个客户端被误拦」时能临时关掉，而不是让人平时关着。
+		Key:          "security.request_filter_enabled",
+		Group:        GroupSecurity,
+		Label:        "请求过滤（输入侧防护）",
+		Description:  "拦截路径穿越、空字节、扫描器探测路径与异常 Content-Type 的请求。排查客户端被误拦时可临时关闭。",
+		Kind:         KindBool,
+		Default:      "true",
+		EnvVar:       "SECURITY_REQUEST_FILTER_ENABLED",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+	},
+	{
 		// 定时弱口令检查。
 		//
 		// 真正的"泄露"判定（比对泄露库）需要外部数据，控制面不联网也不持有
@@ -347,6 +438,20 @@ var specs = []Spec{
 		Rollbackable: true,
 	},
 	{
+		// 存储空间自动回收（G-52）：删盘后块设备上的可回收块随时间积累，
+		// 自动 trim 让"记得去点"不再是回收发生的前提。执行结果在调度
+		// 事件里（调度器页可见）。
+		Key:          KeyStorageAutoTrim,
+		Group:        GroupStorage,
+		Label:        "自动回收存储空间",
+		Description:  "每天对全部在线节点执行一次 trim，回收已删除虚拟磁盘占用的块。执行结果见调度器页的「存储空间自动回收」事件。",
+		Kind:         KindBool,
+		Default:      "false",
+		EnvVar:       "STORAGE_AUTO_TRIM_ENABLED",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+	},
+	{
 		Key:          "storage.temp_dir",
 		Group:        GroupStorage,
 		Label:        "临时目录",
@@ -373,6 +478,67 @@ var specs = []Spec{
 			{Value: "nat", Label: "NAT 出网"},
 			{Value: "empty", Label: "隔离（无上行）"},
 		},
+	},
+	{
+		// 全局带宽总限（G-44）：与累计型配额（按月流量）、交换机级限速分工，
+		// 管的是"这台宿主机总共能出多少"。0 表示不限。
+		//
+		// 注意它只改控制面的值：节点上的整形规则要在网络中心点「应用」才会
+		// 对齐——设置可以被批量回滚，而节点状态只能靠一次明确动作收敛。
+		Key:          KeyNetworkGlobalBandwidth,
+		Group:        GroupNetwork,
+		Label:        "全局带宽总限",
+		Description:  "全部虚拟机共享的节点出向总带宽。0 表示不限。修改后需在网络中心「应用到节点」才会下发。",
+		Kind:         KindInt,
+		Default:      "0",
+		EnvVar:       "NETWORK_GLOBAL_BANDWIDTH_MBPS",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+		MinValue:     intPtr(0),
+		MaxValue:     intPtr(400000),
+		Unit:         "Mbps",
+	},
+	{
+		// 端口自动分配范围（G-54）：新增端口转发时宿主机端口留空，即从该
+		// 范围内取一个未被占用的（同一节点、同一协议内独占）。
+		Key:          KeyNetworkPortRangeStart,
+		Group:        GroupNetwork,
+		Label:        "端口自动分配起点",
+		Description:  "新增端口转发时宿主机端口留空，自动从这个范围里取未占用的端口。",
+		Kind:         KindInt,
+		Default:      "10000",
+		EnvVar:       "NETWORK_PORT_RANGE_START",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+		MinValue:     intPtr(1024),
+		MaxValue:     intPtr(65535),
+	},
+	{
+		Key:          KeyNetworkPortRangeEnd,
+		Group:        GroupNetwork,
+		Label:        "端口自动分配终点",
+		Description:  "自动分配范围的上界（含）。范围应避开宿主机临时端口段（通常 32768 起）。",
+		Kind:         KindInt,
+		Default:      "20000",
+		EnvVar:       "NETWORK_PORT_RANGE_END",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+		MinValue:     intPtr(1024),
+		MaxValue:     intPtr(65535),
+	},
+	{
+		Key:          KeyNetworkGlobalBurst,
+		Group:        GroupNetwork,
+		Label:        "全局带宽突发峰值",
+		Description:  "短暂突发时允许达到的峰值，仅在设置了总限时有效。0 表示不启用突发额度。",
+		Kind:         KindInt,
+		Default:      "0",
+		EnvVar:       "NETWORK_GLOBAL_BURST_MBPS",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+		MinValue:     intPtr(0),
+		MaxValue:     intPtr(400000),
+		Unit:         "Mbps",
 	},
 
 	// --- 通知（邮件）---
@@ -478,6 +644,45 @@ var specs = []Spec{
 		MinValue:     intPtr(5),
 		MaxValue:     intPtr(120),
 		Unit:         "秒",
+	},
+
+	// --- 日志 ---
+	//
+	// 归档本身（按大小轮转 + gzip 压缩）在 internal/logging 里，这里只管
+	// 保留多少。缩小数值不会立刻删历史归档：排障依据不该为了界面上数字
+	// 好看而被顺手清掉，收敛发生在下一次轮转。
+	{
+		Key:          KeyLogKeepFiles,
+		Group:        GroupLogging,
+		Label:        "日志最大备份数",
+		Description:  "轮转归档（已压缩）的保留数量，不含当前文件。归档按大小轮转并压缩存放。",
+		Kind:         KindInt,
+		Default:      "5",
+		EnvVar:       "LOG_KEEP_FILES",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+		MinValue:     intPtr(1),
+		MaxValue:     intPtr(60),
+		Unit:         "个",
+	},
+
+	// --- 调度 ---
+	{
+		// 调度事件保留期（G-48）：事件表只在调度器实际做了事时才有行，
+		// 但一个反复失败的调度器每轮都留一条失败记录，保留期给这件事
+		// 一个确定的边界。
+		Key:          KeySchedulerEventKeepHours,
+		Group:        GroupScheduler,
+		Label:        "调度事件保留期",
+		Description:  "超过该小时数的调度事件会被周期清理（默认 168 小时 = 一周）。",
+		Kind:         KindInt,
+		Default:      "168",
+		EnvVar:       "SCHEDULER_EVENT_KEEP_HOURS",
+		Apply:        ApplyImmediate,
+		Rollbackable: true,
+		MinValue:     intPtr(1),
+		MaxValue:     intPtr(8760),
+		Unit:         "小时",
 	},
 }
 

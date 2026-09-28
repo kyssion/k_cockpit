@@ -691,6 +691,13 @@ func (s *Service) CreateBatch(
 		return nil, err
 	}
 
+	// 默认磁盘 IOPS（G-45）：三个 IOPS 项都没填的请求用设置值兜底。只在
+	// 全空的请求上生效——用户显式填了 0（明确表示不限速）与"没填"是两回事，
+	// 前者不该被覆盖。
+	if req.DiskIOPSTotal == 0 && req.DiskIOPSRead == 0 && req.DiskIOPSWrite == 0 && s.settings != nil {
+		req.DiskIOPSTotal = s.settings.Int(settings.KeyVMDefaultDiskIOPS, 0)
+	}
+
 	// 配额按**整批**校验（R-005）：逐台校验会让第 N 台在写入前才发现超额，
 	// 而那时前面几台已经建好了——用户看到的是「建了一半」。
 	//

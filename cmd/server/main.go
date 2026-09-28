@@ -7,8 +7,11 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app/server"
@@ -37,6 +40,7 @@ import (
 	"k_cockpit/internal/invite"
 	"k_cockpit/internal/logging"
 	"k_cockpit/internal/mailer"
+	"k_cockpit/internal/maintenance"
 	"k_cockpit/internal/monitor"
 	"k_cockpit/internal/network"
 	"k_cockpit/internal/networkbridge"
@@ -54,6 +58,7 @@ import (
 	"k_cockpit/internal/risk"
 	"k_cockpit/internal/router"
 	"k_cockpit/internal/schedule"
+	"k_cockpit/internal/scheduler"
 	sched "k_cockpit/internal/scheduler"
 	"k_cockpit/internal/search"
 	"k_cockpit/internal/securitygroup"
@@ -136,6 +141,7 @@ type app struct {
 	vmSvc           *vm.Service
 	computeQuotaSvc *computequota.Service
 	alertSvc        *alert.Service
+	maintenanceSvc  *maintenance.Service
 	storageSvc      *storage.Service
 	scheduleSvc     *schedule.Service
 	templateSvc     *template.Service
@@ -145,12 +151,14 @@ type app struct {
 	schedRecorder *sched.Recorder
 
 	// 后台周期组件
-	scheduler     *schedule.Scheduler
-	quotaLoop     *quotaenforce.Loop
-	alertLoop     *alert.Loop
-	passAuditLoop *passaudit.Loop
-	authKeyLoop   *authkey.Loop
-	collector     *monitor.Collector
+	scheduler      *schedule.Scheduler
+	quotaLoop      *quotaenforce.Loop
+	alertLoop      *alert.Loop
+	schedRetention *scheduler.RetentionLoop
+	trimLoop       *storage.TrimLoop
+	passAuditLoop  *passaudit.Loop
+	authKeyLoop    *authkey.Loop
+	collector      *monitor.Collector
 }
 
 func main() {
@@ -427,6 +435,8 @@ func (a *app) setupSchedulerRegistry() {
 		QueuePollInterval:      task.DefaultOptions().PollInterval,
 		QuotaEvalInterval:      quotaenforce.DefaultOptions().Interval,
 		PasswordAuditInterval:  24 * time.Hour,
+		RetentionInterval:      time.Hour,
+		TrimInterval:           24 * time.Hour,
 	})
 	// 记录器在这里建好（在**所有**周期组件之前）：定时任务扫描器与采集器
 	// 构造之后马上就要接上它。
@@ -460,6 +470,10 @@ func (a *app) setupSettingsServices() {
 	// 无需重启——"测试邮件"按钮是验证配置是否正确的唯一手段，重启才能生效
 	// 会让那个按钮看起来一直是坏的。
 	a.mailSvc = mailer.New(a.settingsSvc.MailConfig)
+	// 日志归档保留数来自设置项：启动时取一次，之后每次修改立即应用
+	// （applier 里改的是同一个 Logger 的选项，写路径不受影响）。
+	a.logger.SetKeepFiles(a.settingsSvc.Int(settings.KeyLogKeepFiles, 5))
+	a.settingsSvc.RegisterApplier(settings.KeyLogKeepFiles, intApplier{fn: a.logger.SetKeepFiles})
 	// 登录阶段的二次验证复用 risk 的校验逻辑（恢复码一次性、TOTP 容差），
 	// 接线在 router.Register 内完成——漏接的表现是"登录时永远提示服务
 	// 不可用"，而编译期看不出来。
@@ -498,8 +512,12 @@ func (a *app) setupResourceServices() {
 				"请打开下面的链接完成注册（链接三天内有效）：\n"+link+"\n\n"+
 				"如果你并不认识邀请你的人，请忽略这封邮件。\n")
 	})
-	// 站点地址留空 —— 链接是相对路径（/invite/<token>）。邮件里给相对链接比猜一个错误域名更安全：管理员转发时自己补域名。
-	a.inviteSvc.SetSiteURL(func(ctx context.Context) string { return "" })
+	// 链接里的站点地址取自设置项（环境变量 > 面板设置 > 默认值），读取发生在
+	// 每次拼链接时，因此改设置立即生效。没有配置时返回空串、链接退化为相对
+	// 路径——界面会提示管理员补上；猜一个错误域名发给收件人比相对路径更糟。
+	a.inviteSvc.SetSiteURL(func(ctx context.Context) string {
+		return a.settingsSvc.String(settings.KeySiteURL, "")
+	})
 	// SSH 访问要下发到宿主机，因此接上 agent（不接时只改控制面记录）。
 	a.userAdminSvc.SetAgent(mockAgent)
 	a.tagSvc = vmtag.NewService(db, a.recorder)
@@ -533,6 +551,8 @@ func (a *app) setupObservabilityServices() {
 	// 而它应当随包一起走，不必再让人回头去问。
 	a.diagnosticsSvc.Version = version.Summary()
 	a.networkSvc = network.NewService(db, mockAgent, queue, a.recorder)
+	// 全局带宽总限（G-44）从设置读取：下发时现取值，改设置不需要重启。
+	a.networkSvc.SetSettingsProvider(a.settingsSvc)
 }
 
 // setupComputeServices 装配虚拟机、计算配额、存储、模板与定时任务等计算类服务。
@@ -562,6 +582,10 @@ func (a *app) setupComputeServices() {
 	// 节点操作，因此不需要新的执行器——这也是它能在 mock 之上完整跑通的原因。
 	a.scheduleSvc = schedule.NewService(db)
 	a.templateSvc = template.NewService(db, queue, a.recorder, mockAgent, a.quotaSvc)
+	// 站点维护（G-46）：逐节点接管节点维护模式，批量关机复用 vm 的入队逻辑。
+	// 放在 vmSvc 之后装配——它要把 ShutdownAllOnNode 注入进去。
+	a.maintenanceSvc = maintenance.NewService(db, a.nodeSvc, a.recorder)
+	a.maintenanceSvc.SetVMShutdown(a.vmSvc.ShutdownAllOnNode)
 }
 
 // setupCredentials 给需要可逆凭据的服务注入加密密钥。
@@ -619,6 +643,20 @@ func (a *app) setupBackground() {
 	// 采集有它自己的节奏，与谁在看无关。
 	a.collector = monitor.NewCollector(a.db, a.mockAgent, monitor.DefaultOptions())
 	a.collector.Observe(a.schedRecorder)
+
+	// 调度事件保留清理（G-48）：保留期从设置读取，每次清理前现取值。
+	a.schedRetention = scheduler.NewRetentionLoop(a.db, a.schedRecorder, scheduler.RetentionOptions{
+		KeepHours: func() int {
+			return a.settingsSvc.Int(settings.KeySchedulerEventKeepHours, 168)
+		},
+	})
+
+	// 存储空间自动回收（G-52）：开关从设置读取，执行结果记入调度事件。
+	a.trimLoop = storage.NewTrimLoop(a.db, a.mockAgent, a.schedRecorder, storage.TrimOptions{
+		Enabled: func() bool {
+			return a.settingsSvc.Bool(settings.KeyStorageAutoTrim, false)
+		},
+	})
 }
 
 // startBackground 启动全部后台周期组件。
@@ -630,6 +668,8 @@ func (a *app) startBackground() {
 	go a.passAuditLoop.Start(ctx)
 	go a.authKeyLoop.Start(ctx)
 	a.collector.Start(ctx)
+	go a.schedRetention.Start(ctx)
+	go a.trimLoop.Start(ctx)
 }
 
 // stopBackground 停止需要优雅收尾的周期组件。
@@ -640,6 +680,8 @@ func (a *app) stopBackground() {
 	a.collector.Stop()
 	a.alertLoop.Stop()
 	a.quotaLoop.Stop()
+	a.schedRetention.Stop()
+	a.trimLoop.Stop()
 }
 
 // newHTTPServer 创建 Hertz 服务实例。
@@ -705,6 +747,7 @@ func (a *app) routerDeps() router.Deps {
 		ComputeQuota:  a.computeQuotaSvc,
 		Search:        search.NewService(a.db),
 		Alert:         a.alertSvc,
+		Maintenance:   a.maintenanceSvc,
 		Storage:       a.storageSvc,
 		Network:       a.networkSvc,
 		Settings:      a.settingsSvc,
@@ -713,6 +756,10 @@ func (a *app) routerDeps() router.Deps {
 		VpcACL:        vpcacl.NewService(a.db, a.mockAgent, a.queue, a.recorder),
 		SecureCookie:  a.cfg.Session.SecureCookie,
 		SimulateAgent: a.cfg.Agent.Transport == config.AgentTransportMock,
+		// 请求过滤开关每次请求现读设置：改设置立即生效，不需要重启。
+		InputFilterEnabled: func() bool {
+			return a.settingsSvc.Bool("security.request_filter_enabled", true)
+		},
 	}
 }
 
@@ -730,4 +777,19 @@ func (a quotaAdapter) Set(
 		QuotaBytes: req.QuotaBytes, Enabled: req.Enabled,
 	}, operatorID, operatorName, clientIP)
 	return err
+}
+
+// intApplier 把「设置项改成整数并立即应用」接成一个 settings.Applier。
+//
+// 只做解析与回调：具体的生效动作（如调整日志保留数）由被装配方自己保证
+// 立即生效，失败返回错误以触发设置框架的回滚（R-007）。
+type intApplier struct{ fn func(int) }
+
+func (a intApplier) Apply(_ context.Context, _ string, value string) error {
+	n, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return fmt.Errorf("不是合法整数: %q", value)
+	}
+	a.fn(n)
+	return nil
 }

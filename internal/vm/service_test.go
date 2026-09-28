@@ -1355,13 +1355,46 @@ func TestAddPortForwardValidatesPort(t *testing.T) {
 	row := model.VM{NodeID: 1, Name: "vm-pf-port", OwnerID: ptr(int64(7))}
 	db.Create(&row)
 
-	for _, p := range []int{0, -1, 70000} {
+	// 0 不在拒绝清单里：它现在的语义是「自动分配」（G-54），见
+	// TestAddPortForwardAutoAllocates。
+	for _, p := range []int{-1, 70000} {
 		_, err := svc.AddPortForward(ctx, row.ID, vm.AddPortForwardRequest{
 			Protocol: model.PortProtocolTCP, HostPort: p, TargetPort: 80,
 		}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
 		if err == nil {
 			t.Errorf("端口 %d 应被拒绝", p)
 		}
+	}
+}
+
+// 宿主机端口留空（0）时自动分配（G-54）：在默认范围内取最低的空闲端口，
+// 且避开该节点上已占用的。
+func TestAddPortForwardAutoAllocates(t *testing.T) {
+	svc, _, db := newTestEnv(t)
+	ctx := context.Background()
+
+	row := model.VM{NodeID: 1, Name: "vm-pf-auto", OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	// 预占 10000（范围的第一个），自动分配应跳到 10001。
+	taken := model.PortForward{NodeID: 1, VMID: &row.ID,
+		Protocol: model.PortProtocolTCP, HostPort: 10000, TargetPort: 80, Enabled: true}
+	if err := db.Create(&taken).Error; err != nil {
+		t.Fatalf("预占端口失败: %v", err)
+	}
+
+	if _, err := svc.AddPortForward(ctx, row.ID, vm.AddPortForwardRequest{
+		Protocol: model.PortProtocolTCP, HostPort: 0, TargetPort: 8080,
+	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1"); err != nil {
+		t.Fatalf("自动分配失败: %v", err)
+	}
+
+	var rows []model.PortForward
+	if err := db.Where("vm_id = ?", row.ID).Order("host_port").Find(&rows).Error; err != nil {
+		t.Fatalf("查询失败: %v", err)
+	}
+	if len(rows) != 2 || rows[1].HostPort != 10001 {
+		t.Errorf("应自动分配到 10001, 实际 %+v", rows)
 	}
 }
 

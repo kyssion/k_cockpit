@@ -47,6 +47,10 @@ const (
 	KeyAlertEvaluate = "alert.evaluate"
 	KeyPasswordAudit = "security.password_audit"
 	KeyAuthKeyRotate = "security.auth_key_rotate"
+	// KeySchedulerRetention 是调度事件自身的保留期清理（G-48）。
+	KeySchedulerRetention = "scheduler.retention"
+	// KeyStorageTrim 是存储空间的自动回收（G-52）。
+	KeyStorageTrim = "storage.trim"
 )
 
 // Info 描述一个已注册的调度器。

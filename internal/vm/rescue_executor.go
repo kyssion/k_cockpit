@@ -23,7 +23,10 @@ type rescueParams struct {
 	// enter 时由控制面写入并落库；exit 时从库里取出、随指令发给节点，
 	// 并在成功后写回 vm 记录。**随任务持久化而不是只放内存**：进入与退出
 	// 之间可能隔着几小时甚至几天，那时发起进入的人早就关掉页面了。
-	Snapshot       string `json:"snapshot"`
+	Snapshot string `json:"snapshot"`
+	// RescueISO 是本次救援用的镜像（相对 ISO 存放目录）；空串表示节点
+	// 内置的默认救援镜像（G-47）。
+	RescueISO      string `json:"rescue_iso,omitempty"`
 	ObservedStatus string `json:"observed_status"`
 }
 
@@ -60,8 +63,9 @@ func (e *EnterRescueExecutor) Run(ctx context.Context, t *model.Task) error {
 		NodeID: *t.NodeID,
 		Target: p.VMName,
 		// 节点需要知道**原配置是什么**才谈得上「改」：它要按救援档案调整
-		// 引导顺序与盘型，而调整的依据是当前值。
-		Params: map[string]any{"snapshot": p.Snapshot},
+		// 引导顺序与盘型，而调整的依据是当前值。rescue_iso 为空时节点用
+		// 自己的内置默认救援镜像。
+		Params: map[string]any{"snapshot": p.Snapshot, "rescue_iso": p.RescueISO},
 	})
 	if err != nil {
 		return api.Unavailable("节点不可达，救援指令未送达")

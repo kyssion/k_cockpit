@@ -220,3 +220,64 @@ func TestNoDirMeansNoFile(t *testing.T) {
 		t.Error("未落盘时导出应给出明确错误，而不是返回空内容")
 	}
 }
+
+// TestRotateArchivesAsGz 覆盖轮转归档：当前文件压缩成 kc.log.1.gz，
+// 归档数量按 KeepFiles 收敛，导出能读回压缩内容。
+func TestRotateArchivesAsGz(t *testing.T) {
+	l := newTestLogger(t, Options{
+		MaxSizeBytes: 64, KeepFiles: 2, RingSize: 100, Level: LevelInfo,
+	})
+
+	// 写满三次：产生 .1.gz 与 .2.gz，再多一次则最旧的被丢掉。
+	for i := 0; i < 4; i++ {
+		l.Infof("第 %d 段日志，内容长一点以便触发按大小轮转 %s", i, strings.Repeat("x", 60))
+	}
+
+	st := l.Status()
+	names := make([]string, 0, len(st.Rotated))
+	for _, f := range st.Rotated {
+		names = append(names, f.Name)
+	}
+	if len(st.Rotated) != 2 {
+		t.Fatalf("KeepFiles=2 时应保留 2 个归档，实际 %d 个: %v", len(st.Rotated), names)
+	}
+	for _, f := range st.Rotated {
+		if !strings.HasSuffix(f.Name, ".gz") {
+			t.Errorf("归档 %s 应压缩为 .gz", f.Name)
+		}
+	}
+
+	// 4 次轮转只留最近 2 段是预期行为；导出必须能读回压缩内容，否则
+	// 归档就成了只能看不能查的死数据。
+	text, err := l.ExportText()
+	if err != nil {
+		t.Fatalf("导出失败: %v", err)
+	}
+	if !strings.Contains(text, "第 2 段") || !strings.Contains(text, "第 3 段") {
+		t.Errorf("导出应包含保留的最近两段，实际: %q", text)
+	}
+	if strings.Contains(text, "第 0 段") {
+		t.Errorf("超出保留数的归档应被清理: %q", text)
+	}
+}
+
+// TestSetKeepFiles 调整保留数后，下一次轮转按新上限收敛。
+func TestSetKeepFiles(t *testing.T) {
+	l := newTestLogger(t, Options{
+		MaxSizeBytes: 64, KeepFiles: 3, RingSize: 100, Level: LevelInfo,
+	})
+	for i := 0; i < 3; i++ {
+		l.Infof("初始段 %d %s", i, strings.Repeat("y", 60))
+	}
+	if got := len(l.Status().Rotated); got != 3 {
+		t.Fatalf("轮转后应有 3 个归档，实际 %d", got)
+	}
+
+	l.SetKeepFiles(1)
+	for i := 0; i < 2; i++ {
+		l.Infof("收敛段 %d %s", i, strings.Repeat("z", 60))
+	}
+	if got := len(l.Status().Rotated); got != 1 {
+		t.Fatalf("KeepFiles 收敛到 1 后应只剩 1 个归档，实际 %d", got)
+	}
+}

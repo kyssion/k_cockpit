@@ -15,6 +15,7 @@ import (
 	"k_cockpit/internal/authz"
 	"k_cockpit/internal/computequota"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/settings"
 	"k_cockpit/internal/task"
 )
 
@@ -491,6 +492,43 @@ type AddPortForwardRequest struct {
 	AllowedIPs string
 }
 
+// allocateHostPort 从设置的范围里取一个节点内未被占用的端口。
+//
+// 一次查出该节点该协议已占用的端口集合再挑空位，而不是逐个试探：范围内的
+// 占用可能成百上千，逐个试探在最坏情况下是同样多次数据库往返。与并发请求
+// 的竞态由唯一索引兜底——撞上时按「端口已被占用」拒绝，再试一次即可。
+func (s *Service) allocateHostPort(ctx context.Context, nodeID int64, protocol string) (int, error) {
+	start, end := 10000, 20000
+	if s.settings != nil {
+		start = s.settings.Int(settings.KeyNetworkPortRangeStart, 10000)
+		end = s.settings.Int(settings.KeyNetworkPortRangeEnd, 20000)
+	}
+	if start < 1024 || end > 65535 || start > end {
+		return 0, api.ValidationFailed(
+			"端口自动分配范围不合法（可在系统设置 → 网络中调整）")
+	}
+
+	var used []int
+	if err := s.db.WithContext(ctx).Model(&model.PortForward{}).
+		Where("node_id = ? AND protocol = ?", nodeID, protocol).
+		Pluck("host_port", &used).Error; err != nil {
+		log.Printf("[vm] 查询已占用端口失败: %v", err)
+		return 0, api.Internal()
+	}
+	taken := make(map[int]bool, len(used))
+	for _, p := range used {
+		taken[p] = true
+	}
+	for p := start; p <= end; p++ {
+		if !taken[p] {
+			return p, nil
+		}
+	}
+	return 0, api.Conflict(
+		"端口自动分配范围（" + strconv.Itoa(start) + "-" + strconv.Itoa(end) +
+			"）已全部占用，请手工指定端口或扩大范围")
+}
+
 // AddPortForward 受理一次端口转发新增。
 //
 // 端口转发是**把内网服务暴露到外部**的操作，因此提示文案与默认值都要偏向
@@ -512,7 +550,16 @@ func (s *Service) AddPortForward(
 	if protocol != model.PortProtocolTCP && protocol != model.PortProtocolUDP {
 		return nil, api.InvalidParameter("协议只能是 tcp 或 udp")
 	}
-	if err := validatePort(req.HostPort, "宿主机端口"); err != nil {
+	// 宿主机端口为 0 表示**自动分配**（G-54）：从设置的范围里取一个该节点
+	// 该协议未占用的端口。挑低位的空闲端口而不是随机——自动分配的端口
+	// 没有「均匀散开」的需求，连续可读反而便于对照防火墙规则。
+	if req.HostPort == 0 {
+		allocated, err := s.allocateHostPort(ctx, vm.NodeID, protocol)
+		if err != nil {
+			return nil, err
+		}
+		req.HostPort = allocated
+	} else if err := validatePort(req.HostPort, "宿主机端口"); err != nil {
 		return nil, err
 	}
 	if err := validatePort(req.TargetPort, "目标端口"); err != nil {

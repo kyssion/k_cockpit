@@ -51,6 +51,16 @@ func RegisterBuiltins(r *Registry, opts BuiltinOptions) {
 		Description:     "把待执行任务派发给执行器，受并发上限与资源锁约束。**它不产生调度事件**——它执行的每个动作本身都已经是一条任务记录，在这里再记一遍只是把同一件事说两次。",
 		IntervalSeconds: int(opts.QueuePollInterval.Seconds()),
 	})
+	r.Register(Info{
+		Key: KeySchedulerRetention, Name: "调度事件保留清理", Group: GroupMaintain,
+		Description:     "删除超过保留期的调度事件（默认 168 小时，可在系统设置调整）。删了才记事件——每小时一条\"没什么可清理\"只会把有信息的那几条埋掉。",
+		IntervalSeconds: int(opts.RetentionInterval.Seconds()),
+	})
+	r.Register(Info{
+		Key: KeyStorageTrim, Name: "存储空间自动回收", Group: GroupMaintain,
+		Description:     "开启后每天对全部在线节点执行一次 trim，回收已删除虚拟磁盘占用的块。执行结果（含失败节点）记入调度事件。",
+		IntervalSeconds: int(opts.TrimInterval.Seconds()),
+	})
 }
 
 // BuiltinOptions 是登记时需要的各组件周期。
@@ -62,4 +72,6 @@ type BuiltinOptions struct {
 	ScheduleInterval       time.Duration
 	QueuePollInterval      time.Duration
 	QuotaEvalInterval      time.Duration
+	RetentionInterval      time.Duration
+	TrimInterval           time.Duration
 }

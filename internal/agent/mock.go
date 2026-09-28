@@ -212,6 +212,11 @@ func stagePlan(op Operation) [][2]string {
 			{"prefix_validate", "校验可信前缀"},
 			{"policy_apply", "下发 IPv6 保护"},
 		}
+	case OpNetworkGlobalBandwidth:
+		return [][2]string{
+			{"qos_render", "渲染上行整形规则"},
+			{"qos_apply", "应用总限"},
+		}
 
 	case OpSecurityPasswordAudit:
 		return [][2]string{
@@ -1552,6 +1557,20 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 			Message: "IPv6 保护策略已下发",
 			Trusted: []string{"2001:db8::/32"},
 		}
+	case OpNetworkGlobalBandwidth:
+		// 回显请求里的取值：mock 下没有真实的上行整形，但回显让"节点接受
+		// 的值"这条链路仍然可以被核对。
+		info := GlobalBandwidthInfo{Applied: true, Message: "全局带宽总限已应用"}
+		if v, ok := op.Params["mbps"].(float64); ok {
+			info.Mbps = int(v)
+		}
+		if v, ok := op.Params["burst_mbps"].(float64); ok {
+			info.BurstMbps = int(v)
+		}
+		if info.Mbps <= 0 {
+			info.Message = "已清除全局带宽总限"
+		}
+		data[GlobalBandwidthDataKey] = info
 
 	case OpSecurityPasswordAudit:
 		data[PasswordAuditDataKey] = PasswordAuditInfo{

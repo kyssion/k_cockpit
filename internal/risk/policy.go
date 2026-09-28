@@ -89,6 +89,12 @@ const (
 	// 它会**替换整块系统盘**——原系统上的所有配置、安装的软件、没放在数据盘
 	// 上的数据都随之消失。比删除轻一档（机器还在、数据盘还在），但同样不可逆。
 	ActionVMReinstall Action = "vm.reinstall"
+
+	// 进入站点维护（G-46）。
+	//
+	// 它会让全部节点停止受理创建与电源操作，勾选关机时还会批量关停运行中
+	// 的虚拟机——影响面是整个站点，属于「影响可达性」一类。
+	ActionSiteMaintenanceEnter Action = "site.maintenance.enter"
 )
 
 // Entry 是清单中的一条，用于对外下发（API-034）。
@@ -190,6 +196,11 @@ var policy = []Entry{
 		Action: ActionVMReinstall,
 		Label:  "重装系统",
 		Reason: "整块系统盘会被替换，原系统上的软件与配置全部消失（数据盘保留）",
+	},
+	{
+		Action: ActionSiteMaintenanceEnter,
+		Label:  "进入站点维护",
+		Reason: "全部节点将停止受理创建与电源操作；勾选关机时会批量关停运行中的虚拟机",
 	},
 }
 

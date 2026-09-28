@@ -21,6 +21,7 @@ import (
 	"k_cockpit/internal/api"
 	"k_cockpit/internal/audit"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/settings"
 	"k_cockpit/internal/task"
 )
 
@@ -159,6 +160,8 @@ type Service struct {
 	queue *task.Queue
 	// audit 记录谁在什么时候改了哪台节点的哪一个交换机。
 	audit *audit.Recorder
+	// settings 读取全局带宽总限等系统设置（G-44）；nil 时总限按未配置处理。
+	settings settings.Provider
 }
 
 // NewService 构造网络服务。
@@ -171,6 +174,9 @@ func NewService(
 ) *Service {
 	return &Service{db: db, agent: client, queue: queue, audit: recorder}
 }
+
+// SetSettingsProvider 装配设置读取（全局带宽总限等）。
+func (s *Service) SetSettingsProvider(p settings.Provider) { s.settings = p }
 
 // Status 返回节点的网络后端状态与能力清单。
 func (s *Service) Status(ctx context.Context, nodeID int64) (*StatusView, error) {

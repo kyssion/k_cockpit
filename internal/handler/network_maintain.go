@@ -143,3 +143,26 @@ func (h *Network) ApplyIPv6Policy(ctx context.Context, c *app.RequestContext) {
 	}
 	api.OK(c, res)
 }
+
+// --- 全局带宽总限（G-44）---
+
+// ApplyGlobalBandwidth 把设置里的全局带宽总限下发到节点。
+//
+// 不带参数（node_id 走查询参数）：总限的值在系统设置里，这里只是"把节点
+// 与设置对齐"的动作——与重配置交换机、重载公网 IP 规则是同一语义。
+func (h *Network) ApplyGlobalBandwidth(ctx context.Context, c *app.RequestContext) {
+	nodeID := int64(queryInt(c, "node_id"))
+	if nodeID <= 0 {
+		api.Fail(c, api.InvalidParameter("必须指定 node_id"))
+		return
+	}
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	res, err := h.svc.ApplyGlobalBandwidth(ctx, nodeID, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, res)
+}
