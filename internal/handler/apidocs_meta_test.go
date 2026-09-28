@@ -18,6 +18,8 @@ func TestAPIDocsMeta(t *testing.T) {
 		{"GET", "/settings", "查询系统设置列表", "admin"},
 		{"POST", "/auth/login", "登录（多阶段：ok / login_verify / force_password_change / bootstrap_security）", "public"},
 		{"GET", "/maintenance", "查询站点维护状态", "admin"},
+		// mock 专用的 dev 注册入口：注册时就是公开的。
+		{"POST", "/dev/agent-register", "模拟 agent 注册（仅 AGENT_TRANSPORT=mock 时注册该路由）", "public"},
 	}
 	for _, tc := range cases {
 		key := tc.method + " " + tc.relPath

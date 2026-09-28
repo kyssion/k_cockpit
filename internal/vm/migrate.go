@@ -167,6 +167,9 @@ func (s *Service) Migrate(
 		Params: map[string]any{
 			"task_id": t.ID, "migration_id": row.ID,
 			"from_node_id": target.NodeID, "to_node_id": req.ToNodeID,
+			// 方式写进审计（live / offline）：排查"那次走哪条路"时不必
+			// 再去任务参数里回查——两条路的失败模式完全不同。
+			"mode": mode,
 		},
 		Success: true, ClientIP: clientIP,
 	})

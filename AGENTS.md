@@ -109,22 +109,14 @@ cd web && pnpm exec tsc -b
 # 静态检查
 cd web && pnpm lint
 
+# 单元与组件测试（Vitest）
+cd web && pnpm test
+
 # 构建（产物在 web/dist，由控制面托管）
 cd web && pnpm build
 ```
 
-前端（`web/`，**尚未创建**；技术栈见 [ADR-0006](docs/06-decisions/0006-frontend-tech-stack.md)，脚本名以落地后的 `web/package.json` 为准）：
-
-```bash
-cd web
-pnpm install      # 安装依赖
-pnpm dev          # 本地开发（/api 代理到控制面 8080）
-pnpm build        # 构建产物（由控制面托管）
-pnpm typecheck    # 类型检查
-pnpm lint         # Lint
-pnpm test         # 单元与组件测试
-pnpm test:e2e     # E2E（Playwright）
-```
+> E2E（Playwright）已规划未落地，随真实 agent 的验收环境补（口径见 [`docs/04-engineering/TESTING.md`](docs/04-engineering/TESTING.md)）。
 
 **本地运行提示**：默认配置使用 SQLite，数据文件写入 `data/`。表结构由 [`internal/database/migrations/`](internal/database/migrations/) 下的 SQL 迁移管理（**服务启动不做自动迁移**），执行方式见 [`docs/02-architecture/DATA_MODEL.md`](docs/02-architecture/DATA_MODEL.md) 第 6 节。
 
@@ -144,6 +136,7 @@ k_cockpit/
 │   ├── config/            # 配置加载与校验
 │   ├── database/          # 数据库连接、驱动切换与 SQL 迁移（migrations/）
 │   ├── handler/           # HTTP 接口实现（测试同目录）
+│   ├── maintenance/       # 站点级维护模式（G-46，多节点语义）
 │   ├── model/             # 数据库模型（表结构以 DATA_MODEL.md 为准）
 │   ├── node/              # 节点管理（F-6-01 / F-6-02）
 │   └── router/            # 路由注册（角色要求在此声明）

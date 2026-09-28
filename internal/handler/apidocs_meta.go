@@ -38,6 +38,9 @@ var publicAPIRoutes = map[string]bool{
 	"POST /auth/forgot/reset":            true,
 	"GET /invites/preview":               true,
 	"POST /invites/accept":               true,
+	// dev 注册入口只在 AGENT_TRANSPORT=mock 时注册（见 router.Register），
+	// 出现时就是公开的。
+	"POST /dev/agent-register": true,
 }
 
 // adminAPIRoutes 是仅管理员可访问的路由（不含 /api/v1 前缀）。
@@ -307,6 +310,7 @@ var summaryOverrides = map[string]string{
 	"POST /tasks/stream":        "任务事件的 SSE 实时通道",
 	"POST /auth/forgot/send":    "申请找回密码验证码（只发到已验证邮箱）",
 	"POST /auth/forgot/reset":   "用一次性重置票据设置新密码",
+	"POST /dev/agent-register":  "模拟 agent 注册（仅 AGENT_TRANSPORT=mock 时注册该路由）",
 	"GET /invites/preview":      "公开预览一条邀请（不暴露配额）",
 	"POST /invites/accept":      "接受邀请并自助创建账号",
 }
