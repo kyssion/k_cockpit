@@ -18,6 +18,20 @@
 ## [Unreleased]
 
 ### Added
+- **第四轮差距收尾（G-42 ~ G-54，能力闭环与运营期旋钮）**：对标 QVMConsole 实测后登记的十三个条目全部落地（进度与核对结论见 [`docs/01-product/DEMO_PLAN.md`](docs/01-product/DEMO_PLAN.md) §7/§8）
+  - **邀请链接站点地址（G-49，缺陷修复）**：新增设置项 `basic.site_url`（环境变量 `SITE_URL`），`main.go` 里返回空串的装配接上设置读取——此前管理员复制到的 `/invite/<token>` 是相对路径，发给站外用户打不开。未配置时链接仍为相对路径（不猜域名），前端在邀请面板给出明确提示
+  - **输入侧防护与全局安全响应头（G-42）**：新增 `internal/api` 的请求过滤中间件（路径穿越、空字节与控制字符、扫描器探测路径、异常 Content-Type；开关 `security.request_filter_enabled` 默认开）与安全响应头中间件（nosniff / X-Frame-Options: DENY / CSP frame-ancestors / Referrer-Policy）。此前 nosniff 只在四个下载类接口逐个手设，X-Frame-Options / CSP / Referrer-Policy 全仓缺失
+  - **日志归档与保留策略（G-43）**：轮转归档改为 gzip 压缩（`kc.log.N.gz`，导出与清理兼容历史未压缩归档），新增「日志最大备份数」设置项（`logging.keep_files`，改完即时生效，缩小上限在下次轮转收敛）。libvirt / cmd 日志分类**随真实 agent 落地**——agent 未实现前没有输出可分类
+  - **站点级维护模式（G-46）**：多节点语义——逐节点接管节点维护（可选先为运行中的虚拟机逐台入队优雅关机）并逐节点汇总结果；「阻止开机」复用既有的节点维护拦截（`ensureNodeUsable`），不加第二处判断；退出只解除**本次接管**的节点，管理员手工设置的维护不受牵连。状态行落表 `site_maintenance`（迁移 `0048`）；进入动作受二次验证保护
+  - **速率型全局带宽总限（G-44）**：设置项 `network.global_bandwidth_mbps` / `network.global_burst_mbps`（全部虚拟机共享的节点出向总限，与累计型配额、交换机级限速三层分工）+ `POST /networks/global-bandwidth/apply` 逐节点下发；agent 新增 `network.global_bandwidth.apply` 操作与 mock
+  - **默认磁盘 IOPS（G-45）**：设置项 `vm.default_disk_iops`——创建向导预填、受理时三项 IOPS 全空的请求兜底；显式填 0（明确不限速）不覆盖
+  - **救援系统 ISO 可选（G-47）**：设置项 `vm.rescue_iso`（相对 ISO 存放目录的宿主机路径，校验不可逃逸），随救援进入任务下发；留空维持节点内置默认镜像
+  - **调度事件保留期（G-48）**：设置项 `scheduler.event_keep_hours`（默认 168 小时）+ 每小时一轮的保留清理（注册为内置调度器「调度事件保留清理」，删了才记事件）
+  - **API 文档元数据（G-50）**：接口清单在路由表实时取出的基础上补齐摘要（CRUD 按方法与路径形状生成、关键接口人工校准）、模块名、认证方式（公开与管理员路由为从注册处机械提取的显式数据表）、路径参数与可复制 curl（路径参数替换示例值）。文档页支持按摘要过滤、行展开查看 curl
+  - **端口转发与静态地址联动提示（G-51）**：详情页网络 Tab 在「有转发但未绑静态地址」时警示 DHCP 变化会让转发失效；不做自动绑定——多网卡时"绑哪个地址"不能替用户决定
+  - **存储空间自动回收（G-52）**：设置项 `storage.auto_trim_enabled` + 每天一轮对全部在线节点执行 trim（注册为内置调度器，结果含失败节点记入调度事件）；存储池页展示自动回收状态与最近一次执行结果
+  - **一次性动作令牌闭环（G-53）**：认证中间件支持 `?action_token=` 查询参数（一次性消费、用途限定 download、校验在单条 UPDATE 内完成）——此前后端能签发能校验但没有任何消费方；API 凭证页新增签发入口（明文仅显示一次）
+  - **端口自动分配（G-54）**：设置项 `network.port_range_start/end`（默认 10000-20000），端口转发宿主机端口**留空即自动取未占用端口**（节点内按协议独占、唯一索引兜底并发）。其余候选设置项（OVS 网桥/出口网卡/网段前缀/DHCP 范围/IPv6 检测周期）按"先找到消费代码再认它是能力"的硬规则登记为刻意不做
 - 项目基础设施：`.gitignore`、`.editorconfig`、`.gitattributes`、`.env.example`
 - AI 协作规范：`AGENTS.md`（遵循开放标准，不绑定任何具体工具）
 - 文档体系：`docs/` 七个分区
