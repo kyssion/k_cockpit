@@ -1,19 +1,19 @@
 /**
- * MigrateSection 处理虚拟机跨节点迁移（F-2-09）。
+ * MigrateSection 处理虚拟机跨节点迁移（F-2-09 / F-2-15）。
  *
- * 界面上最需要说清的是一件反直觉的事：**迁移要求关机**。用户对「迁移」的
- * 直觉多半来自其它平台的热迁移，而这里运行中迁移会让磁盘在被写入的同时被
- * 复制，两侧都不可用。不把这条写在按钮旁边，用户会一次次点下去然后被拒。
+ * 迁移方式由机器的实时状态决定并要写明白：**运行中走热迁移**（停顿窗口
+ * 毫秒级、收敛性有量化预检），**已关机走停机迁移**（停机时长≈复制时长）。
+ * 不把"这次走哪条路"写在按钮旁边，用户会拿对一种方式的预期去接受另一种
+ * 方式的后果。
  *
- * 其次是**冲突要提前列出**：静态地址与端口转发在节点内唯一，换一台宿主机
- * 就可能撞上别人。后端在受理时就会返回具体是哪一项冲突，因此这里只需把它
- * 原样显示出来——让用户在两个节点之间逐项对照是最没必要的一种负担。
+ * 其次是**冲突与余量要提前列出**（F-6-03 / F-6-04）：静态地址与端口转发
+ * 在节点内唯一，换一台宿主机就可能撞上别人；目标的容量余量来自周期采样，
+ * 后端给出建议但**放哪儿终究是人的决定**。
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 
 import { ApiError, NetworkError } from '@/api/client'
-import { nodeApi } from '@/api/node'
 import { vmApi, type MigrationView, type VmView } from '@/api/vm'
 import { Button } from '@/components/common/Button'
 import { Input } from '@/components/common/Input'
@@ -46,15 +46,21 @@ export function MigrateSection({ vm }: { vm: VmView }) {
           <p className="mt-1 text-base text-ink-2">
             把磁盘搬到另一台宿主机。硬件配置、网卡、静态地址与端口转发会一起搬走。
             <span className="text-ink-3">
-              （要求关机——运行中迁移会让磁盘在被写入的同时被复制，两侧都不可用。）
+              （运行中走热迁移、停顿窗口毫秒级；已关机走停机迁移、停机时长约等于复制时长。）
             </span>
           </p>
         </div>
         <Button
           size="sm"
           variant="secondary"
-          disabled={vm.status !== 'stopped' || busy}
-          title={vm.status !== 'stopped' ? '迁移需要先关机' : busy ? '已有进行中的迁移' : ''}
+          disabled={(vm.status !== 'stopped' && vm.status !== 'running') || busy}
+          title={
+            vm.status !== 'stopped' && vm.status !== 'running'
+              ? '暂停等状态需要先恢复或关机再迁移'
+              : busy
+                ? '已有进行中的迁移'
+                : ''
+          }
           onClick={() => setOpen(true)}
         >
           迁移
@@ -77,6 +83,11 @@ export function MigrateSection({ vm }: { vm: VmView }) {
               <span>
                 <span className="text-ink">
                   节点 #{m.from_node_id} → #{m.to_node_id}
+                  {m.mode === 'live' && (
+                    <span className="ml-1.5 rounded-pill bg-brand/10 px-1.5 py-0.5 text-xs text-brand">
+                      热迁移
+                    </span>
+                  )}
                 </span>
                 {/* 结果里说明跟着搬了些什么——只给一个「成功」会让用户
                     不确定「我原来接的网络、配的转发还在不在」。 */}
@@ -137,7 +148,13 @@ function MigrateModal({
   onError: (message: string) => void
 }) {
   const [toNodeID, setToNodeID] = useState(0)
-  const nodes = useQuery({ queryKey: ['nodes'], queryFn: nodeApi.list, enabled: open })
+  // 目标清单来自**聚合接口**（F-6-03）：容量、冲突、可否作为目标与建议都在
+  // 服务端算好，前端不再自己拼节点列表——口径只有一份。
+  const targets = useQuery({
+    queryKey: ['vm-migrate-targets', vm.id],
+    queryFn: () => vmApi.migrateTargets(vm.id),
+    enabled: open,
+  })
 
   const migrate = useMutation({
     mutationFn: () => vmApi.migrate(vm.id, toNodeID),
@@ -155,11 +172,7 @@ function MigrateModal({
     enabled: open && toNodeID > 0,
   })
 
-  // 只列**可作为目标**的节点：源节点本身、维护中的节点、未接入的节点
-  // 列出来再被拒绝，只会让人以为是自己操作错了。
-  const candidates = (nodes.data ?? []).filter(
-    (n) => n.id !== vm.node_id && !n.maintenance_mode && n.enroll_state === 'enrolled',
-  )
+  const candidates = targets.data?.items ?? []
 
   return (
     <Modal
@@ -196,17 +209,47 @@ function MigrateModal({
             className="h-8 rounded-control border border-line-strong bg-sunken px-2 text-base text-ink focus:outline-none focus-visible:border-brand"
           >
             <option value={0}>请选择…</option>
-            {candidates.map((n) => (
-              <option key={n.id} value={n.id}>
-                {n.name}
+            {candidates.map((t) => (
+              <option key={t.node_id} value={t.node_id}>
+                {t.node_name}
+                {t.recommended ? '（建议）' : ''}
+                {t.maintenance ? '（维护中）' : ''}
               </option>
             ))}
           </select>
           {candidates.length === 0 && (
             <p className="text-xs text-ink-3">
-              没有可作为目标的节点。目标须已接入且不在维护模式，并且不能是当前节点。
+              没有其它已接入的节点可作为目标。
             </p>
           )}
+
+          {/* 目标节点的容量与冲突（F-6-03）：容量来自最近一次采样，标注
+              "建议"的那一个是余量最大的——但只是建议。 */}
+          {(() => {
+            const sel = candidates.find((t) => t.node_id === toNodeID)
+            if (!sel) return null
+            return (
+              <div className="flex flex-col gap-1 rounded-control border border-line bg-sunken px-3 py-2 text-sm">
+                <span className="text-ink-2">
+                  {sel.stats_known ? (
+                    <>
+                      容量：{sel.cpu_cores} 核 · 空闲内存{' '}
+                      <span className="kc-nums">{Math.round(sel.mem_free_mb / 1024)}</span> GB ·
+                      存储余量 <span className="kc-nums">{sel.storage_free_gb}</span> GB
+                    </>
+                  ) : (
+                    <span className="text-ink-3">该节点还没有采样数据，容量暂不可知</span>
+                  )}
+                  {sel.recommended && (
+                    <span className="ml-1.5 rounded-pill bg-success/10 px-1.5 py-0.5 text-xs text-success">
+                      建议目标（余量最大）
+                    </span>
+                  )}
+                </span>
+                {!sel.suitable && sel.reason && <span className="text-danger">{sel.reason}</span>}
+              </div>
+            )
+          })()}
 
           {/* 预检结果。**放在确认按钮之前**——它的全部意义就是让用户在动
               之前看到会付出什么代价。 */}
@@ -230,6 +273,18 @@ function MigrateModal({
                   {/* **「会怎么迁」比「能不能迁」更影响决定**：停机时长由它
                       决定，而用户很可能以为迁移是「不断服务地挪过去」。 */}
                   <p className="text-sm text-ink-2">{preview.data.mode_note}</p>
+                  {/* 热迁移的收敛性结论（F-2-15）：带数字，用户拿它判断
+                      这次热迁移是否平稳、要不要改停机迁移。 */}
+                  {preview.data.mode === 'live' && preview.data.converge_note && (
+                    <p className="text-sm text-ink-2">
+                      {preview.data.converge_note}
+                      {preview.data.auto_converge && (
+                        <span className="ml-1.5 rounded-pill bg-warning/10 px-1.5 py-0.5 text-xs text-warning">
+                          将开启 CPU 限流
+                        </span>
+                      )}
+                    </p>
+                  )}
                   {/* 实测带宽（G-35）：标注来源，实测与估算的置信度不同。 */}
                   {preview.data.bandwidth_mbps ? (
                     <p className="text-sm text-ink-2">

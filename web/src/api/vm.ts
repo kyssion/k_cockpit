@@ -663,6 +663,9 @@ export const vmApi = {
    *
    * 它**与 migrate 共用同一套校验**，所以预览说可以、点下去就不会被拒。
    */
+  migrateTargets: (id: number) =>
+    get<{ items: MigrateTargetView[] }>(`/api/v1/vms/${id}/migrate-targets`),
+
   previewMigration: (id: number, toNodeID: number) =>
     post<MigrationPreview>(`/api/v1/vms/${id}/migration/preview`, { to_node_id: toNodeID }),
 
@@ -833,6 +836,31 @@ export interface MigrationPreview {
   bandwidth_mbps?: number
   /** speedtest（实测）/ estimate（估算），两者置信度不同。 */
   bandwidth_source?: string
+  /** --- 热迁移的量化评估（F-2-15，仅 mode = live）--- */
+  /** 评估时的脏页速率（MB/s）；0/缺省表示未测得。 */
+  dirty_rate_mbps?: number
+  /** 脏页带宽占链路带宽的百分比；-1 表示没有读数。 */
+  dirty_ratio_percent?: number
+  /** 执行时会自动开启 CPU 限流（auto-converge）。 */
+  auto_converge?: boolean
+  /** 收敛性结论（带数字）。 */
+  converge_note?: string
+}
+
+/** 迁移目标节点（F-6-03 / F-6-04）：容量来自最近一次采样。 */
+export interface MigrateTargetView {
+  node_id: number
+  node_name: string
+  online: boolean
+  maintenance: boolean
+  cpu_cores: number
+  mem_free_mb: number
+  storage_free_gb: number
+  stats_known: boolean
+  conflicts?: string[]
+  suitable: boolean
+  reason?: string
+  recommended: boolean
 }
 
 export interface MigrationView {
@@ -842,6 +870,8 @@ export interface MigrationView {
   from_node_id: number
   to_node_id: number
   status: 'pending' | 'running' | 'success' | 'failed'
+  /** live（热迁移）/ offline（停机迁移），由受理时的实时状态决定。 */
+  mode: string
   /** 说明跟着搬了些什么（网卡、静态地址、端口转发的数量）。 */
   result?: string
   error?: string

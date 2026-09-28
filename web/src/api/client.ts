@@ -215,22 +215,32 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     // 已经因为 428 重放过一次，仍然被拒：说明许可未被识别（过期、已被消费、
     // 会话不匹配）。此时**直接报错，不再弹框**——继续弹会让用户在「验证成功
     // 却毫无反应」之间循环，而且退不出去（f-10-01 Q-010）。
-    if (options.grant) {
-      throw new ApiError(
-        error.status,
-        error.code,
-        '验证状态已失效，请重试刚才的操作',
-        error.requestId,
-      )
-    }
     if (!onRiskVerification) throw error
 
     const grant = await onRiskVerification(error.data as RiskRequiredData)
     if (!grant) throw error
 
     // 重放**原样**的请求（方法、路径、查询、请求体完全一致），只多一个许可头。
-    const payload = await rawRequest<SuccessBody<T>>(path, { ...options, grant })
-    return payload?.data as T
+    //
+    // 重放仍在 catch 块里执行：它再抛 428 不会回到本 catch，因此在下面
+    // 就地转成明确的文案——否则用户看到的是又一次「需验证」，而他刚
+    // 验证过，会以为验证坏了并反复重试。
+    try {
+      const payload = await rawRequest<SuccessBody<T>>(path, { ...options, grant })
+      return payload?.data as T
+    } catch (replayError) {
+      if (replayError instanceof ApiError && replayError.status === 428) {
+        throw new ApiError(
+          replayError.status,
+          replayError.code,
+          '验证状态已失效，请重试刚才的操作',
+          replayError.requestId,
+          replayError.details,
+          replayError.data,
+        )
+      }
+      throw replayError
+    }
   }
 }
 
