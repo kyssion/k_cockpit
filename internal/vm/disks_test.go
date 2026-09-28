@@ -151,3 +151,26 @@ func TestDisksRejectsForeignVM(t *testing.T) {
 	_, err := svc.Disks(ctx, row.ID, authz.Viewer{UserID: 8})
 	assertAPIError(t, err, 404)
 }
+
+// 槽位耗尽自动降级的判定规则（F-2-06）：耗尽才降级，机型不支持不降级。
+func TestSlotFallbackFor(t *testing.T) {
+	cases := []struct {
+		name string
+		info agent.PCIeInfo
+		bus  string
+		want bool
+	}{
+		{"槽位耗尽", agent.PCIeInfo{Total: 6, Free: 0, HotplugSupported: true}, "scsi", true},
+		{"还有空闲", agent.PCIeInfo{Total: 6, Free: 2, HotplugSupported: true}, "", false},
+		{"机型不支持热插拔", agent.PCIeInfo{Total: 0, Free: 0, HotplugSupported: false}, "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bus, degraded := vm.SlotFallbackFor(tc.info)
+			if degraded != tc.want || bus != tc.bus {
+				t.Errorf("SlotFallbackFor(%+v) = (%q,%v), 期望 (%q,%v)",
+					tc.info, bus, degraded, tc.bus, tc.want)
+			}
+		})
+	}
+}

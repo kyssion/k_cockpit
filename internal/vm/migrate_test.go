@@ -68,10 +68,11 @@ func TestMigrateRejectsMaintenanceTarget(t *testing.T) {
 	}
 }
 
-// TestMigrateRequiresStopped 覆盖关机要求。
+// TestMigrateRunningGoesLive 运行中的机器走热迁移（F-2-15）。
 //
-// 运行中迁移会让磁盘在被写入的同时被复制，两侧都不可用。
-func TestMigrateRequiresStopped(t *testing.T) {
+// 此前运行中一律拒绝（要求先关机）；热迁移落地后，运行状态对应 live
+// 方式、停机状态对应 offline 方式，方式由实时探测决定并写进迁移记录。
+func TestMigrateRunningGoesLive(t *testing.T) {
 	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
 	ctx := context.Background()
 
@@ -80,9 +81,46 @@ func TestMigrateRequiresStopped(t *testing.T) {
 	db.Save(row)
 	toNode := seedTargetNode(t, db, false)
 
+	task, err := svc.Migrate(ctx, row.ID, vm.MigrateRequest{ToNodeID: toNode},
+		authz.Viewer{UserID: 7}, "alice", "")
+	if err != nil {
+		t.Fatalf("运行中的机器应按热迁移受理: %v", err)
+	}
+
+	var mig model.VMMigration
+	if err := db.Where("vm_id = ?", row.ID).First(&mig).Error; err != nil {
+		t.Fatalf("查询迁移记录失败: %v", err)
+	}
+	if mig.Mode != "live" {
+		t.Errorf("迁移方式 = %q, 期望 live", mig.Mode)
+	}
+	// 任务参数必须带方式与探测状态：执行器据此向节点下发不同的迁移语义。
+	if !strings.Contains(deref(task.Params), "\"mode\":\"live\"") {
+		t.Errorf("任务参数缺 mode=live: %s", deref(task.Params))
+	}
+}
+
+// TestMigrateRejectsPaused 暂停态两种方式都不适用：热迁移要机器在跑，
+// 停机迁移要机器已停。
+func TestMigrateRejectsPaused(t *testing.T) {
+	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusPaused})
+	ctx := context.Background()
+
+	row := seedMigratableVM(t, db, "vm-m3p")
+	row.Status = model.VMStatusPaused
+	db.Save(row)
+	toNode := seedTargetNode(t, db, false)
+
 	_, err := svc.Migrate(ctx, row.ID, vm.MigrateRequest{ToNodeID: toNode},
 		authz.Viewer{UserID: 7}, "alice", "")
 	assertAPIError(t, err, 422)
+}
+
+func deref(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // TestMigrateRejectsStaticIPConflict 覆盖迁移**独有**的一类前置条件。

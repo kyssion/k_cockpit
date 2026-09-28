@@ -1052,6 +1052,9 @@ func Register(h *server.Hertz, deps Deps) {
 		// 这次要停多久。因此除了「能不能迁」，还给出「会怎么迁」——
 		// 停机时长由后者决定。**与迁移共用同一套校验**。
 		v1.POST("/vms/:id/migration/preview", requireAuth, vmHandler.PreviewMigration)
+		// 迁移目标清单（F-6-03 / F-6-04，只读）：按节点聚合容量采样与
+		// 冲突检查，并给出推荐。容量来自最近一次采样而不是实时探测。
+		v1.GET("/vms/:id/migrate-targets", requireAuth, vmHandler.MigrateTargets)
 
 		// 光驱（可以有多个）。**弹出与移除是两件事**：弹出之后光驱仍在
 		// （来宾里看得到一个空的托盘），移除才是设备消失。

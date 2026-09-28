@@ -29,6 +29,7 @@ type MigrationView struct {
 	FromNodeID int64  `json:"from_node_id"`
 	ToNodeID   int64  `json:"to_node_id"`
 	Status     string `json:"status"`
+	Mode       string `json:"mode"`
 	Result     string `json:"result,omitempty"`
 	Error      string `json:"error,omitempty"`
 
@@ -66,10 +67,26 @@ func (s *Service) Migrate(
 	//
 	// 分两处写的话迟早会分叉，而分叉的表现是最难解释的一种：**预览说可以，
 	// 点下去被拒**。用户会反复确认自己的操作，而问题在于两处用了不同的规则。
-	if blockers := s.migrationBlockers(ctx, target, req.ToNodeID); len(blockers) > 0 {
+	blockers, mode := s.migrationBlockers(ctx, target, req.ToNodeID)
+	if len(blockers) > 0 {
 		// **原样返回**：状态码携带信息（409 冲突 / 404 不存在 / 422 前置
 		// 条件不满足），压成统一的 422 会让客户端无法区分。
 		return nil, blockers[0]
+	}
+
+	// 热迁移的**受理时复核**（F-2-15）：预检到提交之间负载可能变化，脏页
+	// 速率是会漂的量。比值已到"追不上"的档位就拒绝——放行的话一定是跑满
+	// 时长然后超时，机器在源侧白白卡住。限流档位则把决定带进任务参数。
+	autoConverge := false
+	if mode == MigrationLive {
+		info, ok := s.assessLine(ctx, target, req.ToNodeID)
+		if ok {
+			live := AssessLive(info)
+			if live.Block {
+				return nil, api.ValidationFailed(live.Note)
+			}
+			autoConverge = live.AutoConverge
+		}
 	}
 
 	// 同一台机器同时只允许一次迁移。
@@ -100,11 +117,27 @@ func (s *Service) Migrate(
 	row := model.VMMigration{
 		VMID: target.ID, VMName: target.Name,
 		FromNodeID: target.NodeID, ToNodeID: req.ToNodeID,
+		Mode:   mode,
 		Status: model.MigrationPending, CreatedBy: &v.UserID,
 	}
 	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
 		log.Printf("[vm] 创建迁移记录失败: %v", err)
 		return nil, api.Internal()
+	}
+
+	params := map[string]any{
+		"migration_id": row.ID,
+		"vm_id":        target.ID,
+		"vm_name":      target.Name,
+		"from_node_id": target.NodeID,
+		"to_node_id":   req.ToNodeID,
+		// 上面那套共用校验里已经实时探测过状态，方式由它决定——
+		// 运行中记 running（热迁移），已关机记 stopped（停机迁移）。
+		"mode":            mode,
+		"observed_status": observedStatusOf(mode),
+	}
+	if autoConverge {
+		params["auto_converge"] = true
 	}
 
 	t, err := s.queue.Enqueue(ctx, task.Spec{
@@ -118,16 +151,7 @@ func (s *Service) Migrate(
 		ResourceName: target.Name,
 		OwnerID:      ownerOf(target, v),
 		CreatedBy:    v.UserID,
-		Params: map[string]any{
-			"migration_id": row.ID,
-			"vm_id":        target.ID,
-			"vm_name":      target.Name,
-			"from_node_id": target.NodeID,
-			"to_node_id":   req.ToNodeID,
-			// 上面那套共用校验里已经实时探测过状态，而它必须等于"已关机"
-			// 才走得到这里——因此这里记的就是探测到的那个值。
-			"observed_status": model.VMStatusStopped,
-		},
+		Params:       params,
 	})
 	if err != nil {
 		if delErr := s.db.WithContext(ctx).Delete(&model.VMMigration{}, row.ID).Error; delErr != nil {
@@ -273,6 +297,7 @@ func toMigrationView(row *model.VMMigration) MigrationView {
 		ID: row.ID, VMID: row.VMID, VMName: row.VMName,
 		FromNodeID: row.FromNodeID, ToNodeID: row.ToNodeID,
 		Status:    row.Status,
+		Mode:      row.Mode,
 		CreatedAt: row.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 	if row.Result != nil {

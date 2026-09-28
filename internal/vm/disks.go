@@ -352,6 +352,18 @@ func (s *Service) ChangeDisk(
 		params["size_bytes"] = file.SizeBytes
 		params["filename"] = file.Filename
 
+		// 槽位耗尽自动降级（F-2-06）：q35 上每块 virtio 盘各占一个 PCIe
+		// 根端口，槽位用完的表现是"挂载命令成功、设备却不出现"——报错里
+		// 不会提到槽位。预检空闲槽位，为 0 时改走 virtio-scsi：一块控制器
+		// 只占一个槽位，后面的盘都挂在它下面。探测失败不阻断挂载（节点
+		// 按默认规则自己定），只在明确"耗尽"时才改写。
+		if info, ok := s.probePCIeSlots(ctx, vm); ok {
+			if bus, degraded := SlotFallbackFor(info); degraded {
+				params["bus"] = bus
+				params["slot_fallback"] = true
+			}
+		}
+
 	case agent.DiskActionDetach:
 		if req.Dev == "" {
 			return nil, api.InvalidParameter("请指定要卸载的设备")
@@ -559,4 +571,33 @@ func (e *DiskChangeExecutor) Run(ctx context.Context, t *model.Task) error {
 		}
 	}
 	return nil
+}
+
+// probePCIeSlots 读取虚拟机的 PCIe 根端口占用；读不到时第二个返回值为
+// false，调用方按"信息不可用"处理而不是按"没有槽位"处理。
+func (s *Service) probePCIeSlots(ctx context.Context, vm *model.VM) (agent.PCIeInfo, bool) {
+	if s.agent == nil {
+		return agent.PCIeInfo{}, false
+	}
+	result, err := s.agent.Execute(ctx, agent.Operation{
+		Kind: agent.OpVMPcieInfo, NodeID: vm.NodeID, Target: vm.Name,
+	})
+	if err != nil || !result.Success {
+		return agent.PCIeInfo{}, false
+	}
+	info, ok := result.Data[agent.PCIeDataKey].(agent.PCIeInfo)
+	return info, ok
+}
+
+// SlotFallbackFor 判定是否需要槽位降级，返回降级后的总线。
+//
+// 导出供测试钉住规则：mock 的 PCIe 读数是固定的，端到端构造不出
+// "槽位耗尽"的场景，而判定规则本身值得被钉住。
+func SlotFallbackFor(info agent.PCIeInfo) (string, bool) {
+	// 机型不支持热插拔（i440FX）不是槽位问题：换总线救不了它，该提示
+	// 的是换机型，由 PCIe 信息页自己说明。
+	if !info.HotplugSupported || info.Free > 0 {
+		return "", false
+	}
+	return "scsi", true
 }

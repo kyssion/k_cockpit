@@ -473,6 +473,12 @@ func stagePlan(op Operation) [][2]string {
 			{"target.define", "在目标节点定义"},
 			{"source.cleanup", "清理源侧"},
 		}
+	case OpVMMigrateTakeover:
+		return [][2]string{
+			{"nvram.rebuild", "补齐固件变量"},
+			{"net.rebind", "重建网络绑定"},
+			{"resource.register", "登记节点资源"},
+		}
 	case OpHostStats:
 		return [][2]string{
 			{"read_proc", "读取 /proc 指标"},
@@ -691,6 +697,9 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 		// 的常见量级。给整数的 1000 会让人以为这是理论值而不是测出来的。
 		data[MigrateAssessDataKey] = MigrateAssessInfo{
 			BandwidthMbps: 937,
+			// 一个收敛无压力的脏页读数：42 MB/s = 336 Mbps，约为带宽的
+			// 36%。热迁移预检要能展示"比值远低于阈值"的正常形态。
+			DirtyRateMBps: 42,
 			Source:        AssessSourceSpeedtest,
 			Message:       "测速 2 秒，取平均值；波动 ±5%",
 		}
@@ -743,11 +752,24 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 		// 没有返回值：删除的结果只由 Success 表达。
 
 	case OpVMMigrate:
-		data[MigrateResultKey] = MigrateResult{
+		mode, _ := op.Params["mode"].(string)
+		result := MigrateResult{
 			// 说明跟着搬了些什么：只给一个「成功」会让用户不确定
 			// 「我原来接的网络、配的转发还在不在」。
 			Moved:           []string{"系统盘与数据盘", "全部网卡", "静态地址与端口转发"},
 			DurationSeconds: 47,
+		}
+		if mode == "live" {
+			// 热迁移的传输耗时短得多（增量同步），但要付出一个停顿窗口。
+			result.DurationSeconds = 9
+			result.DowntimeMs = 380
+		}
+		data[MigrateResultKey] = result
+
+	case OpVMMigrateTakeover:
+		data[MigrateTakeoverDataKey] = MigrateTakeoverInfo{
+			Applied: []string{"固件变量（NVRAM）", "网络绑定（网桥与端口）", "目标节点资源登记"},
+			Message: "目标侧接管完成",
 		}
 
 	case OpHostStats:

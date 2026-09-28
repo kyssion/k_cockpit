@@ -24,6 +24,10 @@ type VMMigration struct {
 	ToNodeID   int64 `gorm:"not null"`
 
 	Status string `gorm:"size:16;not null;default:pending"`
+	// Mode 是迁移方式（F-2-15）：live（热迁移）/ offline（停机迁移）。
+	// 两种方式的业务影响完全不同——排查"那次迁移为什么失败"时先要分清
+	// 走的哪条路。
+	Mode string `gorm:"size:8;not null;default:offline"`
 	// Result 说明跟着搬了些什么（网卡、静态地址、端口转发的数量）。
 	//
 	// 只给一个「成功」会让用户不确定「我原来接的网络、配的转发还在不在」，

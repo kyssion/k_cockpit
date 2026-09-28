@@ -27,4 +27,30 @@ type MigrateResult struct {
 	// 而用户关心的是「数据搬了多久」——那个数字会直接影响他对后续迁移量级的
 	// 判断。
 	DurationSeconds int
+	// DowntimeMs 是热迁移的停顿窗口（毫秒）：切换到目标侧那一刻机器暂停的
+	// 时长。停机迁移没有这个概念（全程都是停的），因此只在 live 模式有值。
+	DowntimeMs int `json:"downtime_ms,omitempty"`
+}
+
+// OpVMMigrateTakeover 迁移完成后的目标侧接管（F-6-04）。
+//
+// 数据搬到目标节点只是迁移的一半：虚拟机要在那边"活起来"，还差目标侧
+// 的补齐——固件变量（NVRAM）、网络绑定（网桥/端口）、以及目标节点本地
+// 需要登记的资源。这些由**目标 agent**执行，而不是源侧代劳：目标侧的
+// 状态只有它自己知道。
+//
+// 时序约束：接管在源侧迁移成功**之后**、控制面改记录**之前**——接管失败
+// 时控制面仍指向源节点，源侧数据未清理，重试是安全的。
+const OpVMMigrateTakeover OpKind = "vm.migrate.takeover"
+
+// MigrateTakeoverDataKey 是接管结果的键。
+const MigrateTakeoverDataKey = "migrate_takeover"
+
+// MigrateTakeoverInfo 是目标侧接管的结果。
+type MigrateTakeoverInfo struct {
+	// Applied 说明目标侧补齐了哪些东西（界面展示用，与 MigrateResult.Moved
+	// 同一口径）。
+	Applied []string
+	// Message 是节点给的补充说明，可空。
+	Message string `json:"message,omitempty"`
 }

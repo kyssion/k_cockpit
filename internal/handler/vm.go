@@ -1859,3 +1859,21 @@ func (h *VM) BatchRemovePortForwards(ctx context.Context, c *app.RequestContext)
 	}
 	api.OK(c, res)
 }
+
+// MigrateTargets 列出一台虚拟机可选的迁移目标（F-6-03 / F-6-04）。
+//
+// 与预检分开：这一步回答"有哪些地方可以去"（容量、冲突、建议），
+// "现在能不能走"是预检的事——两个问题在界面上也是两步。
+func (h *VM) MigrateTargets(ctx context.Context, c *app.RequestContext) {
+	id, err := namedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	items, err := h.svc.MigrateTargets(ctx, id, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"items": items})
+}

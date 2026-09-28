@@ -17,11 +17,15 @@ import (
 
 // migrateParams 是 vm.migrate 任务的参数。
 type migrateParams struct {
-	MigrationID    int64  `json:"migration_id"`
-	VMID           int64  `json:"vm_id"`
-	VMName         string `json:"vm_name"`
-	FromNodeID     int64  `json:"from_node_id"`
-	ToNodeID       int64  `json:"to_node_id"`
+	MigrationID int64  `json:"migration_id"`
+	VMID        int64  `json:"vm_id"`
+	VMName      string `json:"vm_name"`
+	FromNodeID  int64  `json:"from_node_id"`
+	ToNodeID    int64  `json:"to_node_id"`
+	// Mode 是迁移方式（live / offline，F-2-15）。
+	Mode string `json:"mode,omitempty"`
+	// AutoConverge 为 true 时节点在热迁移中开启 CPU 限流压脏页。
+	AutoConverge   bool   `json:"auto_converge,omitempty"`
 	ObservedStatus string `json:"observed_status"`
 }
 
@@ -58,11 +62,19 @@ func (e *MigrateExecutor) Run(ctx context.Context, t *model.Task) error {
 
 	e.markRunning(ctx, p.MigrationID)
 
+	opParams := map[string]any{"to_node_id": p.ToNodeID}
+	if p.Mode != "" {
+		opParams["mode"] = p.Mode
+	}
+	if p.AutoConverge {
+		opParams["auto_converge"] = true
+	}
+
 	result, err := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, agent.Operation{
 		Kind:   agent.OpVMMigrate,
 		NodeID: p.FromNodeID,
 		Target: p.VMName,
-		Params: map[string]any{"to_node_id": p.ToNodeID},
+		Params: opParams,
 	})
 	if err != nil {
 		e.markFailed(ctx, p.MigrationID, "源节点不可达，迁移指令未送达")
@@ -75,6 +87,34 @@ func (e *MigrateExecutor) Run(ctx context.Context, t *model.Task) error {
 	}
 
 	info, _ := result.Data[agent.MigrateResultKey].(agent.MigrateResult)
+
+	// 目标侧接管（F-6-04）：数据到位只是迁移的一半，虚拟机要在目标节点
+	// "活起来"还差固件变量、网络绑定这些**目标侧本地**的东西。由目标
+	// agent 执行、在控制面改记录**之前**——接管失败时记录仍指向源节点，
+	// 源侧数据未清理，重试是安全的；顺序反了会留下"面板说迁完了、目标
+	// 上根本起不来"的状态。
+	takeover, err := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, agent.Operation{
+		Kind:   agent.OpVMMigrateTakeover,
+		NodeID: p.ToNodeID,
+		Target: p.VMName,
+		Params: map[string]any{
+			"from_node_id": p.FromNodeID,
+			"mode":         p.Mode,
+		},
+	})
+	if err != nil {
+		e.markFailed(ctx, p.MigrationID, "源侧迁移已完成，但目标节点不可达、接管未执行；"+
+			"控制面记录未变更，请在目标节点恢复后重试")
+		return api.Unavailable("目标节点不可达，接管未执行（源侧数据保留，可重试）")
+	}
+	if !takeover.Success {
+		e.markFailed(ctx, p.MigrationID, "目标侧接管失败："+takeover.Message+
+			"；控制面记录未变更，源侧数据保留")
+		return api.ValidationFailed("目标侧接管失败：" + takeover.Message)
+	}
+	if tk, ok := takeover.Data[agent.MigrateTakeoverDataKey].(agent.MigrateTakeoverInfo); ok && len(tk.Applied) > 0 {
+		info.Moved = append(info.Moved, tk.Applied...)
+	}
 
 	if err := e.commitMigration(ctx, &p, info); err != nil {
 		// 节点侧已经搬完了，但控制面没跟上——这是最需要留痕的一种状态，
@@ -134,7 +174,13 @@ func (e *MigrateExecutor) commitMigration(
 			resultText = "已迁移：" + joinConflicts(info.Moved)
 		}
 		if info.DurationSeconds > 0 {
-			resultText += fmt.Sprintf("（传输耗时 %d 秒）", info.DurationSeconds)
+			resultText += fmt.Sprintf("（传输耗时 %d 秒", info.DurationSeconds)
+			// 热迁移的成功口径是"停顿窗口毫秒级"，把实测窗口带出来：
+			// 用户拿它核对业务方"有没有感知"。
+			if info.DowntimeMs > 0 {
+				resultText += fmt.Sprintf("，停顿 %d ms", info.DowntimeMs)
+			}
+			resultText += "）"
 		}
 		if len(resultText) > 500 {
 			resultText = resultText[:500]

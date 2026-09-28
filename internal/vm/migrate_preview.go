@@ -13,8 +13,12 @@ import (
 // 迁移方式。
 const (
 	// MigrationOffline 停机迁移：先把机器关掉，复制完磁盘之后在目标节点上
-	// 启动。**这是当前唯一支持的方式。**
+	// 启动。
 	MigrationOffline = "offline"
+	// MigrationLive 热迁移（F-2-15）：运行中的机器不停机搬到目标节点，
+	// 只付出一个通常几百毫秒的停顿窗口。能否收敛取决于脏页速率与链路
+	// 带宽的比值，预检会给出量化结论。
+	MigrationLive = "live"
 )
 
 // MigrationPreview 是迁移前的预检结果。
@@ -25,7 +29,8 @@ const (
 //
 // 因此除了"能不能迁"（Ready / Blockers），还必须给出**会怎么迁**
 // （Mode / DataVolume）——因为停机时长由这两件事决定，而不是由"能不能迁"
-// 决定。
+// 决定。热迁移落地后 Mode 由机器的实时状态决定：运行中走 live（停顿窗口
+// 毫秒级），已关机走 offline（停机时长≈复制时长）。
 type MigrationPreview struct {
 	VMID   int64  `json:"vm_id"`
 	VMName string `json:"vm_name"`
@@ -45,7 +50,7 @@ type MigrationPreview struct {
 	// Warnings 不阻止迁移但用户应当知道的事。
 	Warnings []string `json:"warnings,omitempty"`
 
-	// Mode 是迁移会走的方式。
+	// Mode 是迁移会走的方式（live / offline）。
 	Mode string `json:"mode"`
 	// ModeNote 用人话解释这种方式意味着什么。
 	ModeNote string `json:"mode_note"`
@@ -66,6 +71,17 @@ type MigrationPreview struct {
 	// BandwidthSource 说明带宽的来源（speedtest / estimate），两者置信度
 	// 不同，界面上要能区分。
 	BandwidthSource string `json:"bandwidth_source,omitempty"`
+
+	// --- 热迁移的量化评估（F-2-15，仅 Mode = live 时有值）---
+
+	// DirtyRateMBps 是评估时测得的脏页速率；0 表示未测得。
+	DirtyRateMBps int64 `json:"dirty_rate_mbps,omitempty"`
+	// DirtyRatioPercent 是脏页带宽占链路带宽的百分比；-1 表示没有读数。
+	DirtyRatioPercent int `json:"dirty_ratio_percent,omitempty"`
+	// AutoConverge 表示执行时会自动开启 CPU 限流（比值超过 80%）。
+	AutoConverge bool `json:"auto_converge,omitempty"`
+	// ConvergeNote 是收敛性的结论（带数字），预览页直接展示。
+	ConvergeNote string `json:"converge_note,omitempty"`
 }
 
 // PreviewMigration 预检一次迁移。**只读**，不产生任何记录。
@@ -84,28 +100,39 @@ func (s *Service) PreviewMigration(
 		return nil, api.InvalidParameter("必须指定目标节点")
 	}
 
+	blockers, mode := s.migrationBlockers(ctx, target, toNodeID)
+
 	out := &MigrationPreview{
 		VMID: target.ID, VMName: target.Name,
 		FromNodeID: target.NodeID,
 		ToNodeID:   toNodeID,
-		Mode:       MigrationOffline,
+		Mode:       mode,
 		DiskGB:     target.DiskGB,
 	}
 	out.FromNodeName = s.nodeName(ctx, target.NodeID)
 	out.ToNodeName = s.nodeName(ctx, toNodeID)
 
 	// **与 Migrate 同一套校验。**
-	out.Blockers = errStrings(s.migrationBlockers(ctx, target, toNodeID))
+	out.Blockers = errStrings(blockers)
 	out.Ready = len(out.Blockers) == 0
 
-	// 迁移方式：当前只有停机迁移，而这件事必须说明白——它决定了停机时长，
-	// 而用户很可能以为迁移是"不断服务地挪过去"。
-	out.ModeNote = "先把虚拟机**关机**，把磁盘完整复制到目标节点，再在那边启动。" +
-		"因此停机时长约等于复制整个磁盘所需的时间。"
-	if target.DiskGB > 0 {
-		out.DowntimeHint = s.migrationDowntimeHint(ctx, target, toNodeID, out)
+	switch mode {
+	case MigrationLive:
+		// 迁移方式必须说明白：热迁移不是"零停机"，而是"停顿窗口毫秒级"。
+		// 说零停机的人会在切换那一刻发现服务断了一下，然后不再信任面板。
+		out.ModeNote = "运行中的虚拟机**不停机**搬到目标节点，只在切换那一刻" +
+			"有一个通常几百毫秒的停顿窗口。"
+		if out.Ready {
+			s.previewLive(ctx, target, toNodeID, out)
+		}
+	default:
+		out.Mode = MigrationOffline
+		out.ModeNote = "先把虚拟机**关机**，把磁盘完整复制到目标节点，再在那边启动。" +
+			"因此停机时长约等于复制整个磁盘所需的时间。"
+		if target.DiskGB > 0 {
+			out.DowntimeHint = s.migrationDowntimeHint(ctx, target, toNodeID, out)
+		}
 	}
-
 	if target.DiskGB == 0 {
 		out.Warnings = append(out.Warnings, "这台虚拟机没有记录磁盘容量，停机时长无法估算")
 	}
@@ -116,6 +143,52 @@ func (s *Service) PreviewMigration(
 			"但存储与 CPU 的实际性能取决于目标节点。")
 
 	return out, nil
+}
+
+// previewLive 填充热迁移的量化评估（F-2-15）。
+//
+// 评估不出来**不阻断**预检：它只是收敛性的依据，测不到时如实说"无法
+// 预判"，迁移仍可进行——节点侧有自己的超时与失败上报，那才是真正的
+// 执行边界。
+func (s *Service) previewLive(
+	ctx context.Context, target *model.VM, toNodeID int64, out *MigrationPreview,
+) {
+	info, ok := s.assessLine(ctx, target, toNodeID)
+	if ok {
+		out.BandwidthMbps = info.BandwidthMbps
+		out.BandwidthSource = info.Source
+	}
+	live := AssessLive(info)
+	out.DirtyRateMBps = live.DirtyRateMBps
+	out.DirtyRatioPercent = live.DirtyRatioPercent
+	out.AutoConverge = live.AutoConverge
+	out.ConvergeNote = live.Note
+	if live.Block {
+		// 唯一升级成 blocker 的评估结论：放行一个追不上的热迁移，结果
+		// 一定是跑满时长然后超时——机器在源侧白白卡了那么久。
+		out.Blockers = append(out.Blockers, live.Note)
+		out.Ready = false
+	}
+}
+
+// assessLine 向源节点发起一次线路评估（带宽 + 脏页速率）。
+func (s *Service) assessLine(
+	ctx context.Context, target *model.VM, toNodeID int64,
+) (agent.MigrateAssessInfo, bool) {
+	if s.agent == nil {
+		return agent.MigrateAssessInfo{}, false
+	}
+	result, err := s.agent.Execute(ctx, agent.Operation{
+		Kind:   agent.OpMigrateAssess,
+		NodeID: target.NodeID,
+		Target: target.Name,
+		Params: map[string]any{"target_node_id": toNodeID, "live": true},
+	})
+	if err != nil || !result.Success {
+		return agent.MigrateAssessInfo{}, false
+	}
+	info, ok := result.Data[agent.MigrateAssessDataKey].(agent.MigrateAssessInfo)
+	return info, ok
 }
 
 // migrationDowntimeHint 生成停机时长的估算文案（G-35）。
@@ -168,7 +241,8 @@ func sourceNote(source string) string {
 	return ""
 }
 
-// migrationBlockers 返回会阻止迁移的条件。
+// migrationBlockers 返回会阻止迁移的条件，以及探测到的状态与由此决定的
+// 迁移方式。
 //
 // **Migrate 与 PreviewMigration 都调它**——这是"预览说可以、点下去被拒"
 // 这类问题的唯一防线。
@@ -177,13 +251,18 @@ func sourceNote(source string) string {
 // 不存在、422 是参数或前置条件不满足），而客户端据此决定怎么呈现。压成
 // 字符串会让 Migrate 只能把它们统一成 422——那是个真实的回归，测试直接
 // 抓到了它。
+//
+// 状态与方式的对应（F-2-15）：运行中 → 热迁移；已关机 → 停机迁移；
+// 暂停 / 挂起 / 错误 / 未知 → 阻断（热迁移要求源在跑，停机迁移要求源
+// 已停，两头都不沾的状态只能让用户先把它带到其中一边）。
 func (s *Service) migrationBlockers(
 	ctx context.Context, target *model.VM, toNodeID int64,
-) []error {
+) ([]error, string) {
 	out := []error{}
+	mode := MigrationOffline
 
 	if toNodeID == target.NodeID {
-		return append(out, api.ValidationFailed("目标节点与当前节点相同，无需迁移"))
+		return append(out, api.ValidationFailed("目标节点与当前节点相同，无需迁移")), mode
 	}
 	if err := s.ensureMigrateTarget(ctx, toNodeID); err != nil {
 		out = append(out, err)
@@ -193,10 +272,18 @@ func (s *Service) migrationBlockers(
 	current, err := s.probeStatus(ctx, target)
 	if err != nil {
 		out = append(out, api.Unavailable("无法确认虚拟机的当前状态（节点不可达）"))
-	} else if current != model.VMStatusStopped {
-		out = append(out, api.ValidationFailed(
-			"迁移需要先关机（当前："+DescribeStatus(current)+"）。"+
-				"运行中迁移会让磁盘在被写入的同时被复制，两侧都不可用"))
+	} else {
+		switch current {
+		case model.VMStatusRunning:
+			mode = MigrationLive
+		case model.VMStatusStopped:
+			// 停机迁移。
+		default:
+			out = append(out, api.ValidationFailed(
+				"当前状态（"+DescribeStatus(current)+"）两种迁移方式都不适用："+
+					"热迁移需要机器在运行，停机迁移需要机器已关机。"+
+					"请先恢复或关机后再迁移"))
+		}
 	}
 
 	active, err := s.hasActiveTask(ctx, target.ID)
@@ -215,7 +302,7 @@ func (s *Service) migrationBlockers(
 		out = append(out, api.Conflict("目标节点上存在冲突："+joinConflicts(conflicts)+
 			"。这些资源在节点内唯一，请先在目标节点上释放它们，或先在源节点上解绑"))
 	}
-	return out
+	return out, mode
 }
 
 // errStrings 把错误列表转成文案，供预览展示。
