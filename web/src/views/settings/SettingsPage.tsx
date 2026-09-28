@@ -2,6 +2,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 
 import { ApiError, NetworkError } from '@/api/client'
+import { maintenanceApi, type MaintenanceNodeResult } from '@/api/maintenance'
+import { netMaintainApi } from '@/api/network'
+import { nodeApi } from '@/api/node'
 import {
   SOURCE_LABEL,
   UPDATE_STATUS_LABEL,
@@ -116,12 +119,21 @@ export function SettingsPage() {
               放在这一组下面，而不是塞进某个折叠区：它需要和自己的说明在一起。
             */}
             {group.key === 'security' && <AuthKeyPanel />}
+            {/*
+              全局带宽总限只改控制面的值；节点上的整形规则要点一次「应用」
+              才会对齐。入口跟着设置项走，避免用户改完值到处找"哪里生效"。
+            */}
+            {group.key === 'network' && <GlobalBandwidthPanel />}
           </section>
         )
       })}
 
       {/* 请求日志：排查时才需要，因此默认关（开关在「安全」分组里）。 */}
       <RequestLogPanel />
+
+      {/* 站点维护（G-46）：影响整个站点可达性的动作，放在设置页最底部——
+          它不是日常旋钮，和其它设置项放在一起会被当成普通开关。 */}
+      <MaintenancePanel />
 
       {results && results.length > 0 && (
         <div className="flex flex-col gap-1.5 rounded-card border border-line bg-raised px-4 py-3 text-base">
@@ -534,4 +546,236 @@ function AuthKeyPanel() {
 function describe(error: unknown): string {
   if (error instanceof ApiError || error instanceof NetworkError) return error.message
   return '操作失败，请稍后重试'
+}
+
+/**
+ * MaintenancePanel 站点级维护模式（G-46）。
+ *
+ * 语义刻意与单机面板不同：不是"一键关掉全部"，而是**逐节点进入维护**并
+ * 汇总结果——管理员手工设置的维护不会被接管，退出时也不会被顺手解除。
+ */
+function MaintenancePanel() {
+  const queryClient = useQueryClient()
+  const [reason, setReason] = useState('')
+  const [shutdown, setShutdown] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [lastResult, setLastResult] = useState<MaintenanceNodeResult[] | null>(null)
+
+  const status = useQuery({ queryKey: ['site-maintenance'], queryFn: maintenanceApi.status })
+
+  const enter = useMutation({
+    mutationFn: () => maintenanceApi.enter({ reason: reason.trim(), shutdown_vms: shutdown }),
+    onSuccess: (v) => {
+      setConfirmOpen(false)
+      setReason('')
+      setShutdown(false)
+      setLastResult(v.nodes ?? null)
+      void queryClient.invalidateQueries({ queryKey: ['site-maintenance'] })
+    },
+  })
+
+  const exit = useMutation({
+    mutationFn: maintenanceApi.exit,
+    onSuccess: () => {
+      setLastResult(null)
+      void queryClient.invalidateQueries({ queryKey: ['site-maintenance'] })
+    },
+  })
+
+  const st = status.data
+
+  return (
+    <section className="rounded-card border border-line">
+      <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
+        <div>
+          <h2 className="text-sm font-medium text-ink-2">站点维护</h2>
+          <p className="mt-0.5 text-xs text-ink-3">
+            让全部节点停止受理创建与电源操作；可选先为运行中的虚拟机逐台入队优雅关机。
+          </p>
+        </div>
+        {st?.in_maintenance ? (
+          <Button size="sm" variant="secondary" loading={exit.isPending} onClick={() => exit.mutate()}>
+            退出维护
+          </Button>
+        ) : (
+          <Button size="sm" variant="secondary" onClick={() => setConfirmOpen(true)}>
+            进入维护
+          </Button>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-2 px-4 py-3">
+        {st?.in_maintenance ? (
+          <div className="flex flex-col gap-1 rounded-control bg-warning/10 px-3 py-2">
+            <span className="text-base text-warning">
+              站点处于维护模式，全部节点已暂停创建与电源操作。
+            </span>
+            <span className="text-sm text-ink-3">
+              原因：{st.reason || '（未填写）'}
+              {st.entered_at ? ` · 由 ${st.entered_by_name || '未知'} 于 ${new Date(st.entered_at).toLocaleString()} 发起` : ''}
+            </span>
+            {st.managed_nodes && st.managed_nodes.length > 0 && (
+              <span className="text-sm text-ink-3">
+                本次接管：{st.managed_nodes.join('、')}（退出时只解除这些节点）
+              </span>
+            )}
+          </div>
+        ) : (
+          <p className="text-base text-ink-3">站点当前正常运行。</p>
+        )}
+
+        {enter.isError && (
+          <p role="alert" className="text-sm text-danger">
+            {describe(enter.error)}
+          </p>
+        )}
+        {exit.isError && (
+          <p role="alert" className="text-sm text-danger">
+            {describe(exit.error)}
+          </p>
+        )}
+
+        {/* 进入维护的逐节点汇总：哪个节点没接管、为什么，要能一眼看到。 */}
+        {lastResult && lastResult.length > 0 && (
+          <table className="w-full border-collapse text-base">
+            <thead>
+              <tr className="text-left text-xs text-ink-3">
+                <th className="px-2 py-1.5 font-normal">节点</th>
+                <th className="px-2 py-1.5 font-normal">结果</th>
+                <th className="px-2 py-1.5 font-normal">关机任务</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lastResult.map((n) => (
+                <tr key={n.node_id} className="border-t border-line">
+                  <td className="px-2 py-1.5 text-ink-2">{n.node_name}</td>
+                  <td className="px-2 py-1.5 text-ink-2">
+                    {MAINTENANCE_NODE_STATUS[n.status] ?? n.status}
+                    {n.error ? <span className="text-danger">（{n.error}）</span> : null}
+                  </td>
+                  <td className="kc-nums px-2 py-1.5 text-ink-3">{n.vm_shutdowns}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <Modal
+        open={confirmOpen}
+        title="进入站点维护"
+        description="全部节点将停止受理创建与电源操作（已有的关机任务会继续执行）。进入需要二次验证。"
+        onClose={() => setConfirmOpen(false)}
+        footer={
+          <>
+            <Button variant="secondary" size="sm" onClick={() => setConfirmOpen(false)}>
+              取消
+            </Button>
+            <Button
+              size="sm"
+              loading={enter.isPending}
+              disabled={reason.trim() === ''}
+              onClick={() => enter.mutate()}
+            >
+              进入维护
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3">
+          <label className="flex flex-col gap-1 text-base text-ink-2">
+            维护原因（会写进每个节点的维护记录）
+            <input
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="例如：升级宿主机内核"
+              className="h-9 rounded-control border border-line-strong bg-surface px-2 text-base text-ink"
+            />
+          </label>
+          <label className="flex items-center gap-2 text-base text-ink-2">
+            <input
+              type="checkbox"
+              checked={shutdown}
+              onChange={(e) => setShutdown(e.target.checked)}
+              className="size-4"
+            />
+            同时为运行中的虚拟机入队优雅关机（逐台入队，可在任务中心跟踪）
+          </label>
+        </div>
+      </Modal>
+    </section>
+  )
+}
+
+const MAINTENANCE_NODE_STATUS: Record<string, string> = {
+  maintained: '已接管',
+  skipped_manual: '跳过（已在维护中，退出时保持）',
+  skipped_not_enrolled: '跳过（未接入）',
+}
+
+/**
+ * GlobalBandwidthPanel 全局带宽总限的「应用到节点」（G-44）。
+ *
+ * 设置项只改控制面的值；节点上的上行整形规则要靠这个动作对齐——与
+ * 「重载规则」「重配置」是同一语义：让节点与我们的记录一致。
+ */
+function GlobalBandwidthPanel() {
+  const [nodeID, setNodeID] = useState('')
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+
+  const nodes = useQuery({ queryKey: ['nodes'], queryFn: nodeApi.list, staleTime: 60_000 })
+
+  const apply = useMutation({
+    mutationFn: () => netMaintainApi.applyGlobalBandwidth(Number(nodeID)),
+    onSuccess: (v) => {
+      setMessage(v.message)
+      setError('')
+    },
+    onError: (err) => {
+      setError(describe(err))
+      setMessage('')
+    },
+  })
+
+  const items = nodes.data ?? []
+
+  return (
+    <div className="flex flex-col gap-2.5 rounded-card border border-line bg-raised px-4 py-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-base text-ink">应用到节点</span>
+        <select
+          value={nodeID}
+          onChange={(e) => setNodeID(e.target.value)}
+          className="h-8 min-w-44 rounded-control border border-line-strong bg-surface px-2 text-base text-ink"
+        >
+          <option value="">选择节点…</option>
+          {items.map((n) => (
+            <option key={n.id} value={n.id}>
+              {n.name}
+            </option>
+          ))}
+        </select>
+        <Button
+          size="sm"
+          variant="secondary"
+          loading={apply.isPending}
+          disabled={nodeID === ''}
+          onClick={() => apply.mutate()}
+        >
+          应用总限
+        </Button>
+      </div>
+      <p className="text-sm text-ink-3">
+        把上面的总限与突发峰值下发到所选节点的上行。多节点部署需要逐个应用；
+        下发结果以节点回显为准。
+      </p>
+      {message && <p className="text-sm text-success">{message}</p>}
+      {error && (
+        <p role="alert" className="text-sm text-danger">
+          {error}
+        </p>
+      )}
+    </div>
+  )
 }

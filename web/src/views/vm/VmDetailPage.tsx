@@ -1411,6 +1411,16 @@ function NetworkTab({ vmID }: { vmID: number }) {
 
         {/* 批量删除可能**部分成功**，因此逐条列出失败原因，而不是一句
             「批量删除失败」——那样用户不知道该处理哪几条。 */}
+        {/* 联动提示（G-51）：转发目标依赖虚拟机当前地址，而静态绑定与转发是
+            两条独立链路。有转发却没绑静态地址时提醒，而不是替用户自动绑——
+            "绑定哪个地址"在多网卡时不是一个可以替人决定的问题。 */}
+        {pfs.length > 0 && ips.length === 0 && (
+          <p className="border-b border-line bg-warning/5 px-4 py-2 text-sm text-warning">
+            该虚拟机还没有绑定静态地址：转发目标依赖当前 IP，DHCP 续租后地址一变转发就会失效。
+            建议在上方「静态地址」里绑定当前地址。
+          </p>
+        )}
+
         {(pfFailed?.length ?? 0) > 0 && (
           <div className="border-b border-line bg-danger/5 px-4 py-2">
             <p className="text-xs text-danger">以下条目删除失败：</p>
@@ -1858,10 +1868,13 @@ function PortForwardModal({
   const [allowed, setAllowed] = useState('')
   const [error, setError] = useState('')
 
-  const h = Number(hostPort)
+  const h = hostPort.trim() === '' ? 0 : Number(hostPort)
   const t = Number(targetPort)
+  // 宿主机端口留空 = 自动分配（G-54）；目标端口必须由用户给出——
+  // 转发指向哪里是用户的意图，没有可以替人决定的默认值。
+  const hostOK = h === 0 || (Number.isInteger(h) && h >= 1 && h <= 65535)
   const ready =
-    Number.isInteger(h) && h >= 1 && h <= 65535 && Number.isInteger(t) && t >= 1 && t <= 65535
+    hostOK && Number.isInteger(t) && t >= 1 && t <= 65535
 
   return (
     <Modal
@@ -1910,12 +1923,13 @@ function PortForwardModal({
             </select>
           </label>
           <Input
-            label="宿主机端口"
+            label="宿主机端口（留空自动分配）"
             type="number"
             min={1}
             max={65535}
             value={hostPort}
             onChange={(e) => setHostPort(e.target.value)}
+            hint="留空时从系统设置的范围里取未占用的端口；范围可在系统设置 → 网络中调整。"
           />
         </div>
 

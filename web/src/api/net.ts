@@ -48,6 +48,7 @@ export interface PortForward {
 
 export interface AddPortForwardInput {
   protocol: 'tcp' | 'udp'
+  /** 0 表示自动分配（G-54）：服务端从设置的范围里取未占用的端口。 */
   host_port: number
   target_ip?: string
   target_port: number

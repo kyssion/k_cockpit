@@ -3,6 +3,8 @@ import { useState, type FormEvent } from 'react'
 
 import { ApiError, NetworkError } from '@/api/client'
 import { nodeApi } from '@/api/node'
+import { schedulerApi } from '@/api/scheduler'
+import { settingsApi } from '@/api/settings'
 import {
   FS_TYPES,
   POOL_STATUS_LABEL,
@@ -233,6 +235,10 @@ export function StoragePoolPage() {
                 回收空间（trim）
               </Button>
             </div>
+
+            {/* 自动回收（G-52）：开关在系统设置里，这里给出看得见的落点——
+                上次执行的结果与直达入口，避免"开了开关但不知道有没有跑"。 */}
+            <AutoTrimPanel />
 
             {disks.isPending && <PageLoading />}
 
@@ -932,5 +938,40 @@ function AllocationSummary({ pools, disks }: { pools: PoolView[]; disks: DiskVie
         </p>
       )}
     </section>
+  )
+}
+
+/**
+ * AutoTrimPanel 自动回收的状态与最近执行结果（G-52）。
+ *
+ * 开关本身在系统设置（存储分组），这里只读状态并展示结果——把开关复制
+ * 一份到存储池页会让"哪里是权威"变成要额外回答的问题。
+ */
+function AutoTrimPanel() {
+  const settings = useQuery({ queryKey: ['settings'], queryFn: settingsApi.list })
+  const events = useQuery({
+    queryKey: ['storage-trim-events'],
+    queryFn: () => schedulerApi.events('storage.trim'),
+  })
+
+  const autoTrim = settings.data?.items.find((it) => it.key === 'storage.auto_trim_enabled')
+  const last = events.data?.items?.[0]
+
+  return (
+    <div className="flex flex-col gap-1 rounded-control border border-line bg-raised px-3 py-2 text-sm">
+      <span className="text-ink-2">
+        自动回收：
+        {autoTrim?.value === 'true' ? (
+          <span className="text-success">已开启（每天对全部在线节点执行一次 trim）</span>
+        ) : (
+          <span className="text-ink-3">未开启（可在系统设置 → 存储中打开）</span>
+        )}
+      </span>
+      {last && (
+        <span className={last.status === 'failed' ? 'text-danger' : 'text-ink-3'}>
+          上次执行：{last.message} · {new Date(last.at).toLocaleString()}
+        </span>
+      )}
+    </div>
   )
 }

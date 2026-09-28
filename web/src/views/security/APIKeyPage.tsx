@@ -154,6 +154,11 @@ export function APIKeyPage() {
         )}
       </section>
 
+      {/* 一次性下载令牌（G-53）：给「带不上请求头的下载场景」一个显式入口。
+          它与 API Key 是两种东西——短期、一次性、只用于下载，因此放在
+          同一页但单独一块。 */}
+      <ActionTokenSection />
+
       <CreateKeyModal
         open={createOpen}
         rotating={data?.exists === true}
@@ -314,4 +319,76 @@ function formatDate(iso: string): string {
 function describe(error: unknown): string {
   if (error instanceof ApiError || error instanceof NetworkError) return error.message
   return '操作失败，请稍后重试'
+}
+
+/**
+ * ActionTokenSection 一次性下载令牌的签发入口（G-53）。
+ *
+ * 明文同样只显示一次；与 API Key 不同，它**不需要**复制保存的仪式感——
+ * 用一次就没了，过期作废，丢失的代价是再点一次。
+ */
+function ActionTokenSection() {
+  const [token, setToken] = useState('')
+  const [expiresAt, setExpiresAt] = useState('')
+  const [error, setError] = useState('')
+  const [copied, setCopied] = useState(false)
+
+  const issue = useMutation({
+    mutationFn: () => apiKeyApi.issueActionToken(),
+    onSuccess: (v) => {
+      setToken(v.token)
+      setExpiresAt(v.expires_at)
+      setError('')
+      setCopied(false)
+    },
+    onError: (err) => setError(describe(err)),
+  })
+
+  return (
+    <section className="rounded-card border border-line bg-surface p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-base font-medium text-ink">一次性下载令牌</h2>
+          <p className="mt-0.5 text-sm text-ink-3">
+            拼进下载接口 URL 的
+            <code className="kc-mono mx-1">action_token</code>
+            参数，供浏览器直链、下载器等带不上请求头的场景使用。
+          </p>
+        </div>
+        <Button variant="secondary" size="sm" loading={issue.isPending} onClick={() => issue.mutate()}>
+          生成令牌
+        </Button>
+      </div>
+
+      {error && (
+        <p role="alert" className="mt-2 text-sm text-danger">
+          {error}
+        </p>
+      )}
+
+      {token && (
+        <div className="mt-3 flex flex-col gap-1 rounded-control bg-sunken px-3 py-2">
+          <div className="flex items-center gap-2">
+            <code className="kc-mono min-w-0 flex-1 break-all text-sm text-ink">{token}</code>
+            <button
+              type="button"
+              className="shrink-0 text-sm text-ink-3 hover:text-brand"
+              onClick={() => {
+                void navigator.clipboard?.writeText(token)
+                setCopied(true)
+                window.setTimeout(() => setCopied(false), 1500)
+              }}
+            >
+              {copied ? '已复制' : '复制'}
+            </button>
+          </div>
+          <p className="text-xs text-ink-3">
+            短期有效（至 {expiresAt ? new Date(expiresAt).toLocaleTimeString() : '—'}）、
+            <span className="text-ink-2">只能使用一次</span>
+            ——无论成功还是失败都会作废，用掉了就再生成一个。
+          </p>
+        </div>
+      )}
+    </section>
+  )
 }

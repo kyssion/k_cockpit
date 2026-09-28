@@ -172,7 +172,8 @@ export function LogPage() {
 
       {st && (st.rotated?.length ?? 0) > 0 && (
         <p className="text-sm text-ink-3">
-          另有 {st.rotated?.length ?? 0} 个轮转文件（保留最近 {st.keep_files} 个）。
+          另有 {st.rotated?.length ?? 0} 个已压缩的轮转归档（保留最近 {st.keep_files} 个，可在系统设置 →
+          日志中调整；导出会一并解压包含它们）。
         </p>
       )}
 

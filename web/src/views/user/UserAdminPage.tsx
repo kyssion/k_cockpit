@@ -681,6 +681,12 @@ function InviteSection() {
               邀请链接已生成，请复制并转交给对方（仅显示一次）。
             </span>
             <code className="kc-mono break-all text-xs text-ink-2">{link}</code>
+            {/* 相对路径只在面板自己的域名下能打开；发出去之前必须补上站点地址。 */}
+            {link.startsWith('/') && (
+              <span className="text-xs text-warning">
+                未配置站点对外地址（系统设置 → 基础），当前链接是相对路径，发给站外用户无法直接打开。
+              </span>
+            )}
           </div>
         )}
 

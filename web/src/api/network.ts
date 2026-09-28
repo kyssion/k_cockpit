@@ -139,4 +139,10 @@ export const netMaintainApi = {
       '/api/v1/networks/ipv6/policy',
       input,
     ),
+
+  /** 全局带宽总限（G-44）：把设置值下发到节点上行；值本身在系统设置里。 */
+  applyGlobalBandwidth: (nodeID: number) =>
+    post<{ applied: boolean; mbps: number; burst_mbps: number; message: string }>(
+      `/api/v1/networks/global-bandwidth/apply?node_id=${nodeID}`,
+    ),
 }

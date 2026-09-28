@@ -57,6 +57,19 @@ export const apiKeyApi = {
 
   /** 撤销。记录会保留，供事后追查「什么时候被撤掉的」。 */
   revoke: () => del<{ revoked: boolean }>('/api/v1/api-keys'),
+
+  /**
+   * 签发一次性下载令牌（G-53）。
+   *
+   * 用途：把它拼进下载接口 URL 的 `action_token` 参数，让 `<a href>`、
+   * 下载器这类带不上自定义请求头的场景也能完成认证。令牌短期有效、
+   * **只能用一次**，失败与成功都会把它烧掉。
+   */
+  issueActionToken: (purpose = 'download') =>
+    post<{ token: string; expires_at: string; single_use: boolean }>(
+      '/api/v1/action-tokens',
+      { purpose },
+    ),
 }
 
 /**
