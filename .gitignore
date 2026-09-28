@@ -640,6 +640,7 @@ reports/
 *.lcov
 junit.xml
 test-results/
+playwright-report/
 allure-results/
 allure-report/
 
