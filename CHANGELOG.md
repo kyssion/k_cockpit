@@ -17,7 +17,26 @@
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-28
+
+首个里程碑版本：控制面功能面完整（对标 QVMConsole 四轮差距全部收口），
+**节点代理仍为 mock**（[ADR-0007](docs/06-decisions/0007-mock-agent-first.md)）——
+可演示、可联调前端，不能真实管理宿主机。部署与升级见
+[`docs/04-engineering/DEPLOYMENT.md`](docs/04-engineering/DEPLOYMENT.md)。
+
 ### Added
+- **跨节点迁移补全（F-2-15 / F-6-03 / F-6-04）**
+  - **热迁移**：运行中的虚拟机不再被"先关机"拦下——方式由实时状态决定（运行中→热迁移、已关机→停机迁移），迁移记录落 `mode` 列（迁移 0049）。预检给出**量化收敛结论**：脏页速率 ÷ 实测带宽的比值，≥100% 直接阻断（追不上）、≥80% 自动开启 CPU 限流（auto-converge）、评估不出则如实说明；受理时**复核一次**（负载在预检与提交之间会漂）
+  - **目标侧接管**：新增 agent 操作 `vm.migrate.takeover`——数据到位只是迁移的一半，固件变量（NVRAM）、网络绑定这些目标侧本地的补齐由**目标 agent** 执行，时序在"源侧成功之后、控制面改记录之前"，接管失败时源侧保留、可重试
+  - **迁移目标清单**：`GET /vms/:id/migrate-targets` 按节点聚合容量（来自最近一次周期采样而非实时探测）、节点内资源冲突与可否作为目标，并标出**余量最大的建议目标**（只是建议——放哪儿是人的决定）。前端迁移弹窗换用该接口
+- **磁盘热插拔的槽位降级（F-2-06 收尾）**：q35 机型 PCIe 根端口耗尽时（此前表现为"挂载成功但设备不出现"），挂载自动改走 virtio-scsi 控制器（一块控制器只占一个槽位）；机型不支持热插拔（i440FX）不降级——那是换机型的问题
+- **持续集成与前端测试**（工程欠账收口）
+  - GitHub Actions 工作流（`.github/workflows/ci.yml`）：后端 gofmt / vet / test 与前端 typecheck / lint / test / build 两job 并行，命令与 AGENTS.md §3 完全一致
+  - Vitest 测试基建落地（此前前端测试为 0）：请求层核心链路（统一解包、401 登出、**428 二次验证后自动重放**）、通用件（Modal 的 Esc 与不可关闭语义）、展示层工具共 16 个用例
+  - **顺带修了一个测试抓到的真缺陷**：428 验证通过后重放仍被 428 拒绝时，"验证状态已失效"的友好文案是死代码（重放在 catch 块内执行，异常直接穿透）——用户刚验证过却再次看到"需验证"，会以为验证坏了而反复重试
+- **部署与发版文档**：`docs/04-engineering/DEPLOYMENT.md`——控制面构建、systemd 安装、迁移与升级流程、回滚口径（二进制可退、改写结构的迁移依赖备份）、上线检查清单
+- **外部身份源定论（F-1-13）**：[ADR-0009](docs/06-decisions/0009-defer-external-identity.md) **本期不做**——自建自用形态下本地账号 + TOTP + 邮箱找回已闭环，外部 IdP 的收益不抵攻击面，且开发环境无真实 IdP 可验证；多组织共享或强制身份集中管理时重新评估
+
 - **第四轮差距收尾（G-42 ~ G-54，能力闭环与运营期旋钮）**：对标 QVMConsole 实测后登记的十三个条目全部落地（进度与核对结论见 [`docs/01-product/DEMO_PLAN.md`](docs/01-product/DEMO_PLAN.md) §7/§8）
   - **邀请链接站点地址（G-49，缺陷修复）**：新增设置项 `basic.site_url`（环境变量 `SITE_URL`），`main.go` 里返回空串的装配接上设置读取——此前管理员复制到的 `/invite/<token>` 是相对路径，发给站外用户打不开。未配置时链接仍为相对路径（不猜域名），前端在邀请面板给出明确提示
   - **输入侧防护与全局安全响应头（G-42）**：新增 `internal/api` 的请求过滤中间件（路径穿越、空字节与控制字符、扫描器探测路径、异常 Content-Type；开关 `security.request_filter_enabled` 默认开）与安全响应头中间件（nosniff / X-Frame-Options: DENY / CSP frame-ancestors / Referrer-Policy）。此前 nosniff 只在四个下载类接口逐个手设，X-Frame-Options / CSP / Referrer-Policy 全仓缺失

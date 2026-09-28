@@ -27,6 +27,7 @@ docs/
 │   ├── DEVELOPMENT.md             # 本地开发指南
 │   ├── TESTING.md                 # 测试规范
 │   ├── GIT_WORKFLOW.md            # 分支与提交流程
+│   ├── DEPLOYMENT.md              # 部署、升级与回滚（控制面）
 │   ├── TROUBLESHOOTING.md         # 排障与运维规范
 │   └── REFERENCE_*.md             # 已迁移至 08-reference/（仅保留跳转存根）
 ├── 05-ai/                         # AI 层：如何与 AI 协作
@@ -73,7 +74,9 @@ docs/
 **排查问题 / 操作运行环境**：
 
 1. [`04-engineering/TROUBLESHOOTING.md`](04-engineering/TROUBLESHOOTING.md) — 排障纪律、定界方法、systemd 检查清单与案例复盘
-2. 参考项目对应条目 → [`08-reference/README.md`](08-reference/README.md) 下各项目的 `pitfalls.md`（已踩过的坑）
+2. [`04-engineering/DEPLOYMENT.md`](04-engineering/DEPLOYMENT.md) — 控制面的构建、安装、迁移、升级、回滚与上线检查清单
+3. [`04-engineering/SECURITY_REVIEW.md`](04-engineering/SECURITY_REVIEW.md) — 发版前安全自查记录（0.1.0 起每版一份）
+4. 参考项目对应条目 → [`08-reference/README.md`](08-reference/README.md) 下各项目的 `pitfalls.md`（已踩过的坑）
 
 ---
 

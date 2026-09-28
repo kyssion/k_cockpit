@@ -1,0 +1,86 @@
+# 持续集成（ROADMAP §2.6）。
+#
+# 两份工作互不依赖、并行跑：后端与前端是两个独立的构建面，一个失败
+# 不该掩盖另一个的结论。
+#
+# 本地跑法（AGENTS.md §3）与这里完全一致：gofmt / vet / test 与
+# tsc / lint / test / build——CI 只是把同一组命令放到干净环境里再跑
+# 一遍，避免"本地能过、CI 红了"时怀疑环境而不是代码。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: 后端（gofmt / vet / test）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 安装依赖
+        run: go mod download
+
+      - name: 格式化检查
+        run: |
+          unformatted=$(gofmt -l cmd internal)
+          if [ -n "$unformatted" ]; then
+            echo "以下文件未通过 gofmt：" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+
+      - name: 静态检查
+        run: go vet ./...
+
+      - name: 单元测试
+        run: go test ./...
+
+  frontend:
+    name: 前端（typecheck / lint / test / build）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 类型检查
+        run: pnpm exec tsc -b
+
+      - name: 静态检查
+        run: pnpm lint
+
+      - name: 单元测试
+        run: pnpm test
+
+      - name: 构建
+        run: pnpm build
