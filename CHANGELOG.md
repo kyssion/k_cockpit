@@ -17,6 +17,10 @@
 
 ## [Unreleased]
 
+### Changed
+- **internal 按业务域分组**（[ADR-0010](docs/06-decisions/0010-group-internal-by-domain.md)）：58 个平铺包归入 `platform / compute / network / storage / ops` 五个域目录 + `node / agent / model` 顶层包；handler 按同名六域拆分子包；消歧改名 `network→vswitch`、`networkbridge→bridge`、`storage→pool`、`schedule→cron`。纯目录与命名迁移（`git mv` + import 更新，约 200 个文件），零逻辑改动，每域一个 commit、全量测试护航
+- 迁移中验证并否决两个子项：**auditlog 并入 audit** 被 `audit→authz→auth→audit` 依赖环否决（审计写侧必须比 auth 更底层，读写两包保留）；**端口转发/静态地址从 vm 抽到 network 域** 因深耦合否决（与 vm 拆包同批、随真实 agent 落地处理）
+
 ### Fixed
 - **API 文档页认证误标**：mock 专用的 `POST /dev/agent-register`（仅 `AGENT_TRANSPORT=mock` 时注册）未在公开路由清单里，文档页把它标成"需登录"；顺带为它补了说明性摘要
 - **迁移审计条目补记方式**（live / offline）——两条路的失败模式完全不同，排查"那次走哪条路"不必再回查任务参数

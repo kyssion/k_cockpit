@@ -98,6 +98,7 @@ NNNN-动词短语.md
 | [0007](0007-mock-agent-first.md) | 远程操作先以 Mock Agent 落地，业务逻辑保持真实 | Accepted | 2026-09-15 |
 | [0008](0008-first-admin-bootstrap.md) | 首个管理员通过控制台一次性令牌创建 | Accepted | 2026-09-15 |
 | [0009](0009-defer-external-identity.md) | 暂不纳入外部身份源（F-1-13） | Accepted | 2026-09-28 |
+| [0010](0010-group-internal-by-domain.md) | internal 按业务域分组（platform/compute/network/storage/ops） | Accepted | 2026-09-28 |
 
 > **新增 ADR 后必须在此表登记。**
 

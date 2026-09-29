@@ -118,7 +118,7 @@ cd web && pnpm build
 
 > E2E（Playwright）已规划未落地，随真实 agent 的验收环境补（口径见 [`docs/04-engineering/TESTING.md`](docs/04-engineering/TESTING.md)）。
 
-**本地运行提示**：默认配置使用 SQLite，数据文件写入 `data/`。表结构由 [`internal/database/migrations/`](internal/database/migrations/) 下的 SQL 迁移管理（**服务启动不做自动迁移**），执行方式见 [`docs/02-architecture/DATA_MODEL.md`](docs/02-architecture/DATA_MODEL.md) 第 6 节。
+**本地运行提示**：默认配置使用 SQLite，数据文件写入 `data/`。表结构由 [`internal/platform/database/migrations/`](internal/platform/database/migrations/) 下的 SQL 迁移管理（**服务启动不做自动迁移**），执行方式见 [`docs/02-architecture/DATA_MODEL.md`](docs/02-architecture/DATA_MODEL.md) 第 6 节。
 
 ---
 
@@ -127,18 +127,22 @@ cd web && pnpm build
 ```
 k_cockpit/
 ├── cmd/server/            # 程序入口（main 包）
-├── internal/              # 私有代码，外部模块不可导入
+├── internal/              # 私有代码，外部模块不可导入（按域分组，见 ADR-0010）
+│   ├── platform/          # 身份与权限 + 基础设施：api/auth/authz/risk/audit/
+│   │                      # auditlog/apikey/authkey/invite/useradmin/settings/
+│   │                      # passaudit/accesscontrol/reqlog/config/cryptoutil/
+│   │                      # database（SQL 迁移 migrations/）/logging/mailer/version
+│   ├── compute/           # 计算域：vm/vmtag/template/importer/passthrough/computequota
+│   ├── network/           # 网络域：vswitch/bridge/firewall/hostfirewall/
+│   │                      # securitygroup/vpcacl/publicip/portsecurity/portmirror/capture
+│   ├── storage/           # 存储域：pool/userstorage/quota
+│   ├── ops/               # 运行与观测：task/realtime/cron/scheduler/alert/monitor/
+│   │                      # dashboard/search/diagnostics/platformcheck/hosttuning/
+│   │                      # maintenance/emergency/quotaenforce
+│   ├── node/              # 节点接入与投影（F-6-01 / F-6-02）
 │   ├── agent/             # 节点 agent 交互契约（开发期为 mock，见 ADR-0007）
-│   ├── api/               # HTTP 通用约定：统一响应、错误码、中间件
-│   ├── audit/             # 审计流水写入
-│   ├── auth/              # 认证：密码、令牌、会话、首次初始化
-│   ├── authz/             # 授权：角色判定（资源归属过滤随业务接入）
-│   ├── config/            # 配置加载与校验
-│   ├── database/          # 数据库连接、驱动切换与 SQL 迁移（migrations/）
-│   ├── handler/           # HTTP 接口实现（测试同目录）
-│   ├── maintenance/       # 站点级维护模式（G-46，多节点语义）
-│   ├── model/             # 数据库模型（表结构以 DATA_MODEL.md 为准）
-│   ├── node/              # 节点管理（F-6-01 / F-6-02）
+│   ├── model/             # 数据库模型（表结构以 DATA_MODEL.md 为准；跨域共享，不按域拆）
+│   ├── handler/           # HTTP 接口实现（按同名业务域分子包，测试同目录）
 │   └── router/            # 路由注册（角色要求在此声明）
 ├── web/                   # 前端工程（纯 SPA，结构与约定见 docs/02-architecture/FRONTEND.md §2.2）
 ├── reference/             # 只读的外部参考项目（git 子模块，见 docs/08-reference/README.md）

@@ -1,6 +1,6 @@
 # 数据模型
 
-> 状态：生效（表结构已建到 PostgreSQL；字段级以 §4 与 [`internal/database/migrations/`](../../internal/database/migrations/0001_init_schema.sql) 为准）
+> 状态：生效（表结构已建到 PostgreSQL；字段级以 §4 与 [`internal/platform/database/migrations/`](../../internal/platform/database/migrations/0001_init_schema.sql) 为准）
 > 最后更新：2026-09-14
 > 关联文档：[`ARCHITECTURE.md`](ARCHITECTURE.md) · [`TECH_STACK.md`](TECH_STACK.md) · [`../01-product/PRD.md`](../01-product/PRD.md)（功能编号 `F-x-xx`）· [`../01-product/CAPABILITY_MAP.md`](../01-product/CAPABILITY_MAP.md)（能力分层与依赖）
 
@@ -12,7 +12,7 @@
 
 | 维度 | 参考项目（QVMConsole） | 我们的做法 | 理由 |
 |---|---|---|---|
-| 表名 | 复数（`users`、`vpc_switches`） | **单数**（`user`、`vpc_switch`） | 项目已定 GORM `SingularTable`，避免 `user` / `users` 两套命名并存（见 `internal/database`） |
+| 表名 | 复数（`users`、`vpc_switches`） | **单数**（`user`、`vpc_switch`） | 项目已定 GORM `SingularTable`，避免 `user` / `users` 两套命名并存（见 `internal/platform/database`） |
 | 部署形态 | 单机：面板与被管宿主机 1:1 | **多节点**：资源表带 `node_id`，"全局名称唯一"改为"**`(node_id, name)` 唯一**" | 一个控制面管理 N 台宿主机（PRD §4.2）；这也是迁移与放置能力的前提 |
 | 节点接入 | 目标面板 API + 宿主机 **root SSH** 双通道（控制面持有各节点凭据） | **agent 反向长连接** + 一次性注册令牌 + mTLS；`node` 表**不含任何登录凭据字段** | [ADR-0005](../06-decisions/0005-control-plane-node-agent-architecture.md)：凭据集中化风险不可接受，能力探测下沉到节点 |
 | 异步任务 | 纯内存，进程重启即丢失 | **落库**：`task` + `task_stage`；任务带**幂等键**、下发时间与最近上报时间 | 控制面重启不丢任务；任务中心可查历史；agent 侧据幂等键去重、重连重放不重复执行；支持"宿主阶段/来宾阶段"分别重试与审计 |
@@ -201,7 +201,7 @@ erDiagram
 ## 4. 核心实体字段定义
 
 > 覆盖主干链路（账号 → 节点 → 存储 → 网络 → 虚拟机 → 任务 → 审计）。其余表的关键字段见 §2。
-> **字段级的权威来源是迁移脚本** `internal/database/migrations/0001_init_schema.sql`：两者不一致时以脚本为准，并回头修正本节。
+> **字段级的权威来源是迁移脚本** `internal/platform/database/migrations/0001_init_schema.sql`：两者不一致时以脚本为准，并回头修正本节。
 
 ### 4.1 `user`
 
@@ -600,9 +600,9 @@ erDiagram
 
 | 文件 | 说明 |
 |---|---|
-| `internal/database/migrations/0001_init_schema.sql` | 初始表结构：**43 张表 + 81 个显式索引**（另有 43 个主键索引）。PostgreSQL 专用，全部语句带 `IF NOT EXISTS`，可重复执行 |
-| `internal/database/migrations/0002_node_agent_fields.sql` | 节点接入方式改为 **agent**（[ADR-0005](../06-decisions/0005-control-plane-node-agent-architecture.md)）：删除 API/SSH 双通道与远程探测字段，新增注册令牌哈希、证书指纹、注册状态、agent 与协议版本、心跳/最后通信/能力上报时间与最近错误 |
-| `internal/database/migrations/0003_task_agent_fields.sql` | 任务表适配 agent 执行：新增 `idempotency_key`（唯一）、`dispatched_at`、`last_reported_at`；`task.status` 增加 `unknown` 取值用于"节点离线致结果未知" |
+| `internal/platform/database/migrations/0001_init_schema.sql` | 初始表结构：**43 张表 + 81 个显式索引**（另有 43 个主键索引）。PostgreSQL 专用，全部语句带 `IF NOT EXISTS`，可重复执行 |
+| `internal/platform/database/migrations/0002_node_agent_fields.sql` | 节点接入方式改为 **agent**（[ADR-0005](../06-decisions/0005-control-plane-node-agent-architecture.md)）：删除 API/SSH 双通道与远程探测字段，新增注册令牌哈希、证书指纹、注册状态、agent 与协议版本、心跳/最后通信/能力上报时间与最近错误 |
+| `internal/platform/database/migrations/0003_task_agent_fields.sql` | 任务表适配 agent 执行：新增 `idempotency_key`（唯一）、`dispatched_at`、`last_reported_at`；`task.status` 增加 `unknown` 取值用于"节点离线致结果未知" |
 
 - **执行方式**：`go run ./cmd/migrate`（迁移执行器，读取该目录、按 `schema_migration` 去重后执行，单文件单事务）。也可用 `psql "<DSN>" -f <文件>` 手工执行，但**必须自行登记** `schema_migration`，否则执行器会把它当成待应用再跑一遍（虽幂等，但校验和比对会失效）。
 - **执行后登记**：写入 `schema_migration`（`migration_id` = 文件名去扩展名、`checksum` = 文件 sha256、`applied_at`），用于发现"历史迁移被改动"。
@@ -615,7 +615,7 @@ erDiagram
 
 ### 6.2 迁移原则
 
-- **建表入口唯一**：结构变更一律走 `internal/database/migrations/` 下的**显式迁移**，执行后写入 `schema_migration`；**服务启动不做自动迁移**。
+- **建表入口唯一**：结构变更一律走 `internal/platform/database/migrations/` 下的**显式迁移**，执行后写入 `schema_migration`；**服务启动不做自动迁移**。
 - **本地 SQLite（待模型实现）**：GORM 模型落地后，本地开发可由 `AutoMigrate` 建表，模型须与本文件的表与字段保持一致；届时重新引入开关并在 `.env.example` 登记。
 - **必须写显式迁移的场景**（只靠 AutoMigrate 会出错，参考项目已踩过）：
   1. 新增唯一索引前**先去重**（否则建索引直接失败）；
@@ -656,7 +656,7 @@ erDiagram
 | 日期 | 变更内容 | 关联迁移 |
 |---|---|---|
 | 2026-09-14 | 完成数据模型设计：43 张表（身份 7 / 节点 1 / 存储 6 / 网络 16 / 虚拟机 7 / 模板 1 / 任务 3 / 监控 1 / 迁移 1），确定多节点归属、任务落库、JSON 列与不建外键等设计要点，补核心表字段、枚举登记、迁移策略与生命周期 | 待实现 |
-| 2026-09-15 | 生成并执行建表脚本 `internal/database/migrations/0001_init_schema.sql`（43 张表 / 81 个显式索引），已建到 PostgreSQL 的 `k_cockpit` 库并在 `schema_migration` 登记；补 §6.1 迁移文件、执行方式与"示例 `user` 表冲突"的前置清理说明；同步 `storage_file` 索引名 | `0001_init_schema` |
+| 2026-09-15 | 生成并执行建表脚本 `internal/platform/database/migrations/0001_init_schema.sql`（43 张表 / 81 个显式索引），已建到 PostgreSQL 的 `k_cockpit` 库并在 `schema_migration` 登记；补 §6.1 迁移文件、执行方式与"示例 `user` 表冲突"的前置清理说明；同步 `storage_file` 索引名 | `0001_init_schema` |
 | 2026-09-15 | 按 [ADR-0005](../06-decisions/0005-control-plane-node-agent-architecture.md) 修订：§0 新增「节点接入」差异行；`node` 表去掉 API/SSH 双通道与远程探测字段（9 个），改为 agent 注册与信任字段（注册令牌哈希、证书指纹、注册状态）、agent 与协议版本、心跳与最后通信时间、能力上报时间与最近错误；同步 §2.2、§4.3、§5 枚举与 §2.10；迁移 `0002_node_agent_fields` 已执行 | `0002_node_agent_fields` |
 | 2026-09-15 | 全表复核（按 agent 架构逐表检查 43 张表）后的补充：`task` 表新增 `idempotency_key`（同一意图只允许一个任务）、`dispatched_at`、`last_reported_at`，`task.status` 增加 `unknown`；§0 异步任务差异行与 §5 枚举同步；`task_stage` 标注"由 agent 上报"；迁移 `0003_task_agent_fields` 已执行 | `0003_task_agent_fields` |
 | 2026-09-15 | 按 [`f-9-01-system-settings.md`](../07-specs/f-9-01-system-settings.md) 补充 `system_setting.previous_value`（最近一次变更前的值，供设置回滚，见该规格 §9 Q-007）；§2.1 实体说明同步 | `0004_settings_previous_value` |

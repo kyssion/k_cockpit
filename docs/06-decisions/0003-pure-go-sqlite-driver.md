@@ -70,7 +70,7 @@ SQLite 使用 **`github.com/glebarez/sqlite`** v1.11.0。
 
 ### 需要的配套调整
 
-- `internal/database` 中按驱动区分连接池策略：SQLite 固定为**单连接**，从根源规避 `database is locked`
+- `internal/platform/database` 中按驱动区分连接池策略：SQLite 固定为**单连接**，从根源规避 `database is locked`
 - CI 中统一以 `CGO_ENABLED=0` 验证构建，确保不引入隐式 CGO 依赖
 - 若后续性能测试表明纯 Go 实现成为瓶颈，需新建 ADR 评估替换
 

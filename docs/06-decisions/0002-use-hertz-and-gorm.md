@@ -90,7 +90,7 @@
 
 ### 需要的配套调整
 
-- 关闭 GORM 默认事务，减少单条写入的一次 BEGIN/COMMIT 往返（已在 `internal/database` 实现）
+- 关闭 GORM 默认事务，减少单条写入的一次 BEGIN/COMMIT 往返（已在 `internal/platform/database` 实现）
 - 统一使用单数表名，避免 `users` 与 `user` 命名并存
 - 关键选型变更必须新建 ADR，不得直接修改本文
 

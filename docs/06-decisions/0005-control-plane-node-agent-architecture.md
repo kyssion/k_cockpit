@@ -109,7 +109,7 @@
 | `docs/01-product/PRD.md` | ✅ `F-6-01`/`F-6-02` 改为 agent 纳管与自报能力；`F-2-15` 去掉"目标节点 SSH 须为 root / 调目标面板接管"；新增 `F-6-08` 节点代理生命周期（P0）；`F-1-07` 的 SSH 访问控制注明由 agent 落地；§4.2 差异表与 §4.3 设计约定同步 |
 | `docs/01-product/CAPABILITY_MAP.md` | ✅ §2 能力全景、§3 依赖链（agent 在线是 VM 操作前置）、§5 运行态前提、§6 覆盖度对照 |
 | `docs/02-architecture/DATA_MODEL.md` | ✅ `node` 表字段（去掉 `api_*` / `ssh_*` 9 个字段，改为 agent 注册与心跳字段）、枚举登记、迁移记录 |
-| `internal/database/migrations/` | ✅ 新增 `0002_node_agent_fields.sql` 并执行（表结构对齐） |
+| `internal/platform/database/migrations/` | ✅ 新增 `0002_node_agent_fields.sql` 并执行（表结构对齐） |
 | `docs/02-architecture/FRONTEND.md` | ✅ 节点纳管改为"生成安装命令 → 注册 → 心跳上线 → 展示自报能力"；补"陈旧数据"语义与节点心跳通道 |
 | `docs/02-architecture/ARCHITECTURE.md` | ✅ 按本 ADR 填充整体架构、模块划分与关键流程 |
 | `docs/02-architecture/TECH_STACK.md` | ✅ 增加「节点代理」与「控制面 ↔ agent 协议」两行 |
