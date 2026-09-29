@@ -7,10 +7,10 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/auth"
 	"k_cockpit/internal/model"
-	"k_cockpit/internal/risk"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/auth"
+	"k_cockpit/internal/platform/risk"
 )
 
 // Auth 提供认证相关接口。

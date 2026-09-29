@@ -36,11 +36,11 @@ cd web && pnpm install --frozen-lockfile && pnpm build
 ```
 dist/
 ├── server              # 控制面二进制
-├── migrations/         # internal/database/migrations 的完整拷贝
+├── migrations/         # internal/platform/database/migrations 的完整拷贝
 └── public/             # web/dist 的完整拷贝（如控制面需要外置静态目录）
 ```
 
-> 注意：`server` 默认从**工作目录**读取 `internal/database/migrations/`（`cmd/migrate` 的 `-dir` 可改）。发布时把迁移目录与二进制放在一起，避免升级脚本与代码库耦合。
+> 注意：`server` 默认从**工作目录**读取 `internal/platform/database/migrations/`（`cmd/migrate` 的 `-dir` 可改）。发布时把迁移目录与二进制放在一起，避免升级脚本与代码库耦合。
 
 ## 3. 安装（systemd 示例）
 

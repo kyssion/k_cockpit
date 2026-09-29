@@ -6,8 +6,8 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 
 	"k_cockpit/internal/alert"
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/authz"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/authz"
 )
 
 // Alert 提供告警中心（F-8-07）。

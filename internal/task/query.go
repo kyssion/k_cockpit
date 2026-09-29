@@ -8,10 +8,10 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/audit"
-	"k_cockpit/internal/authz"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/audit"
+	"k_cockpit/internal/platform/authz"
 )
 
 // Viewer 是查询视角。语义与授权层一致，直接复用其定义，避免两处各定义一份

@@ -24,11 +24,11 @@ import (
 	"gorm.io/gorm"
 
 	"k_cockpit/internal/agent"
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/authz"
 	"k_cockpit/internal/computequota"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/node"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/quota"
 	"k_cockpit/internal/quotaenforce"
 )

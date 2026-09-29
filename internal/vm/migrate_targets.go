@@ -4,9 +4,9 @@ import (
 	"context"
 	"log"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/authz"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/authz"
 )
 
 // MigrateTargetView 是一个可作为迁移目标的节点（F-6-03 / F-6-04）。

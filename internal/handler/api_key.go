@@ -5,9 +5,9 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/apikey"
-	"k_cockpit/internal/auth"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/apikey"
+	"k_cockpit/internal/platform/auth"
 )
 
 // APIKey 提供 API 凭证接口（F-1-10）。

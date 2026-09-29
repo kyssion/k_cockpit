@@ -28,10 +28,10 @@ import (
 	"gorm.io/gorm"
 
 	"k_cockpit/internal/agent"
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/audit"
-	"k_cockpit/internal/authz"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/audit"
+	"k_cockpit/internal/platform/authz"
 )
 
 // 入桥自动回滚窗口的边界。

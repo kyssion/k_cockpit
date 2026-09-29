@@ -9,12 +9,12 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/audit"
-	"k_cockpit/internal/config"
-	"k_cockpit/internal/database"
 	"k_cockpit/internal/emergency"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/audit"
+	"k_cockpit/internal/platform/config"
+	"k_cockpit/internal/platform/database"
 )
 
 func newEnv(t *testing.T) (*gorm.DB, *emergency.Tool) {

@@ -7,11 +7,11 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/audit"
-	"k_cockpit/internal/authz"
-	"k_cockpit/internal/cryptoutil"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/audit"
+	"k_cockpit/internal/platform/authz"
+	"k_cockpit/internal/platform/cryptoutil"
 )
 
 // InitialCredentialView 是详情页展示的初始登录凭据。

@@ -22,11 +22,11 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/audit"
-	"k_cockpit/internal/authz"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/node"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/audit"
+	"k_cockpit/internal/platform/authz"
 )
 
 // Service 提供站点维护模式。

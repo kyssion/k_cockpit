@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/authz"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/authz"
 )
 
 // MaxBatchClone 是一次能克隆的最大台数。

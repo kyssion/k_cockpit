@@ -5,9 +5,9 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/auth"
 	"k_cockpit/internal/network"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/auth"
 )
 
 // Network 提供网络后端相关接口（F-4-01 / F-4-02）。

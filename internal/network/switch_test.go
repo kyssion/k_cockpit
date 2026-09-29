@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"k_cockpit/internal/api"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/network"
+	"k_cockpit/internal/platform/api"
 )
 
 func validSwitch() network.SwitchRequest {

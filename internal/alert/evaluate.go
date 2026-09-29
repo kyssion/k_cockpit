@@ -9,8 +9,8 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/api"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/api"
 )
 
 // want 是"此刻应当存在"的一条告警。

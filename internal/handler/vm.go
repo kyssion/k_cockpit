@@ -7,11 +7,11 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/auth"
-	"k_cockpit/internal/authz"
 	"k_cockpit/internal/model"
-	"k_cockpit/internal/risk"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/auth"
+	"k_cockpit/internal/platform/authz"
+	"k_cockpit/internal/platform/risk"
 	"k_cockpit/internal/vm"
 )
 

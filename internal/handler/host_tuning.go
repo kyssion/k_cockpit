@@ -5,10 +5,10 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/auth"
-	"k_cockpit/internal/authz"
 	"k_cockpit/internal/hosttuning"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/auth"
+	"k_cockpit/internal/platform/authz"
 )
 
 // HostTuning 提供宿主机性能调优接口（KSM / ZRAM / 嵌套虚拟化 / CPU 亲和）。

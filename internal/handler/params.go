@@ -5,7 +5,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/api"
+	"k_cockpit/internal/platform/api"
 )
 
 // pathID 解析路径中的数字 ID。

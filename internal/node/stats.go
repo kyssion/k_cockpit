@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"k_cockpit/internal/agent"
-	"k_cockpit/internal/api"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/api"
 )
 
 // StatsView 是宿主机指标的对外视图（F-6-03）。

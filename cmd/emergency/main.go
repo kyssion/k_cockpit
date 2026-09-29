@@ -39,10 +39,10 @@ import (
 
 	"github.com/joho/godotenv"
 
-	"k_cockpit/internal/audit"
-	"k_cockpit/internal/config"
-	"k_cockpit/internal/database"
 	"k_cockpit/internal/emergency"
+	"k_cockpit/internal/platform/audit"
+	"k_cockpit/internal/platform/config"
+	"k_cockpit/internal/platform/database"
 )
 
 func main() {

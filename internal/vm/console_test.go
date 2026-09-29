@@ -8,10 +8,10 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/authz"
-	"k_cockpit/internal/cryptoutil"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/authz"
+	"k_cockpit/internal/platform/cryptoutil"
 	"k_cockpit/internal/vm"
 )
 

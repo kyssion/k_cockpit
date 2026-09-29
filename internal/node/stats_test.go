@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"k_cockpit/internal/agent"
-	"k_cockpit/internal/audit"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/node"
+	"k_cockpit/internal/platform/audit"
 )
 
 func TestStatsRejectsUnenrolledNode(t *testing.T) {

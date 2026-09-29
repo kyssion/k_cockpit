@@ -31,8 +31,8 @@ import (
 	"github.com/joho/godotenv"
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/config"
-	"k_cockpit/internal/database"
+	"k_cockpit/internal/platform/config"
+	"k_cockpit/internal/platform/database"
 )
 
 // AppliedMigration 对应 schema_migration 表。
@@ -48,7 +48,7 @@ func (AppliedMigration) TableName() string { return "schema_migration" }
 func main() {
 	statusOnly := flag.Bool("status", false, "只列出迁移状态，不执行")
 	dryRun := flag.Bool("dry-run", false, "打印将要执行的语句，不实际执行")
-	dir := flag.String("dir", "internal/database/migrations", "迁移文件目录")
+	dir := flag.String("dir", "internal/platform/database/migrations", "迁移文件目录")
 	flag.Parse()
 
 	_ = godotenv.Load()

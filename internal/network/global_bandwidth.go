@@ -4,9 +4,9 @@ import (
 	"context"
 
 	"k_cockpit/internal/agent"
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/authz"
-	"k_cockpit/internal/settings"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/authz"
+	"k_cockpit/internal/platform/settings"
 )
 
 // --- 全局带宽总限（G-44）---

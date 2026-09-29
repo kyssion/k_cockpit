@@ -5,10 +5,10 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/auth"
-	"k_cockpit/internal/authz"
 	"k_cockpit/internal/capture"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/auth"
+	"k_cockpit/internal/platform/authz"
 )
 
 // Capture 提供抓包接口（F-4-12）。

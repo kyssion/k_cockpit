@@ -7,10 +7,10 @@ import (
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/config"
-	"k_cockpit/internal/database"
 	"k_cockpit/internal/handler"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/config"
+	"k_cockpit/internal/platform/database"
 )
 
 // newTestServer 构造测试引擎：注册与生产一致的中间件，但只挂被测路由，
@@ -18,7 +18,7 @@ import (
 //
 // 数据库使用临时目录下的 SQLite 文件，每个测试互不影响。
 // 表结构不在测试库中预建：需要表的测试自行建表，或执行
-// internal/database/migrations/ 下的迁移脚本。
+// internal/platform/database/migrations/ 下的迁移脚本。
 func newTestServer(t *testing.T) (*server.Hertz, *gorm.DB) {
 	t.Helper()
 

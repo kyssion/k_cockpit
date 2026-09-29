@@ -5,10 +5,10 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/auth"
 	"k_cockpit/internal/model"
-	"k_cockpit/internal/risk"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/auth"
+	"k_cockpit/internal/platform/risk"
 )
 
 // Security 提供高风险操作的二次验证与绑定接口（F-10-01 / F-10-02）。

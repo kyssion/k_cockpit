@@ -12,7 +12,7 @@ import (
 	"regexp"
 	"strconv"
 
-	"k_cockpit/internal/api"
+	"k_cockpit/internal/platform/api"
 )
 
 // ChunkStore 是分片上传的**本地暂存区**。

@@ -12,14 +12,14 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/audit"
-	"k_cockpit/internal/config"
-	"k_cockpit/internal/database"
 	"k_cockpit/internal/diagnostics"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/audit"
+	"k_cockpit/internal/platform/config"
+	"k_cockpit/internal/platform/database"
+	"k_cockpit/internal/platform/settings"
 	"k_cockpit/internal/scheduler"
-	"k_cockpit/internal/settings"
 )
 
 func newEnv(t *testing.T) (*gorm.DB, *diagnostics.Service) {

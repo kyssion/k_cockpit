@@ -12,9 +12,9 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/authz"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/authz"
 )
 
 // 告警种类。取值同时是去重的键，因此**不可随意改名**——改名会让历史告警

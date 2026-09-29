@@ -5,8 +5,8 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/version"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/version"
 )
 
 // Version 提供版本与关于信息（F-9-05）。

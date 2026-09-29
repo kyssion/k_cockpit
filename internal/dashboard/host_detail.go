@@ -6,10 +6,10 @@ import (
 	"log"
 
 	"k_cockpit/internal/agent"
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/authz"
 	"k_cockpit/internal/hosttuning"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/authz"
 )
 
 // TuningProvider 提供宿主机调优状态（KSM / zRAM / 嵌套虚拟化）。

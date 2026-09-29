@@ -2,8 +2,8 @@ package vm
 
 import (
 	"k_cockpit/internal/agent"
-	"k_cockpit/internal/api"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/api"
 )
 
 // PowerAction 是可执行的电源操作。

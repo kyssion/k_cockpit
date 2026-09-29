@@ -8,10 +8,10 @@ import (
 	"github.com/hertz-contrib/websocket"
 
 	"k_cockpit/internal/agent"
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/auth"
-	"k_cockpit/internal/authz"
-	"k_cockpit/internal/risk"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/auth"
+	"k_cockpit/internal/platform/authz"
+	"k_cockpit/internal/platform/risk"
 	"k_cockpit/internal/vm"
 )
 

@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"k_cockpit/internal/api"
+	"k_cockpit/internal/platform/api"
 )
 
 // 创建向导里几个**非矩阵**字段的校验。

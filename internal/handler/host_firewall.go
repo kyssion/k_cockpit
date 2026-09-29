@@ -6,10 +6,10 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/auth"
-	"k_cockpit/internal/authz"
 	"k_cockpit/internal/hostfirewall"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/auth"
+	"k_cockpit/internal/platform/authz"
 )
 
 // HostFirewall 提供宿主机防火墙接口（F-4-11 第一层）。归管理员。

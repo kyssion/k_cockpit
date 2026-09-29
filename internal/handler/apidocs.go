@@ -8,7 +8,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
 
-	"k_cockpit/internal/api"
+	"k_cockpit/internal/platform/api"
 )
 
 // Endpoint 是一条已注册的路由。

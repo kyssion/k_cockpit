@@ -9,12 +9,12 @@ import (
 	"gorm.io/gorm"
 
 	"k_cockpit/internal/agent"
-	"k_cockpit/internal/authz"
-	"k_cockpit/internal/config"
 	"k_cockpit/internal/dashboard"
-	"k_cockpit/internal/database"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/node"
+	"k_cockpit/internal/platform/authz"
+	"k_cockpit/internal/platform/config"
+	"k_cockpit/internal/platform/database"
 )
 
 // fakeRuntime 提供可控的心跳：mock 永远返回"刚刚心跳过"，而离线的判定

@@ -5,10 +5,10 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/auth"
-	"k_cockpit/internal/authkey"
-	"k_cockpit/internal/risk"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/auth"
+	"k_cockpit/internal/platform/authkey"
+	"k_cockpit/internal/platform/risk"
 )
 
 // AuthKey 提供会话签名密钥的轮换入口（F-1-09）。

@@ -6,8 +6,8 @@ import (
 	"log"
 
 	"k_cockpit/internal/agent"
-	"k_cockpit/internal/authz"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/authz"
 )
 
 // --- PCIe 根端口 ---

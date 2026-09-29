@@ -8,11 +8,11 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/authz"
 	"k_cockpit/internal/computequota"
-	"k_cockpit/internal/config"
-	"k_cockpit/internal/database"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/authz"
+	"k_cockpit/internal/platform/config"
+	"k_cockpit/internal/platform/database"
 )
 
 func newEnv(t *testing.T) (*gorm.DB, *computequota.Service) {

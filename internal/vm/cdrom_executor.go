@@ -8,8 +8,8 @@ import (
 	"gorm.io/gorm"
 
 	"k_cockpit/internal/agent"
-	"k_cockpit/internal/api"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/api"
 )
 
 // CDROMExecutor 执行光驱的五种动作。

@@ -9,8 +9,8 @@ import (
 	"gorm.io/gorm"
 
 	"k_cockpit/internal/agent"
-	"k_cockpit/internal/api"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/api"
 )
 
 // Executor 执行宿主机防火墙的下发与回滚。

@@ -15,8 +15,8 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/authz"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/scheduler"
 	"k_cockpit/internal/task"
 	vmsvc "k_cockpit/internal/vm"

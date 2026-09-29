@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/authz"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/authz"
 )
 
 // MaxPortForwardBatch 是一次批量删除的上限。

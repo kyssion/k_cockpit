@@ -5,8 +5,8 @@ import (
 	"errors"
 	"strconv"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/authz"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/authz"
 )
 
 // maxBatchSize 是一次批量操作的上限。

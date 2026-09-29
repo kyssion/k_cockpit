@@ -7,9 +7,9 @@ import (
 
 	"gorm.io/gorm/clause"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/authz"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/authz"
 )
 
 // InterfaceView 是网卡在接口层的形态。

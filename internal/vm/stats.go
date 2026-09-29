@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"k_cockpit/internal/agent"
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/authz"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/authz"
 )
 
 // StatsView 是虚拟机运行指标的对外视图。

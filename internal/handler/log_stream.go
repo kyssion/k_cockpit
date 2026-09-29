@@ -9,7 +9,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/logging"
+	"k_cockpit/internal/platform/logging"
 )
 
 // Stream 把日志作为 SSE 流推给浏览器（API-295）。

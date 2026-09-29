@@ -1,7 +1,7 @@
 // Package model 定义数据库实体与表结构的映射。
 //
 // 字段以 docs/02-architecture/DATA_MODEL.md 为准，表结构由
-// internal/database/migrations/ 下的迁移管理，模型不做结构变更。
+// internal/platform/database/migrations/ 下的迁移管理，模型不做结构变更。
 //
 // 模型只声明当前实现用到的字段：GORM 生成 SQL 时按已声明字段列表操作，
 // 未声明的列不会被读写，因此可以随能力交付逐步补齐。

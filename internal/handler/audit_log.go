@@ -6,9 +6,9 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/auditlog"
-	"k_cockpit/internal/authz"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/auditlog"
+	"k_cockpit/internal/platform/authz"
 )
 
 // AuditLog 提供审计流水的查询（F-1-12）。

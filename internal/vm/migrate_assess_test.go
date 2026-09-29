@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"k_cockpit/internal/agent"
-	"k_cockpit/internal/authz"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/authz"
 )
 
 // TestMigrationPreviewUsesMeasuredBandwidth 覆盖预检的实测带宽（G-35）。

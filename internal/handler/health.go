@@ -10,7 +10,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/api"
+	"k_cockpit/internal/platform/api"
 )
 
 // healthStatus 是健康检查的返回数据。

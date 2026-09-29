@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"k_cockpit/internal/agent"
-	"k_cockpit/internal/authz"
-	"k_cockpit/internal/cryptoutil"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/authz"
+	"k_cockpit/internal/platform/cryptoutil"
 	"k_cockpit/internal/vm"
 )
 

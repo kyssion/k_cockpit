@@ -5,10 +5,10 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/api"
-	"k_cockpit/internal/audit"
-	"k_cockpit/internal/auth"
-	"k_cockpit/internal/logging"
+	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/platform/audit"
+	"k_cockpit/internal/platform/auth"
+	"k_cockpit/internal/platform/logging"
 )
 
 // Logging 提供日志管理（F-9-02）。归管理员。
