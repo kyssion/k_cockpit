@@ -14,7 +14,7 @@ const (
 	//
 	// 它与前三种一样**复用已有的任务类型**（vm.snapshot.create），不需要新的
 	// agent 能力。它与"删除"的关键差别是可逆：快照可以再删，因此可以周期
-	// 执行——而删除只能一次性（见 schedule.Service.Create 里的说明）。
+	// 执行——而删除只能一次性（见 cron.Service.Create 里的说明）。
 	ScheduleActionSnapshot = "snapshot"
 )
 
@@ -74,7 +74,7 @@ type VMSchedule struct {
 	// **省略不写**，数据库随即填入默认值 `true`——也就是说
 	// `Create(&VMSchedule{Enabled: false})` 存进去的是一条**启用**的记录。
 	//
-	// 因此停用只能走 Update 而不能在建记录时一次完成（见 schedule.Service）。
+	// 因此停用只能走 Update 而不能在建记录时一次完成（见 cron.Service）。
 	// 生产代码里创建时总是 true，不受影响；但改动这里之前请先确认这一点。
 	Enabled bool `gorm:"not null;default:true;index:idx_vm_schedule_next_run,priority:2"`
 

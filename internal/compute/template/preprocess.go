@@ -10,9 +10,9 @@ import (
 
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/ops/task"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/authz"
-	"k_cockpit/internal/task"
 )
 
 // PreprocessOptions 是要执行的预处理项。

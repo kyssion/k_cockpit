@@ -5,10 +5,10 @@ import (
 	"strings"
 
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/ops/task"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
 	"k_cockpit/internal/platform/authz"
-	"k_cockpit/internal/task"
 )
 
 // GuestRequest 是一次来宾自动化请求（F-2-10）。

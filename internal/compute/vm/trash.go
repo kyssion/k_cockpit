@@ -10,10 +10,10 @@ import (
 	"gorm.io/gorm"
 
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/ops/task"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
 	"k_cockpit/internal/platform/authz"
-	"k_cockpit/internal/task"
 )
 
 // TrashItem 是回收站里的一台虚拟机。

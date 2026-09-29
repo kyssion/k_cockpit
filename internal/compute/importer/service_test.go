@@ -13,12 +13,12 @@ import (
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/compute/importer"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/ops/task"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/platform/config"
 	"k_cockpit/internal/platform/database"
-	"k_cockpit/internal/task"
 )
 
 func newTestEnv(t *testing.T) (*importer.Service, *gorm.DB) {

@@ -9,9 +9,9 @@ import (
 
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/ops/task"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/authz"
-	"k_cockpit/internal/task"
 )
 
 // --- 交换机迁移与重配置 ---

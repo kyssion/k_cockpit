@@ -6,20 +6,20 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/ops/schedule"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/platform/risk"
-	"k_cockpit/internal/schedule"
 )
 
 // Schedule 提供虚拟机的定时任务接口（F-7-05）。
 type Schedule struct {
-	svc  *schedule.Service
+	svc  *cron.Service
 	risk *risk.Guard
 }
 
 // NewSchedule 构造定时任务接口。
-func NewSchedule(svc *schedule.Service, guard *risk.Guard) *Schedule {
+func NewSchedule(svc *cron.Service, guard *risk.Guard) *Schedule {
 	return &Schedule{svc: svc, risk: guard}
 }
 
@@ -80,7 +80,7 @@ func (h *Schedule) Create(ctx context.Context, c *app.RequestContext) {
 		}
 	}
 
-	row, err := h.svc.Create(ctx, vmID, schedule.CreateRequest{
+	row, err := h.svc.Create(ctx, vmID, cron.CreateRequest{
 		Action:        req.Action,
 		ScheduleType:  req.ScheduleType,
 		Weekdays:      req.Weekdays,

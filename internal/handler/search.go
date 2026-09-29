@@ -5,9 +5,9 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
+	"k_cockpit/internal/ops/search"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/authz"
-	"k_cockpit/internal/search"
 )
 
 // Search 提供跨资源检索（F-9-08）。

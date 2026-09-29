@@ -11,7 +11,7 @@ import (
 
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
-	"k_cockpit/internal/scheduler"
+	"k_cockpit/internal/ops/scheduler"
 )
 
 // TrimOptions 是自动 trim 循环的参数。

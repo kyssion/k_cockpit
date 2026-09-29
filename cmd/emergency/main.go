@@ -39,7 +39,7 @@ import (
 
 	"github.com/joho/godotenv"
 
-	"k_cockpit/internal/emergency"
+	"k_cockpit/internal/ops/emergency"
 	"k_cockpit/internal/platform/audit"
 	"k_cockpit/internal/platform/config"
 	"k_cockpit/internal/platform/database"

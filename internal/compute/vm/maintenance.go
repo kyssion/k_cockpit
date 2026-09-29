@@ -5,10 +5,10 @@ import (
 	"log"
 
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/ops/task"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
 	"k_cockpit/internal/platform/authz"
-	"k_cockpit/internal/task"
 )
 
 // ShutdownAllOnNode 为节点上投影状态为「运行中」的虚拟机逐台入队优雅关机

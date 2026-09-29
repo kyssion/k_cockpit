@@ -19,18 +19,12 @@ import (
 	"gorm.io/gorm"
 
 	"k_cockpit/internal/agent"
-	"k_cockpit/internal/alert"
 	"k_cockpit/internal/compute/computequota"
 	"k_cockpit/internal/compute/importer"
 	"k_cockpit/internal/compute/passthrough"
 	"k_cockpit/internal/compute/template"
 	"k_cockpit/internal/compute/vm"
 	"k_cockpit/internal/compute/vmtag"
-	"k_cockpit/internal/dashboard"
-	"k_cockpit/internal/diagnostics"
-	"k_cockpit/internal/hosttuning"
-	"k_cockpit/internal/maintenance"
-	"k_cockpit/internal/monitor"
 	"k_cockpit/internal/network/bridge"
 	"k_cockpit/internal/network/capture"
 	"k_cockpit/internal/network/firewall"
@@ -42,6 +36,20 @@ import (
 	"k_cockpit/internal/network/vpcacl"
 	"k_cockpit/internal/network/vswitch"
 	"k_cockpit/internal/node"
+	"k_cockpit/internal/ops/alert"
+	"k_cockpit/internal/ops/dashboard"
+	"k_cockpit/internal/ops/diagnostics"
+	"k_cockpit/internal/ops/hosttuning"
+	"k_cockpit/internal/ops/maintenance"
+	"k_cockpit/internal/ops/monitor"
+	"k_cockpit/internal/ops/platformcheck"
+	"k_cockpit/internal/ops/quotaenforce"
+	"k_cockpit/internal/ops/realtime"
+	"k_cockpit/internal/ops/schedule"
+	"k_cockpit/internal/ops/scheduler"
+	sched "k_cockpit/internal/ops/scheduler"
+	"k_cockpit/internal/ops/search"
+	"k_cockpit/internal/ops/task"
 	"k_cockpit/internal/passaudit"
 	"k_cockpit/internal/platform/accesscontrol"
 	"k_cockpit/internal/platform/apikey"
@@ -60,18 +68,10 @@ import (
 	"k_cockpit/internal/platform/settings"
 	"k_cockpit/internal/platform/useradmin"
 	"k_cockpit/internal/platform/version"
-	"k_cockpit/internal/platformcheck"
-	"k_cockpit/internal/quotaenforce"
-	"k_cockpit/internal/realtime"
 	"k_cockpit/internal/router"
-	"k_cockpit/internal/schedule"
-	"k_cockpit/internal/scheduler"
-	sched "k_cockpit/internal/scheduler"
-	"k_cockpit/internal/search"
 	"k_cockpit/internal/storage/pool"
 	"k_cockpit/internal/storage/quota"
 	"k_cockpit/internal/storage/userstorage"
-	"k_cockpit/internal/task"
 )
 
 // app 汇集启动期装配好的全部依赖。
@@ -143,7 +143,7 @@ type app struct {
 	alertSvc        *alert.Service
 	maintenanceSvc  *maintenance.Service
 	storageSvc      *pool.Service
-	scheduleSvc     *schedule.Service
+	scheduleSvc     *cron.Service
 	templateSvc     *template.Service
 
 	// 调度器注册表与记录器：周期组件共用，必须先于它们构造。
@@ -151,7 +151,7 @@ type app struct {
 	schedRecorder *sched.Recorder
 
 	// 后台周期组件
-	scheduler      *schedule.Scheduler
+	scheduler      *cron.Scheduler
 	quotaLoop      *quotaenforce.Loop
 	alertLoop      *alert.Loop
 	schedRetention *scheduler.RetentionLoop
@@ -431,7 +431,7 @@ func (a *app) setupSchedulerRegistry() {
 	sched.RegisterBuiltins(a.schedRegistry, sched.BuiltinOptions{
 		MetricsInterval:        monitor.DefaultOptions().Interval,
 		MetricsCleanupInterval: monitor.DefaultOptions().CleanupInterval,
-		ScheduleInterval:       schedule.DefaultOptions().Interval,
+		ScheduleInterval:       cron.DefaultOptions().Interval,
 		QueuePollInterval:      task.DefaultOptions().PollInterval,
 		QuotaEvalInterval:      quotaenforce.DefaultOptions().Interval,
 		PasswordAuditInterval:  24 * time.Hour,
@@ -580,7 +580,7 @@ func (a *app) setupComputeServices() {
 
 	// 定时任务（F-7-05）：调度器到点把**已有的任务类型**入队，自己不做任何
 	// 节点操作，因此不需要新的执行器——这也是它能在 mock 之上完整跑通的原因。
-	a.scheduleSvc = schedule.NewService(db)
+	a.scheduleSvc = cron.NewService(db)
 	a.templateSvc = template.NewService(db, queue, a.recorder, mockAgent, a.quotaSvc)
 	// 站点维护（G-46）：逐节点接管节点维护模式，批量关机复用 vm 的入队逻辑。
 	// 放在 vmSvc 之后装配——它要把 ShutdownAllOnNode 注入进去。
@@ -611,7 +611,7 @@ func (a *app) setupCredentials() {
 func (a *app) setupBackground() {
 	// 定时任务扫描器。定时快照复用 vm 服务的创建快照入口：那条路要先建记录
 	// 拿 ID、过配额、探测运行态。在调度器里重抄一遍等于把规则放两份。
-	a.scheduler = schedule.New(a.db, a.queue, schedule.Options{})
+	a.scheduler = cron.New(a.db, a.queue, cron.Options{})
 	a.scheduler.SetSnapshotCreator(a.vmSvc)
 	a.scheduler.Observe(a.schedRecorder)
 

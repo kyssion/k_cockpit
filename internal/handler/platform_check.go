@@ -5,10 +5,10 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
+	"k_cockpit/internal/ops/platformcheck"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"
-	"k_cockpit/internal/platformcheck"
 )
 
 // PlatformCheck 提供平台自检与修复接口（F-4-13）。归管理员。

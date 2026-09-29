@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"k_cockpit/internal/model"
-	"k_cockpit/internal/scheduler"
+	"k_cockpit/internal/ops/scheduler"
 )
 
 // Options 是周期运行的参数。

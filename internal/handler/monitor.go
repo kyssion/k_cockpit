@@ -6,7 +6,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/monitor"
+	"k_cockpit/internal/ops/monitor"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/authz"
 )

@@ -5,10 +5,10 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
+	"k_cockpit/internal/ops/quotaenforce"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"
-	"k_cockpit/internal/quotaenforce"
 )
 
 // QuotaEnforce 提供资源配额接口（F-4-10）。归管理员。

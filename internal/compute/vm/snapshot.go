@@ -11,10 +11,10 @@ import (
 	"gorm.io/gorm"
 
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/ops/task"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
 	"k_cockpit/internal/platform/authz"
-	"k_cockpit/internal/task"
 )
 
 // snapshotLimit 取这台虚拟机可用的快照上限。

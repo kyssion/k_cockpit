@@ -12,8 +12,8 @@ import (
 
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/ops/task"
 	"k_cockpit/internal/platform/api"
-	"k_cockpit/internal/task"
 )
 
 // importParams 是 image.import 任务的参数。

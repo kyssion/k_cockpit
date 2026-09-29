@@ -11,19 +11,13 @@ import (
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/alert"
 	"k_cockpit/internal/compute/computequota"
 	"k_cockpit/internal/compute/importer"
 	"k_cockpit/internal/compute/passthrough"
 	"k_cockpit/internal/compute/template"
 	"k_cockpit/internal/compute/vm"
 	"k_cockpit/internal/compute/vmtag"
-	"k_cockpit/internal/dashboard"
-	"k_cockpit/internal/diagnostics"
 	"k_cockpit/internal/handler"
-	"k_cockpit/internal/hosttuning"
-	"k_cockpit/internal/maintenance"
-	"k_cockpit/internal/monitor"
 	"k_cockpit/internal/network/bridge"
 	"k_cockpit/internal/network/capture"
 	"k_cockpit/internal/network/firewall"
@@ -35,6 +29,19 @@ import (
 	"k_cockpit/internal/network/vpcacl"
 	"k_cockpit/internal/network/vswitch"
 	"k_cockpit/internal/node"
+	"k_cockpit/internal/ops/alert"
+	"k_cockpit/internal/ops/dashboard"
+	"k_cockpit/internal/ops/diagnostics"
+	"k_cockpit/internal/ops/hosttuning"
+	"k_cockpit/internal/ops/maintenance"
+	"k_cockpit/internal/ops/monitor"
+	"k_cockpit/internal/ops/platformcheck"
+	"k_cockpit/internal/ops/quotaenforce"
+	"k_cockpit/internal/ops/realtime"
+	"k_cockpit/internal/ops/schedule"
+	"k_cockpit/internal/ops/scheduler"
+	"k_cockpit/internal/ops/search"
+	"k_cockpit/internal/ops/task"
 	"k_cockpit/internal/passaudit"
 	"k_cockpit/internal/platform/accesscontrol"
 	"k_cockpit/internal/platform/api"
@@ -51,16 +58,9 @@ import (
 	"k_cockpit/internal/platform/risk"
 	"k_cockpit/internal/platform/settings"
 	"k_cockpit/internal/platform/useradmin"
-	"k_cockpit/internal/platformcheck"
-	"k_cockpit/internal/quotaenforce"
-	"k_cockpit/internal/realtime"
-	"k_cockpit/internal/schedule"
-	"k_cockpit/internal/scheduler"
-	"k_cockpit/internal/search"
 	"k_cockpit/internal/storage/pool"
 	"k_cockpit/internal/storage/quota"
 	"k_cockpit/internal/storage/userstorage"
-	"k_cockpit/internal/task"
 )
 
 // Deps 是路由注册所需的外部依赖。
@@ -95,7 +95,7 @@ type Deps struct {
 	// 入口调用它，清单本身集中在 internal/risk。
 	Risk *risk.Guard
 	// Schedule 提供虚拟机的定时任务（F-7-05）。
-	Schedule *schedule.Service
+	Schedule *cron.Service
 	// Template 提供模板管理与模板克隆（F-3-01 / F-3-02）。
 	Template *template.Service
 	// Quota 提供按用户按节点的存储配额（F-9-02）。

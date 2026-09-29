@@ -10,8 +10,8 @@ import (
 
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/ops/task"
 	"k_cockpit/internal/platform/api"
-	"k_cockpit/internal/task"
 )
 
 // switchParams 是 vpc.switch.change 任务的参数。

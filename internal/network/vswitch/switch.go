@@ -13,9 +13,9 @@ import (
 	"gorm.io/gorm"
 
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/ops/task"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
-	"k_cockpit/internal/task"
 )
 
 // SwitchRequest 是一次交换机的新建或修改。
