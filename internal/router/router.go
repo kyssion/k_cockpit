@@ -52,15 +52,15 @@ import (
 	"k_cockpit/internal/platform/settings"
 	"k_cockpit/internal/platform/useradmin"
 	"k_cockpit/internal/platformcheck"
-	"k_cockpit/internal/quota"
 	"k_cockpit/internal/quotaenforce"
 	"k_cockpit/internal/realtime"
 	"k_cockpit/internal/schedule"
 	"k_cockpit/internal/scheduler"
 	"k_cockpit/internal/search"
-	"k_cockpit/internal/storage"
+	"k_cockpit/internal/storage/pool"
+	"k_cockpit/internal/storage/quota"
+	"k_cockpit/internal/storage/userstorage"
 	"k_cockpit/internal/task"
-	"k_cockpit/internal/userstorage"
 )
 
 // Deps 是路由注册所需的外部依赖。
@@ -73,7 +73,7 @@ type Deps struct {
 	Bootstrap *auth.Bootstrap
 	Node      *node.Service
 	VM        *vm.Service
-	Storage   *storage.Service
+	Storage   *pool.Service
 	Network   *vswitch.Service
 	Settings  *settings.Service
 	Task      *task.Queue

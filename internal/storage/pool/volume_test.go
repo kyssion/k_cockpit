@@ -1,4 +1,4 @@
-package storage_test
+package pool_test
 
 import (
 	"context"
@@ -14,12 +14,12 @@ import (
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/platform/config"
 	"k_cockpit/internal/platform/database"
-	"k_cockpit/internal/storage"
+	"k_cockpit/internal/storage/pool"
 	"k_cockpit/internal/task"
 )
 
 type volumeEnv struct {
-	svc    *storage.Service
+	svc    *pool.Service
 	db     *gorm.DB
 	queue  *task.Queue
 	client agent.Client
@@ -61,9 +61,9 @@ func newVolumeEnv(t *testing.T) *volumeEnv {
 	client := agent.NewMockClient()
 	// 执行器在这里注册**只是为了让它能被直接调用**（见 TestDeleteRemovesRecord）：
 	// 队列在测试里不启动后台循环，因此不注册也不会影响入队。
-	q.Register(storage.NewVolumeExecutor(db, client))
+	q.Register(pool.NewVolumeExecutor(db, client))
 	return &volumeEnv{
-		svc: storage.NewService(db, q, recorder, client, nil), db: db, queue: q, client: client,
+		svc: pool.NewService(db, q, recorder, client, nil), db: db, queue: q, client: client,
 	}
 }
 
@@ -85,7 +85,7 @@ func TestStripeRequiresMultiplication(t *testing.T) {
 	env := newVolumeEnv(t)
 	ctx := context.Background()
 
-	req := storage.VolumeRequest{
+	req := pool.VolumeRequest{
 		NodeID: 1, Name: "v1", SizeGB: 100,
 		StripeCount: 2, MirrorCount: 2,
 		Devices: devices(3), // 需要 4 块，只给 3 块
@@ -118,7 +118,7 @@ func TestStripeWithoutMirrorWarns(t *testing.T) {
 	env := newVolumeEnv(t)
 	ctx := context.Background()
 
-	plan, err := env.svc.PreviewVolume(ctx, storage.VolumeRequest{
+	plan, err := env.svc.PreviewVolume(ctx, pool.VolumeRequest{
 		NodeID: 1, Name: "striped", SizeGB: 100, StripeCount: 4, Devices: devices(4),
 	})
 	if err != nil {
@@ -135,7 +135,7 @@ func TestStripeWithoutMirrorWarns(t *testing.T) {
 	}
 
 	// 未确认时**不创建**，也不报错。
-	created, tk, err := env.svc.CreateVolume(ctx, storage.VolumeRequest{
+	created, tk, err := env.svc.CreateVolume(ctx, pool.VolumeRequest{
 		NodeID: 1, Name: "striped", SizeGB: 100, StripeCount: 4, Devices: devices(4),
 	}, false, adminViewer(), "root", "")
 	if err != nil {
@@ -151,7 +151,7 @@ func TestStripeWithoutMirrorWarns(t *testing.T) {
 	}
 
 	// 确认后创建。
-	_, tk, err = env.svc.CreateVolume(ctx, storage.VolumeRequest{
+	_, tk, err = env.svc.CreateVolume(ctx, pool.VolumeRequest{
 		NodeID: 1, Name: "striped", SizeGB: 100, StripeCount: 4, Devices: devices(4),
 	}, true, adminViewer(), "root", "")
 	if err != nil {
@@ -169,7 +169,7 @@ func TestMirrorDoublesPhysicalSpace(t *testing.T) {
 	env := newVolumeEnv(t)
 	ctx := context.Background()
 
-	plan, err := env.svc.PreviewVolume(ctx, storage.VolumeRequest{
+	plan, err := env.svc.PreviewVolume(ctx, pool.VolumeRequest{
 		NodeID: 1, Name: "mirrored", SizeGB: 100, MirrorCount: 2, Devices: devices(2),
 	})
 	if err != nil {
@@ -199,7 +199,7 @@ func TestCreateMirroredVolumeStartsInSync(t *testing.T) {
 	env := newVolumeEnv(t)
 	ctx := context.Background()
 
-	if _, _, err := env.svc.CreateVolume(ctx, storage.VolumeRequest{
+	if _, _, err := env.svc.CreateVolume(ctx, pool.VolumeRequest{
 		NodeID: 1, Name: "mir", SizeGB: 50, MirrorCount: 2, Devices: devices(2),
 	}, true, adminViewer(), "root", ""); err != nil {
 		t.Fatalf("创建失败: %v", err)
@@ -215,7 +215,7 @@ func TestPlainVolumeIsActive(t *testing.T) {
 	env := newVolumeEnv(t)
 	ctx := context.Background()
 
-	if _, _, err := env.svc.CreateVolume(ctx, storage.VolumeRequest{
+	if _, _, err := env.svc.CreateVolume(ctx, pool.VolumeRequest{
 		NodeID: 1, Name: "plain", SizeGB: 50, Devices: devices(1),
 	}, true, adminViewer(), "root", ""); err != nil {
 		t.Fatalf("创建失败: %v", err)
@@ -233,7 +233,7 @@ func TestDuplicateDeviceRejected(t *testing.T) {
 
 	// 同一块盘出现两次：LVM 会拒绝，但报错来自 lvm 命令、与「你选重了」
 	// 联系不起来。而且它看起来像"我选了 4 块盘"，实际只有 3 块。
-	_, _, err := env.svc.CreateVolume(context.Background(), storage.VolumeRequest{
+	_, _, err := env.svc.CreateVolume(context.Background(), pool.VolumeRequest{
 		NodeID: 1, Name: "dup", SizeGB: 10,
 		Devices: []string{"/dev/sdb", "/dev/sdb"},
 	}, true, adminViewer(), "root", "")
@@ -243,7 +243,7 @@ func TestDuplicateDeviceRejected(t *testing.T) {
 func TestNonDevPathRejected(t *testing.T) {
 	env := newVolumeEnv(t)
 
-	_, _, err := env.svc.CreateVolume(context.Background(), storage.VolumeRequest{
+	_, _, err := env.svc.CreateVolume(context.Background(), pool.VolumeRequest{
 		NodeID: 1, Name: "bad", SizeGB: 10, Devices: []string{"/tmp/foo"},
 	}, true, adminViewer(), "root", "")
 	assertStatus(t, err, 400)
@@ -266,7 +266,7 @@ func TestDeviceOccupiedByPoolRejected(t *testing.T) {
 		t.Fatalf("创建存储池失败: %v", err)
 	}
 
-	_, _, err := env.svc.CreateVolume(ctx, storage.VolumeRequest{
+	_, _, err := env.svc.CreateVolume(ctx, pool.VolumeRequest{
 		NodeID: 1, Name: "conflict", SizeGB: 10, Devices: []string{dev},
 	}, true, adminViewer(), "root", "")
 	assertStatus(t, err, 409)
@@ -284,7 +284,7 @@ func TestVolumeNamesAreLVMCompatible(t *testing.T) {
 	ctx := context.Background()
 
 	// 中文 + 空格 + 大写。
-	if _, _, err := env.svc.CreateVolume(ctx, storage.VolumeRequest{
+	if _, _, err := env.svc.CreateVolume(ctx, pool.VolumeRequest{
 		NodeID: 1, Name: "我的 数据卷", SizeGB: 10, Devices: devices(1),
 	}, true, adminViewer(), "root", ""); err != nil {
 		t.Fatalf("中文名称不该导致创建失败: %v", err)
@@ -320,7 +320,7 @@ func TestMirrorCountCapped(t *testing.T) {
 
 	// 上限不是技术限制而是理性限制：4 份以上很少有意义，而每多一份就多占
 	// 一份空间——用户多半是误填。
-	_, _, err := env.svc.CreateVolume(context.Background(), storage.VolumeRequest{
+	_, _, err := env.svc.CreateVolume(context.Background(), pool.VolumeRequest{
 		NodeID: 1, Name: "big", SizeGB: 10, MirrorCount: 8, Devices: devices(8),
 	}, true, adminViewer(), "root", "")
 	assertStatus(t, err, 400)
@@ -329,7 +329,7 @@ func TestMirrorCountCapped(t *testing.T) {
 func TestZeroSizeRejected(t *testing.T) {
 	env := newVolumeEnv(t)
 
-	_, _, err := env.svc.CreateVolume(context.Background(), storage.VolumeRequest{
+	_, _, err := env.svc.CreateVolume(context.Background(), pool.VolumeRequest{
 		NodeID: 1, Name: "zero", SizeGB: 0, Devices: devices(1),
 	}, true, adminViewer(), "root", "")
 	assertStatus(t, err, 400)
@@ -340,7 +340,7 @@ func TestPreviewChangesNothing(t *testing.T) {
 	env := newVolumeEnv(t)
 	ctx := context.Background()
 
-	if _, err := env.svc.PreviewVolume(ctx, storage.VolumeRequest{
+	if _, err := env.svc.PreviewVolume(ctx, pool.VolumeRequest{
 		NodeID: 1, Name: "preview-only", SizeGB: 10, Devices: devices(1),
 	}); err != nil {
 		t.Fatalf("预检失败: %v", err)
@@ -362,7 +362,7 @@ func TestDuplicateNameRejected(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 0; i < 2; i++ {
-		_, _, err := env.svc.CreateVolume(ctx, storage.VolumeRequest{
+		_, _, err := env.svc.CreateVolume(ctx, pool.VolumeRequest{
 			NodeID: 1, Name: "same", SizeGB: 10, Devices: devices(1),
 		}, true, adminViewer(), "root", "")
 		if i == 0 && err != nil {
@@ -382,7 +382,7 @@ func TestDeleteRemovesRecord(t *testing.T) {
 	env := newVolumeEnv(t)
 	ctx := context.Background()
 
-	if _, _, err := env.svc.CreateVolume(ctx, storage.VolumeRequest{
+	if _, _, err := env.svc.CreateVolume(ctx, pool.VolumeRequest{
 		NodeID: 1, Name: "temp", SizeGB: 10, Devices: devices(1),
 	}, true, adminViewer(), "root", ""); err != nil {
 		t.Fatalf("创建失败: %v", err)
@@ -404,7 +404,7 @@ func TestDeleteRemovesRecord(t *testing.T) {
 		Order("id DESC").First(&tk).Error; err != nil {
 		t.Fatalf("没有找到删除任务: %v", err)
 	}
-	if err := storage.NewVolumeExecutor(env.db, env.client).Run(ctx, &tk); err != nil {
+	if err := pool.NewVolumeExecutor(env.db, env.client).Run(ctx, &tk); err != nil {
 		t.Fatalf("执行删除任务失败: %v", err)
 	}
 

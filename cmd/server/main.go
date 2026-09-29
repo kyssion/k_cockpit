@@ -61,7 +61,6 @@ import (
 	"k_cockpit/internal/platform/useradmin"
 	"k_cockpit/internal/platform/version"
 	"k_cockpit/internal/platformcheck"
-	"k_cockpit/internal/quota"
 	"k_cockpit/internal/quotaenforce"
 	"k_cockpit/internal/realtime"
 	"k_cockpit/internal/router"
@@ -69,9 +68,10 @@ import (
 	"k_cockpit/internal/scheduler"
 	sched "k_cockpit/internal/scheduler"
 	"k_cockpit/internal/search"
-	"k_cockpit/internal/storage"
+	"k_cockpit/internal/storage/pool"
+	"k_cockpit/internal/storage/quota"
+	"k_cockpit/internal/storage/userstorage"
 	"k_cockpit/internal/task"
-	"k_cockpit/internal/userstorage"
 )
 
 // app 汇集启动期装配好的全部依赖。
@@ -142,7 +142,7 @@ type app struct {
 	computeQuotaSvc *computequota.Service
 	alertSvc        *alert.Service
 	maintenanceSvc  *maintenance.Service
-	storageSvc      *storage.Service
+	storageSvc      *pool.Service
 	scheduleSvc     *schedule.Service
 	templateSvc     *template.Service
 
@@ -155,7 +155,7 @@ type app struct {
 	quotaLoop      *quotaenforce.Loop
 	alertLoop      *alert.Loop
 	schedRetention *scheduler.RetentionLoop
-	trimLoop       *storage.TrimLoop
+	trimLoop       *pool.TrimLoop
 	passAuditLoop  *passaudit.Loop
 	authKeyLoop    *authkey.Loop
 	collector      *monitor.Collector
@@ -376,9 +376,9 @@ func (a *app) setupTaskQueue() {
 	// 安全组规则要写进宿主机运行域的规则链。
 	a.queue.Register(securitygroup.NewApplyExecutor(db, mockAgent))
 	// 目录共享要往虚拟机的域配置里加一块 virtio-9p 设备。
-	a.queue.Register(storage.NewShareExecutor(db, mockAgent))
+	a.queue.Register(pool.NewShareExecutor(db, mockAgent))
 	// 存储卷要跑 pvcreate/vgcreate/lvcreate，删卷还要逆序释放设备。
-	a.queue.Register(storage.NewVolumeExecutor(db, mockAgent))
+	a.queue.Register(pool.NewVolumeExecutor(db, mockAgent))
 	// 端口安全要往节点流表里写规则。
 	a.queue.Register(portsecurity.NewExecutor(db, mockAgent))
 	// 抓包：一次限时的抓包，以及删除节点上的抓包文件。
@@ -406,13 +406,13 @@ func (a *app) setupTaskQueue() {
 	a.queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
 	a.queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))
 	a.queue.Register(vm.NewPortForwardChangeExecutor(db, mockAgent))
-	a.queue.Register(storage.NewCreateExecutor(db, mockAgent))
-	a.queue.Register(storage.NewDeleteExecutor(db, mockAgent))
+	a.queue.Register(pool.NewCreateExecutor(db, mockAgent))
+	a.queue.Register(pool.NewDeleteExecutor(db, mockAgent))
 	// 分区、池配置与卸载（F-5-01 后续迭代）。
-	a.queue.Register(storage.NewPartitionExecutor(mockAgent))
-	a.queue.Register(storage.NewPartitionDeleteExecutor(mockAgent))
-	a.queue.Register(storage.NewPoolConfigExecutor(db, mockAgent))
-	a.queue.Register(storage.NewPoolUnmountExecutor(db, mockAgent))
+	a.queue.Register(pool.NewPartitionExecutor(mockAgent))
+	a.queue.Register(pool.NewPartitionDeleteExecutor(mockAgent))
+	a.queue.Register(pool.NewPoolConfigExecutor(db, mockAgent))
+	a.queue.Register(pool.NewPoolUnmountExecutor(db, mockAgent))
 	// 交换机变更要建网桥，因此与存储池一样走队列。
 	a.queue.Register(vswitch.NewSwitchChangeExecutor(db, mockAgent))
 	a.queue.Start(context.Background())
@@ -576,7 +576,7 @@ func (a *app) setupComputeServices() {
 	// 公网地址与端口转发的数量同样受计算配额约束：它们都是稀缺资源，
 	// 而"先到先得"通常不是管理员想要的分配策略。
 	a.publicIPSvc.SetComputeQuota(a.computeQuotaSvc)
-	a.storageSvc = storage.NewService(db, queue, a.recorder, mockAgent, a.settingsSvc)
+	a.storageSvc = pool.NewService(db, queue, a.recorder, mockAgent, a.settingsSvc)
 
 	// 定时任务（F-7-05）：调度器到点把**已有的任务类型**入队，自己不做任何
 	// 节点操作，因此不需要新的执行器——这也是它能在 mock 之上完整跑通的原因。
@@ -652,7 +652,7 @@ func (a *app) setupBackground() {
 	})
 
 	// 存储空间自动回收（G-52）：开关从设置读取，执行结果记入调度事件。
-	a.trimLoop = storage.NewTrimLoop(a.db, a.mockAgent, a.schedRecorder, storage.TrimOptions{
+	a.trimLoop = pool.NewTrimLoop(a.db, a.mockAgent, a.schedRecorder, pool.TrimOptions{
 		Enabled: func() bool {
 			return a.settingsSvc.Bool(settings.KeyStorageAutoTrim, false)
 		},

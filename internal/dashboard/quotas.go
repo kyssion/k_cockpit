@@ -10,8 +10,8 @@ import (
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/authz"
-	"k_cockpit/internal/quota"
 	"k_cockpit/internal/quotaenforce"
+	"k_cockpit/internal/storage/quota"
 )
 
 // 本文件是工作台的「我的配额」区块（G-32）。

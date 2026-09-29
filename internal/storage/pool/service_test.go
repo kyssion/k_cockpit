@@ -1,4 +1,4 @@
-package storage_test
+package pool_test
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 	"k_cockpit/internal/platform/audit"
 	"k_cockpit/internal/platform/config"
 	"k_cockpit/internal/platform/database"
-	"k_cockpit/internal/storage"
+	"k_cockpit/internal/storage/pool"
 	"k_cockpit/internal/task"
 )
 
@@ -75,7 +75,7 @@ func defaultDisks() []agent.Disk {
 	}
 }
 
-func newTestEnv(t *testing.T) (*storage.Service, *task.Queue, *gorm.DB, *diskClient) {
+func newTestEnv(t *testing.T) (*pool.Service, *task.Queue, *gorm.DB, *diskClient) {
 	t.Helper()
 
 	db, err := database.Open(config.DB{
@@ -109,8 +109,8 @@ func newTestEnv(t *testing.T) (*storage.Service, *task.Queue, *gorm.DB, *diskCli
 		PollInterval:  20 * time.Millisecond,
 	})
 	client := &diskClient{MockClient: agent.NewMockClient(), disks: defaultDisks()}
-	queue.Register(storage.NewCreateExecutor(db, client))
-	queue.Register(storage.NewDeleteExecutor(db, client))
+	queue.Register(pool.NewCreateExecutor(db, client))
+	queue.Register(pool.NewDeleteExecutor(db, client))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	queue.Start(ctx)
@@ -120,7 +120,7 @@ func newTestEnv(t *testing.T) (*storage.Service, *task.Queue, *gorm.DB, *diskCli
 	})
 
 	// settings 传 nil：本包不依赖设置模块，阈值走内置默认值。
-	return storage.NewService(db, queue, recorder, client, nil), queue, db, client
+	return pool.NewService(db, queue, recorder, client, nil), queue, db, client
 }
 
 func waitFor(t *testing.T, what string, cond func() bool) {
@@ -147,8 +147,8 @@ func assertAPIError(t *testing.T, err error, status int) {
 }
 
 // createReq 构造一个「所有确认都已做对」的请求，各测试只改要验证的字段。
-func createReq(deviceID, confirmName string) storage.CreateRequest {
-	return storage.CreateRequest{
+func createReq(deviceID, confirmName string) pool.CreateRequest {
+	return pool.CreateRequest{
 		NodeID:            1,
 		DeviceID:          deviceID,
 		FSType:            "ext4",
@@ -336,7 +336,7 @@ func TestDiskListMarksOccupied(t *testing.T) {
 		t.Fatalf("查询失败: %v", err)
 	}
 
-	byID := map[string]storage.DiskView{}
+	byID := map[string]pool.DiskView{}
 	for _, d := range disks {
 		byID[d.DeviceID] = d
 	}

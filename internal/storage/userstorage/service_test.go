@@ -17,7 +17,7 @@ import (
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/platform/config"
 	"k_cockpit/internal/platform/database"
-	"k_cockpit/internal/userstorage"
+	"k_cockpit/internal/storage/userstorage"
 )
 
 // fakeQuota 是配额检查的替身，便于精确控制「什么时候超」。

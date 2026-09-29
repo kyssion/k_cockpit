@@ -8,7 +8,7 @@ import (
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"
-	"k_cockpit/internal/storage"
+	"k_cockpit/internal/storage/pool"
 )
 
 // ListShares 返回虚拟机的目录共享（API-130）。
@@ -60,7 +60,7 @@ func (h *Storage) MountShare(ctx context.Context, c *app.RequestContext) {
 	user := auth.CurrentUser(c)
 	info := auth.ClientInfoOf(c)
 
-	t, err := h.svc.MountShare(ctx, storage.MountShareRequest{
+	t, err := h.svc.MountShare(ctx, pool.MountShareRequest{
 		VMID:    vmID,
 		RelPath: req.RelPath, Tag: req.Tag,
 		SecurityModel: req.SecurityModel, ReadOnly: req.ReadOnly,

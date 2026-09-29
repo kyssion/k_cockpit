@@ -11,8 +11,8 @@ import (
 	"k_cockpit/internal/dashboard"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/authz"
-	"k_cockpit/internal/quota"
 	"k_cockpit/internal/quotaenforce"
+	"k_cockpit/internal/storage/quota"
 )
 
 // dptr 是 int64 指针的简写（本包测试没有现成的同名辅助）。

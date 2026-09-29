@@ -13,7 +13,7 @@ import (
 	"k_cockpit/internal/platform/audit"
 	"k_cockpit/internal/platform/config"
 	"k_cockpit/internal/platform/database"
-	"k_cockpit/internal/quota"
+	"k_cockpit/internal/storage/quota"
 )
 
 const gb = 1 << 30

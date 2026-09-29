@@ -8,7 +8,7 @@ import (
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"
-	"k_cockpit/internal/quota"
+	"k_cockpit/internal/storage/quota"
 )
 
 // Quota 提供存储配额接口（F-9-02）。

@@ -1,4 +1,4 @@
-package storage_test
+package pool_test
 
 import (
 	"context"
@@ -17,12 +17,12 @@ import (
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/platform/config"
 	"k_cockpit/internal/platform/database"
-	"k_cockpit/internal/storage"
+	"k_cockpit/internal/storage/pool"
 	"k_cockpit/internal/task"
 )
 
 type shareEnv struct {
-	svc *storage.Service
+	svc *pool.Service
 	db  *gorm.DB
 	vm  *model.VM
 }
@@ -77,7 +77,7 @@ func newShareEnv(t *testing.T, root string) *shareEnv {
 		MaxConcurrent: 1,
 		PollInterval:  20 * time.Millisecond,
 	})
-	queue.Register(storage.NewShareExecutor(db, client))
+	queue.Register(pool.NewShareExecutor(db, client))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	queue.Start(ctx)
@@ -87,7 +87,7 @@ func newShareEnv(t *testing.T, root string) *shareEnv {
 	})
 
 	return &shareEnv{
-		svc: storage.NewService(db, queue, recorder, client, nil),
+		svc: pool.NewService(db, queue, recorder, client, nil),
 		db:  db, vm: &vm,
 	}
 }
@@ -114,7 +114,7 @@ func TestMountRejectsAbsolutePath(t *testing.T) {
 		"/srv/users/7/data", // 即使指向自己的根，也要求用相对路径
 		"C:/windows",
 	} {
-		_, err := env.svc.MountShare(ctx, storage.MountShareRequest{
+		_, err := env.svc.MountShare(ctx, pool.MountShareRequest{
 			VMID: env.vm.ID, RelPath: bad,
 		}, ownerViewer(), "alice", "10.0.0.1")
 		if err == nil {
@@ -129,7 +129,7 @@ func TestMountRejectsAbsolutePath(t *testing.T) {
 
 	// 含反斜杠的写法走另一条检查（反斜杠在部分平台被当作分隔符），
 	// 拒绝理由不同但同样是拒绝——这里只要求它被拦下。
-	if _, err := env.svc.MountShare(ctx, storage.MountShareRequest{
+	if _, err := env.svc.MountShare(ctx, pool.MountShareRequest{
 		VMID: env.vm.ID, RelPath: `c:\\windows`,
 	}, ownerViewer(), "alice", ""); err == nil {
 		t.Error("含反斜杠的路径应被拒绝")
@@ -150,7 +150,7 @@ func TestMountRejectsTraversal(t *testing.T) {
 		"a/../../..",
 		"./../outside",
 	} {
-		_, err := env.svc.MountShare(ctx, storage.MountShareRequest{
+		_, err := env.svc.MountShare(ctx, pool.MountShareRequest{
 			VMID: env.vm.ID, RelPath: bad,
 		}, ownerViewer(), "alice", "10.0.0.1")
 		assertStatus(t, err, 400)
@@ -164,7 +164,7 @@ func TestMountAcceptsRelativePath(t *testing.T) {
 	// 越界的要拒绝，正常的要能过——只测拒绝的用例拦不住一个「全都拒绝」
 	// 的实现，而那种实现是没用的。
 	for _, good := range []string{"data", "data/iso", "./data", "a/b/c"} {
-		task, err := env.svc.MountShare(ctx, storage.MountShareRequest{
+		task, err := env.svc.MountShare(ctx, pool.MountShareRequest{
 			VMID: env.vm.ID, RelPath: good,
 		}, ownerViewer(), "alice", "10.0.0.1")
 		if err != nil {
@@ -210,7 +210,7 @@ func TestReadOnlyDefaultsTrue(t *testing.T) {
 	env := newShareEnv(t, "/srv/users/7")
 	ctx := context.Background()
 
-	task, err := env.svc.MountShare(ctx, storage.MountShareRequest{
+	task, err := env.svc.MountShare(ctx, pool.MountShareRequest{
 		VMID: env.vm.ID, RelPath: "data",
 	}, ownerViewer(), "alice", "")
 	if err != nil {
@@ -235,14 +235,14 @@ func TestPassthroughRequiresAdmin(t *testing.T) {
 	env := newShareEnv(t, "/srv/users/7")
 	ctx := context.Background()
 
-	_, err := env.svc.MountShare(ctx, storage.MountShareRequest{
+	_, err := env.svc.MountShare(ctx, pool.MountShareRequest{
 		VMID: env.vm.ID, RelPath: "data", SecurityModel: model.ShareSecurityPassthrough,
 	}, ownerViewer(), "alice", "")
 	assertStatus(t, err, 422)
 
 	// 管理员可以。
 	adminViewer := authz.Viewer{UserID: 1, IsAdmin: true}
-	if _, err := env.svc.MountShare(ctx, storage.MountShareRequest{
+	if _, err := env.svc.MountShare(ctx, pool.MountShareRequest{
 		VMID: env.vm.ID, RelPath: "data", SecurityModel: model.ShareSecurityPassthrough,
 	}, adminViewer, "root", ""); err != nil {
 		t.Errorf("管理员应可使用 passthrough: %v", err)
@@ -257,13 +257,13 @@ func TestTagUniqueness(t *testing.T) {
 	env := newShareEnv(t, "/srv/users/7")
 	ctx := context.Background()
 
-	if _, err := env.svc.MountShare(ctx, storage.MountShareRequest{
+	if _, err := env.svc.MountShare(ctx, pool.MountShareRequest{
 		VMID: env.vm.ID, RelPath: "data", Tag: "shared",
 	}, ownerViewer(), "alice", ""); err != nil {
 		t.Fatalf("首次挂载失败: %v", err)
 	}
 
-	_, err := env.svc.MountShare(ctx, storage.MountShareRequest{
+	_, err := env.svc.MountShare(ctx, pool.MountShareRequest{
 		VMID: env.vm.ID, RelPath: "other", Tag: "shared",
 	}, ownerViewer(), "alice", "")
 	assertStatus(t, err, 409)
@@ -285,7 +285,7 @@ func TestTagCharsetRestricted(t *testing.T) {
 		"a b", "a,b", "a;b", "a'b", `a"b`, "-lead", "_lead", "a/b",
 		strings.Repeat("x", 65),
 	} {
-		_, err := env.svc.MountShare(ctx, storage.MountShareRequest{
+		_, err := env.svc.MountShare(ctx, pool.MountShareRequest{
 			VMID: env.vm.ID, RelPath: "data", Tag: bad,
 		}, ownerViewer(), "alice", "")
 		if err == nil {
@@ -309,7 +309,7 @@ func TestMountRequiresStorageRoot(t *testing.T) {
 		t.Fatalf("改属主失败: %v", err)
 	}
 
-	_, err := env.svc.MountShare(ctx, storage.MountShareRequest{
+	_, err := env.svc.MountShare(ctx, pool.MountShareRequest{
 		VMID: env.vm.ID, RelPath: "data",
 	}, authz.Viewer{UserID: other}, "bob", "")
 	assertStatus(t, err, 422)
@@ -319,7 +319,7 @@ func TestMountRequiresStorageRoot(t *testing.T) {
 func TestMountRejectsOtherOwnersVM(t *testing.T) {
 	env := newShareEnv(t, "/srv/users/7")
 
-	_, err := env.svc.MountShare(context.Background(), storage.MountShareRequest{
+	_, err := env.svc.MountShare(context.Background(), pool.MountShareRequest{
 		VMID: env.vm.ID, RelPath: "data",
 	}, authz.Viewer{UserID: 10}, "mallory", "")
 	// 404 而非 403：403 会确认「这个 ID 存在」。
@@ -330,7 +330,7 @@ func TestUnmountRemovesRecord(t *testing.T) {
 	env := newShareEnv(t, "/srv/users/7")
 	ctx := context.Background()
 
-	task, err := env.svc.MountShare(ctx, storage.MountShareRequest{
+	task, err := env.svc.MountShare(ctx, pool.MountShareRequest{
 		VMID: env.vm.ID, RelPath: "data", Tag: "docs",
 	}, ownerViewer(), "alice", "")
 	if err != nil {

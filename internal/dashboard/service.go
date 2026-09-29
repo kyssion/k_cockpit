@@ -29,8 +29,8 @@ import (
 	"k_cockpit/internal/node"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/authz"
-	"k_cockpit/internal/quota"
 	"k_cockpit/internal/quotaenforce"
+	"k_cockpit/internal/storage/quota"
 )
 
 // 视角范围。

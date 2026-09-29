@@ -8,7 +8,7 @@ import (
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/risk"
-	"k_cockpit/internal/storage"
+	"k_cockpit/internal/storage/pool"
 )
 
 // Storage 提供存储池接口（F-5-01）。
@@ -16,12 +16,12 @@ import (
 // 权限：存储池管理为 **admin 专属**（f-5-01 R-011 / f-1-06 §3.1）。该要求
 // 在路由注册时声明，不在本文件内判断。
 type Storage struct {
-	svc  *storage.Service
+	svc  *pool.Service
 	risk *risk.Guard
 }
 
 // NewStorage 构造存储池接口。
-func NewStorage(svc *storage.Service, guard *risk.Guard) *Storage {
+func NewStorage(svc *pool.Service, guard *risk.Guard) *Storage {
 	return &Storage{svc: svc, risk: guard}
 }
 
@@ -103,7 +103,7 @@ func (h *Storage) CreatePool(ctx context.Context, c *app.RequestContext) {
 	user := auth.CurrentUser(c)
 	info := auth.ClientInfoOf(c)
 
-	t, err := h.svc.Create(ctx, storage.CreateRequest{
+	t, err := h.svc.Create(ctx, pool.CreateRequest{
 		NodeID:            req.NodeID,
 		DeviceID:          req.DeviceID,
 		FSType:            req.FSType,

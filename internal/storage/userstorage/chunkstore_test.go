@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"k_cockpit/internal/userstorage"
+	"k_cockpit/internal/storage/userstorage"
 )
 
 const validID = "a1b2c3d4e5f60718"

@@ -8,7 +8,7 @@ import (
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"
-	"k_cockpit/internal/storage"
+	"k_cockpit/internal/storage/pool"
 )
 
 // StorageVolume 提供存储卷接口（F-5-02）。整体归管理员。
@@ -16,11 +16,11 @@ import (
 // 归管理员的理由与存储池一致：卷会**独占物理设备**，选错盘会影响这台
 // 宿主机上所有虚拟机的存储，而那不是租户该有的能力。
 type StorageVolume struct {
-	svc *storage.Service
+	svc *pool.Service
 }
 
 // NewStorageVolume 构造接口。
-func NewStorageVolume(svc *storage.Service) *StorageVolume { return &StorageVolume{svc: svc} }
+func NewStorageVolume(svc *pool.Service) *StorageVolume { return &StorageVolume{svc: svc} }
 
 // List 返回节点上的存储卷（API-140）。
 func (h *StorageVolume) List(ctx context.Context, c *app.RequestContext) {
@@ -60,7 +60,7 @@ func (h *StorageVolume) Preview(ctx context.Context, c *app.RequestContext) {
 		api.Fail(c, api.InvalidParameter("请求参数不合法"))
 		return
 	}
-	plan, err := h.svc.PreviewVolume(ctx, storage.VolumeRequest{
+	plan, err := h.svc.PreviewVolume(ctx, pool.VolumeRequest{
 		NodeID: nodeID, Name: req.Name, SizeGB: req.SizeGB,
 		StripeCount: req.StripeCount, MirrorCount: req.MirrorCount,
 		Devices: req.Devices,
@@ -97,7 +97,7 @@ func (h *StorageVolume) Create(ctx context.Context, c *app.RequestContext) {
 	user := auth.CurrentUser(c)
 	info := auth.ClientInfoOf(c)
 
-	plan, t, err := h.svc.CreateVolume(ctx, storage.VolumeRequest{
+	plan, t, err := h.svc.CreateVolume(ctx, pool.VolumeRequest{
 		NodeID: nodeID, Name: req.Name, SizeGB: req.SizeGB,
 		StripeCount: req.StripeCount, MirrorCount: req.MirrorCount,
 		Devices: req.Devices,

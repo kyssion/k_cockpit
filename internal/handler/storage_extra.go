@@ -9,7 +9,7 @@ import (
 	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/platform/risk"
-	"k_cockpit/internal/storage"
+	"k_cockpit/internal/storage/pool"
 )
 
 // --- 分区 ---
@@ -51,7 +51,7 @@ func (h *Storage) CreatePartition(ctx context.Context, c *app.RequestContext) {
 	user := auth.CurrentUser(c)
 	info := auth.ClientInfoOf(c)
 
-	t, err := h.svc.CreatePartition(ctx, storage.PartitionRequest{
+	t, err := h.svc.CreatePartition(ctx, pool.PartitionRequest{
 		NodeID: req.NodeID, DeviceID: req.DeviceID, SizeGB: req.SizeGB,
 	}, authz.ViewerOf(c), user.Username, info.IP)
 	if err != nil {
@@ -80,7 +80,7 @@ func (h *Storage) DeletePartitions(ctx context.Context, c *app.RequestContext) {
 	user := auth.CurrentUser(c)
 	info := auth.ClientInfoOf(c)
 
-	t, err := h.svc.DeletePartitions(ctx, storage.PartitionRequest{
+	t, err := h.svc.DeletePartitions(ctx, pool.PartitionRequest{
 		NodeID: req.NodeID, DeviceID: req.DeviceID, Index: req.Index, All: req.All,
 	}, authz.ViewerOf(c), user.Username, info.IP)
 	if err != nil {
@@ -116,7 +116,7 @@ func (h *Storage) UpdatePoolConfig(ctx context.Context, c *app.RequestContext) {
 	user := auth.CurrentUser(c)
 	info := auth.ClientInfoOf(c)
 
-	t, err := h.svc.UpdatePoolConfig(ctx, id, storage.PoolConfigRequest{
+	t, err := h.svc.UpdatePoolConfig(ctx, id, pool.PoolConfigRequest{
 		MountPath: req.MountPath, AutoMount: req.AutoMount, Remark: req.Remark,
 	}, authz.ViewerOf(c), user.Username, info.IP)
 	if err != nil {
