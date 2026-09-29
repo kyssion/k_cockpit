@@ -23,7 +23,7 @@ func newTestEnv(t *testing.T) (*auditlog.Service, *gorm.DB) {
 
 	db, err := database.Open(config.DB{
 		Driver:       config.DriverSQLite,
-		Path:         filepath.Join(t.TempDir(), "audit.db"),
+		Path:         filepath.Join(t.TempDir(), "auditlog.db"),
 		MaxOpenConns: 1,
 		MaxIdleConns: 1,
 	}, false)
