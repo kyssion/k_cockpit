@@ -5,7 +5,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/network"
+	"k_cockpit/internal/network/vswitch"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"
@@ -34,7 +34,7 @@ func (h *Network) MigrateSwitch(ctx context.Context, c *app.RequestContext) {
 	user := auth.CurrentUser(c)
 	info := auth.ClientInfoOf(c)
 
-	t, err := h.svc.MigrateSwitch(ctx, id, network.MigrateSwitchRequest{
+	t, err := h.svc.MigrateSwitch(ctx, id, vswitch.MigrateSwitchRequest{
 		UplinkIf: req.UplinkIf, VlanID: req.VlanID, Acknowledge: req.Acknowledge,
 	}, authz.ViewerOf(c), user.Username, info.IP)
 	if err != nil {
@@ -83,7 +83,7 @@ func (h *Network) ReleasePort(ctx context.Context, c *app.RequestContext) {
 	user := auth.CurrentUser(c)
 	info := auth.ClientInfoOf(c)
 
-	t, err := h.svc.ReleasePort(ctx, network.ReleasePortRequest{
+	t, err := h.svc.ReleasePort(ctx, vswitch.ReleasePortRequest{
 		NodeID: req.NodeID, SwitchID: req.SwitchID, PortRef: req.PortRef,
 	}, authz.ViewerOf(c), user.Username, info.IP)
 	if err != nil {
@@ -134,7 +134,7 @@ func (h *Network) ApplyIPv6Policy(ctx context.Context, c *app.RequestContext) {
 	user := auth.CurrentUser(c)
 	info := auth.ClientInfoOf(c)
 
-	res, err := h.svc.ApplyIPv6Policy(ctx, network.IPv6PolicyRequest{
+	res, err := h.svc.ApplyIPv6Policy(ctx, vswitch.IPv6PolicyRequest{
 		NodeID: req.NodeID, Protect: req.Protect, TrustedPrefixes: req.TrustedPrefixes,
 	}, authz.ViewerOf(c), user.Username, info.IP)
 	if err != nil {

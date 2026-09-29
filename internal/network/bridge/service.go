@@ -15,7 +15,7 @@
 //     让界面能把「不知道」如实显示出来。
 //   - **降级要说明影响了什么**。缺 OVS 不是静默换个后端就完事——必须指
 //     出哪些既有网络依赖它，否则用户会在某个功能不可用时完全找不到原因。
-package networkbridge
+package bridge
 
 import (
 	"context"

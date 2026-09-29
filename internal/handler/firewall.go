@@ -5,7 +5,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/firewall"
+	"k_cockpit/internal/network/firewall"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"

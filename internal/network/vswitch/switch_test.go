@@ -1,4 +1,4 @@
-package network_test
+package vswitch_test
 
 import (
 	"context"
@@ -9,12 +9,12 @@ import (
 	"time"
 
 	"k_cockpit/internal/model"
-	"k_cockpit/internal/network"
+	"k_cockpit/internal/network/vswitch"
 	"k_cockpit/internal/platform/api"
 )
 
-func validSwitch() network.SwitchRequest {
-	return network.SwitchRequest{
+func validSwitch() vswitch.SwitchRequest {
+	return vswitch.SwitchRequest{
 		Name:      "prod-net",
 		Mode:      model.NetworkModeNAT,
 		CIDR:      "192.168.10.0/24",
@@ -100,25 +100,25 @@ func TestSwitchRejectsInvalidNetwork(t *testing.T) {
 
 	cases := []struct {
 		name   string
-		mutate func(*network.SwitchRequest)
+		mutate func(*vswitch.SwitchRequest)
 	}{
-		{"网段格式错误", func(r *network.SwitchRequest) { r.CIDR = "192.168.10.0" }},
-		{"网关不在网段内", func(r *network.SwitchRequest) { r.GatewayIP = "10.0.0.1" }},
-		{"DHCP 起始不在网段内", func(r *network.SwitchRequest) { r.DHCPStart = "10.0.0.5" }},
-		{"DHCP 范围颠倒", func(r *network.SwitchRequest) {
+		{"网段格式错误", func(r *vswitch.SwitchRequest) { r.CIDR = "192.168.10.0" }},
+		{"网关不在网段内", func(r *vswitch.SwitchRequest) { r.GatewayIP = "10.0.0.1" }},
+		{"DHCP 起始不在网段内", func(r *vswitch.SwitchRequest) { r.DHCPStart = "10.0.0.5" }},
+		{"DHCP 范围颠倒", func(r *vswitch.SwitchRequest) {
 			r.DHCPStart, r.DHCPEnd = "192.168.10.200", "192.168.10.100"
 		}},
-		{"网段过小", func(r *network.SwitchRequest) {
+		{"网段过小", func(r *vswitch.SwitchRequest) {
 			// /31 没有可用主机地址，网关与虚拟机都放不下。
 			r.CIDR, r.GatewayIP = "192.168.10.0/31", "192.168.10.0"
 			r.DHCPStart, r.DHCPEnd = "", ""
 		}},
-		{"VLAN 超出范围", func(r *network.SwitchRequest) {
+		{"VLAN 超出范围", func(r *vswitch.SwitchRequest) {
 			v := 4095 // 保留值
 			r.VlanID = &v
 		}},
-		{"名称为空", func(r *network.SwitchRequest) { r.Name = "  " }},
-		{"模式非法", func(r *network.SwitchRequest) { r.Mode = "magic" }},
+		{"名称为空", func(r *vswitch.SwitchRequest) { r.Name = "  " }},
+		{"模式非法", func(r *vswitch.SwitchRequest) { r.Mode = "magic" }},
 	}
 
 	for _, tc := range cases {

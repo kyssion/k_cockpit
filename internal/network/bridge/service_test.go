@@ -1,4 +1,4 @@
-package networkbridge_test
+package bridge_test
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
-	"k_cockpit/internal/networkbridge"
+	"k_cockpit/internal/network/bridge"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
 	"k_cockpit/internal/platform/authz"
@@ -28,7 +28,7 @@ func (deadAgent) Execute(context.Context, agent.Operation) (*agent.Result, error
 	return nil, errors.New("node unreachable")
 }
 
-func newTestEnv(t *testing.T, client agent.Client) (*networkbridge.Service, *gorm.DB) {
+func newTestEnv(t *testing.T, client agent.Client) (*bridge.Service, *gorm.DB) {
 	t.Helper()
 
 	db, err := database.Open(config.DB{
@@ -57,7 +57,7 @@ func newTestEnv(t *testing.T, client agent.Client) (*networkbridge.Service, *gor
 	}).Error; err != nil {
 		t.Fatalf("创建节点失败: %v", err)
 	}
-	return networkbridge.NewService(db, client, audit.NewRecorder(db)), db
+	return bridge.NewService(db, client, audit.NewRecorder(db)), db
 }
 
 func admin() authz.Viewer { return authz.Viewer{UserID: 1, IsAdmin: true} }
@@ -322,7 +322,7 @@ func TestICMPNATBridgeRequiresDHCPFields(t *testing.T) {
 
 	// 启用内置 DHCP 但不给地址池：DHCP 要告诉来客网关是谁，
 	// 没有它就出不了网。
-	_, err := svc.CreateBridge(ctx, networkbridge.BridgeRequest{
+	_, err := svc.CreateBridge(ctx, bridge.BridgeRequest{
 		NodeID: 1, Name: "bad", Mode: model.BridgeModeNAT, DHCPEnabled: true,
 	}, admin(), "root", "")
 	assertStatus(t, err, 400)
@@ -332,7 +332,7 @@ func TestIsolatedBridgeRejectsDHCP(t *testing.T) {
 	svc, _ := newTestEnv(t, agent.NewMockClient())
 
 	// 空交换机不接外网，内置 DHCP 无从谈起。
-	_, err := svc.CreateBridge(context.Background(), networkbridge.BridgeRequest{
+	_, err := svc.CreateBridge(context.Background(), bridge.BridgeRequest{
 		NodeID: 1, Name: "iso", Mode: model.BridgeModeIsolated, DHCPEnabled: true,
 	}, admin(), "root", "")
 	assertStatus(t, err, 422)
@@ -346,7 +346,7 @@ func TestIsolatedBridgeRejectsDHCP(t *testing.T) {
 func TestCreateFailureKeepsRecord(t *testing.T) {
 	svc, db := newTestEnv(t, deadAgent{})
 
-	view, err := svc.CreateBridge(context.Background(), networkbridge.BridgeRequest{
+	view, err := svc.CreateBridge(context.Background(), bridge.BridgeRequest{
 		NodeID: 1, Name: "orphan", Mode: model.BridgeModeIsolated,
 	}, admin(), "root", "")
 	if err != nil {

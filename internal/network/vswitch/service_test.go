@@ -1,4 +1,4 @@
-package network_test
+package vswitch_test
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
-	"k_cockpit/internal/network"
+	"k_cockpit/internal/network/vswitch"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
 	"k_cockpit/internal/platform/config"
@@ -43,7 +43,7 @@ func (c *backendClient) Execute(ctx context.Context, op agent.Operation) (*agent
 	}, nil
 }
 
-func newTestEnv(t *testing.T, client agent.Client) (*network.Service, *gorm.DB) {
+func newTestEnv(t *testing.T, client agent.Client) (*vswitch.Service, *gorm.DB) {
 	t.Helper()
 
 	db, err := database.Open(config.DB{
@@ -77,7 +77,7 @@ func newTestEnv(t *testing.T, client agent.Client) (*network.Service, *gorm.DB) 
 		MaxConcurrent: 2,
 		PollInterval:  20 * time.Millisecond,
 	})
-	queue.Register(network.NewSwitchChangeExecutor(db, client))
+	queue.Register(vswitch.NewSwitchChangeExecutor(db, client))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	queue.Start(ctx)
@@ -86,7 +86,7 @@ func newTestEnv(t *testing.T, client agent.Client) (*network.Service, *gorm.DB) 
 		queue.Stop()
 	})
 
-	return network.NewService(db, client, queue, recorder), db
+	return vswitch.NewService(db, client, queue, recorder), db
 }
 
 func fullBackend() *agent.NetworkBackend {
@@ -101,7 +101,7 @@ func fullBackend() *agent.NetworkBackend {
 	}
 }
 
-func capabilityOf(t *testing.T, view *network.StatusView, key string) network.Capability {
+func capabilityOf(t *testing.T, view *vswitch.StatusView, key string) vswitch.Capability {
 	t.Helper()
 	for _, c := range view.Capabilities {
 		if c.Key == key {
@@ -109,7 +109,7 @@ func capabilityOf(t *testing.T, view *network.StatusView, key string) network.Ca
 		}
 	}
 	t.Fatalf("能力清单中缺少 %s", key)
-	return network.Capability{}
+	return vswitch.Capability{}
 }
 
 func TestStatusAllCapabilitiesAvailable(t *testing.T) {
@@ -125,10 +125,10 @@ func TestStatusAllCapabilitiesAvailable(t *testing.T) {
 	if view.Degraded {
 		t.Error("能力齐全却标记为降级")
 	}
-	if view.Mode != network.ModeBasic {
+	if view.Mode != vswitch.ModeBasic {
 		t.Errorf("模式 = %q", view.Mode)
 	}
-	if got := capabilityOf(t, view, agent.CapabilityDHCP); got.State != network.StateAvailable {
+	if got := capabilityOf(t, view, agent.CapabilityDHCP); got.State != vswitch.StateAvailable {
 		t.Errorf("DHCP 状态 = %q, 期望 available", got.State)
 	}
 }
@@ -150,7 +150,7 @@ func TestMissingOptionalCapabilityDoesNotDegrade(t *testing.T) {
 	}
 
 	ovs := capabilityOf(t, view, agent.CapabilityOVS)
-	if ovs.State != network.StateUnavailable {
+	if ovs.State != vswitch.StateUnavailable {
 		t.Errorf("OVS 状态 = %q, 期望 unavailable", ovs.State)
 	}
 	// 必须说清「缺什么 → 影响什么 → 怎么修」（R-011）。
@@ -179,7 +179,7 @@ func TestMissingRequiredCapabilityDegrades(t *testing.T) {
 	}
 
 	dhcp := capabilityOf(t, view, agent.CapabilityDHCP)
-	if dhcp.State != network.StateUnavailable || dhcp.Fix == "" {
+	if dhcp.State != vswitch.StateUnavailable || dhcp.Fix == "" {
 		t.Errorf("DHCP 能力信息不完整: %+v", dhcp)
 	}
 }
@@ -211,7 +211,7 @@ func TestProbeFailureIsUnknownNotUnavailable(t *testing.T) {
 	}
 
 	for _, c := range view.Capabilities {
-		if c.State != network.StateUnknown {
+		if c.State != vswitch.StateUnknown {
 			t.Errorf("能力 %s 状态 = %q, 期望 unknown", c.Key, c.State)
 		}
 		// 未知时也不能给出修复方式：我们并不知道它缺什么。

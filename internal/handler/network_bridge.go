@@ -5,7 +5,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/networkbridge"
+	"k_cockpit/internal/network/bridge"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"
@@ -13,11 +13,11 @@ import (
 
 // NetworkBridge 提供网络底座接口（F-4-01 / F-4-13）。
 type NetworkBridge struct {
-	svc *networkbridge.Service
+	svc *bridge.Service
 }
 
 // NewNetworkBridge 构造接口。
-func NewNetworkBridge(svc *networkbridge.Service) *NetworkBridge {
+func NewNetworkBridge(svc *bridge.Service) *NetworkBridge {
 	return &NetworkBridge{svc: svc}
 }
 
@@ -85,7 +85,7 @@ func (h *NetworkBridge) CreateBridge(ctx context.Context, c *app.RequestContext)
 	user := auth.CurrentUser(c)
 	info := auth.ClientInfoOf(c)
 
-	view, err := h.svc.CreateBridge(ctx, networkbridge.BridgeRequest{
+	view, err := h.svc.CreateBridge(ctx, bridge.BridgeRequest{
 		NodeID: nodeID, Name: req.Name, Backend: req.Backend, Mode: req.Mode,
 		CIDR: req.CIDR, GatewayIP: req.GatewayIP,
 		DHCPStart: req.DHCPStart, DHCPEnd: req.DHCPEnd,

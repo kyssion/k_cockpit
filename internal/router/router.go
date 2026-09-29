@@ -12,7 +12,6 @@ import (
 	"gorm.io/gorm"
 
 	"k_cockpit/internal/alert"
-	"k_cockpit/internal/capture"
 	"k_cockpit/internal/compute/computequota"
 	"k_cockpit/internal/compute/importer"
 	"k_cockpit/internal/compute/passthrough"
@@ -21,14 +20,20 @@ import (
 	"k_cockpit/internal/compute/vmtag"
 	"k_cockpit/internal/dashboard"
 	"k_cockpit/internal/diagnostics"
-	"k_cockpit/internal/firewall"
 	"k_cockpit/internal/handler"
-	"k_cockpit/internal/hostfirewall"
 	"k_cockpit/internal/hosttuning"
 	"k_cockpit/internal/maintenance"
 	"k_cockpit/internal/monitor"
-	"k_cockpit/internal/network"
-	"k_cockpit/internal/networkbridge"
+	"k_cockpit/internal/network/bridge"
+	"k_cockpit/internal/network/capture"
+	"k_cockpit/internal/network/firewall"
+	"k_cockpit/internal/network/hostfirewall"
+	"k_cockpit/internal/network/portmirror"
+	"k_cockpit/internal/network/portsecurity"
+	"k_cockpit/internal/network/publicip"
+	"k_cockpit/internal/network/securitygroup"
+	"k_cockpit/internal/network/vpcacl"
+	"k_cockpit/internal/network/vswitch"
 	"k_cockpit/internal/node"
 	"k_cockpit/internal/passaudit"
 	"k_cockpit/internal/platform/accesscontrol"
@@ -47,20 +52,15 @@ import (
 	"k_cockpit/internal/platform/settings"
 	"k_cockpit/internal/platform/useradmin"
 	"k_cockpit/internal/platformcheck"
-	"k_cockpit/internal/portmirror"
-	"k_cockpit/internal/portsecurity"
-	"k_cockpit/internal/publicip"
 	"k_cockpit/internal/quota"
 	"k_cockpit/internal/quotaenforce"
 	"k_cockpit/internal/realtime"
 	"k_cockpit/internal/schedule"
 	"k_cockpit/internal/scheduler"
 	"k_cockpit/internal/search"
-	"k_cockpit/internal/securitygroup"
 	"k_cockpit/internal/storage"
 	"k_cockpit/internal/task"
 	"k_cockpit/internal/userstorage"
-	"k_cockpit/internal/vpcacl"
 )
 
 // Deps 是路由注册所需的外部依赖。
@@ -74,7 +74,7 @@ type Deps struct {
 	Node      *node.Service
 	VM        *vm.Service
 	Storage   *storage.Service
-	Network   *network.Service
+	Network   *vswitch.Service
 	Settings  *settings.Service
 	Task      *task.Queue
 	// Mailer 提供发信能力（F-1-08）。为 nil 时测试发信接口返回不可用。
@@ -123,7 +123,7 @@ type Deps struct {
 	// PortMirror 提供端口镜像与自动撤销看门狗（F-4-09）。
 	PortMirror *portmirror.Service
 	// NetworkBridge 提供网络底座状态与自愈（F-4-01 / F-4-13）。
-	NetworkBridge *networkbridge.Service
+	NetworkBridge *bridge.Service
 	// AuditLog 提供审计流水查询（F-1-12）。
 	AuditLog *auditlog.Service
 	// Logging 提供服务端日志的级别、查看、导出与清理（F-9-02）。

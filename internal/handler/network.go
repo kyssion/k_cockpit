@@ -5,7 +5,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/network"
+	"k_cockpit/internal/network/vswitch"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/auth"
 )
@@ -15,11 +15,11 @@ import (
 // 权限：网络管理为 **admin 专属**（f-1-06 §3.1），在路由注册时声明。
 // 读接口只探测节点，写接口（交换机增删改）走任务队列。
 type Network struct {
-	svc *network.Service
+	svc *vswitch.Service
 }
 
 // NewNetwork 构造网络接口。
-func NewNetwork(svc *network.Service) *Network {
+func NewNetwork(svc *vswitch.Service) *Network {
 	return &Network{svc: svc}
 }
 
@@ -40,8 +40,8 @@ type switchRequest struct {
 	BandwidthOutMbps int `json:"bandwidth_out_mbps"`
 }
 
-func (r *switchRequest) toService() network.SwitchRequest {
-	return network.SwitchRequest{
+func (r *switchRequest) toService() vswitch.SwitchRequest {
+	return vswitch.SwitchRequest{
 		Name: r.Name, Mode: r.Mode, VlanID: r.VlanID, CIDR: r.CIDR,
 		GatewayIP: r.GatewayIP, DHCPStart: r.DHCPStart, DHCPEnd: r.DHCPEnd,
 		UplinkIf:         r.UplinkIf,

@@ -20,7 +20,6 @@ import (
 
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/alert"
-	"k_cockpit/internal/capture"
 	"k_cockpit/internal/compute/computequota"
 	"k_cockpit/internal/compute/importer"
 	"k_cockpit/internal/compute/passthrough"
@@ -29,13 +28,19 @@ import (
 	"k_cockpit/internal/compute/vmtag"
 	"k_cockpit/internal/dashboard"
 	"k_cockpit/internal/diagnostics"
-	"k_cockpit/internal/firewall"
-	"k_cockpit/internal/hostfirewall"
 	"k_cockpit/internal/hosttuning"
 	"k_cockpit/internal/maintenance"
 	"k_cockpit/internal/monitor"
-	"k_cockpit/internal/network"
-	"k_cockpit/internal/networkbridge"
+	"k_cockpit/internal/network/bridge"
+	"k_cockpit/internal/network/capture"
+	"k_cockpit/internal/network/firewall"
+	"k_cockpit/internal/network/hostfirewall"
+	"k_cockpit/internal/network/portmirror"
+	"k_cockpit/internal/network/portsecurity"
+	"k_cockpit/internal/network/publicip"
+	"k_cockpit/internal/network/securitygroup"
+	"k_cockpit/internal/network/vpcacl"
+	"k_cockpit/internal/network/vswitch"
 	"k_cockpit/internal/node"
 	"k_cockpit/internal/passaudit"
 	"k_cockpit/internal/platform/accesscontrol"
@@ -56,9 +61,6 @@ import (
 	"k_cockpit/internal/platform/useradmin"
 	"k_cockpit/internal/platform/version"
 	"k_cockpit/internal/platformcheck"
-	"k_cockpit/internal/portmirror"
-	"k_cockpit/internal/portsecurity"
-	"k_cockpit/internal/publicip"
 	"k_cockpit/internal/quota"
 	"k_cockpit/internal/quotaenforce"
 	"k_cockpit/internal/realtime"
@@ -67,11 +69,9 @@ import (
 	"k_cockpit/internal/scheduler"
 	sched "k_cockpit/internal/scheduler"
 	"k_cockpit/internal/search"
-	"k_cockpit/internal/securitygroup"
 	"k_cockpit/internal/storage"
 	"k_cockpit/internal/task"
 	"k_cockpit/internal/userstorage"
-	"k_cockpit/internal/vpcacl"
 )
 
 // app 汇集启动期装配好的全部依赖。
@@ -123,7 +123,7 @@ type app struct {
 	firewallSvc     *firewall.Service
 	apiKeySvc       *apikey.Service
 	mirrorSvc       *portmirror.Service
-	netSvc          *networkbridge.Service
+	netSvc          *bridge.Service
 	auditLogSvc     *auditlog.Service
 	userAdminSvc    *useradmin.Service
 	inviteSvc       *invite.Service
@@ -137,7 +137,7 @@ type app struct {
 	quotaEnforceSvc *quotaenforce.Service
 	hostFirewallSvc *hostfirewall.Service
 	diagnosticsSvc  *diagnostics.Service
-	networkSvc      *network.Service
+	networkSvc      *vswitch.Service
 	vmSvc           *vm.Service
 	computeQuotaSvc *computequota.Service
 	alertSvc        *alert.Service
@@ -414,7 +414,7 @@ func (a *app) setupTaskQueue() {
 	a.queue.Register(storage.NewPoolConfigExecutor(db, mockAgent))
 	a.queue.Register(storage.NewPoolUnmountExecutor(db, mockAgent))
 	// 交换机变更要建网桥，因此与存储池一样走队列。
-	a.queue.Register(network.NewSwitchChangeExecutor(db, mockAgent))
+	a.queue.Register(vswitch.NewSwitchChangeExecutor(db, mockAgent))
 	a.queue.Start(context.Background())
 }
 
@@ -499,7 +499,7 @@ func (a *app) setupResourceServices() {
 	a.firewallSvc = firewall.NewService(db, mockAgent, a.recorder)
 	a.apiKeySvc = apikey.NewService(db, a.recorder)
 	a.mirrorSvc = portmirror.NewService(db, mockAgent, a.recorder)
-	a.netSvc = networkbridge.NewService(db, mockAgent, a.recorder)
+	a.netSvc = bridge.NewService(db, mockAgent, a.recorder)
 	a.auditLogSvc = auditlog.NewService(db)
 	a.userAdminSvc = useradmin.NewService(db, a.recorder, quotaAdapter{svc: a.quotaSvc})
 	// 邀请注册（F-1-10）。账号创建复用 useradmin（密码由受邀人自设），链接里的站点地址取自设置项——没有配置时给出相对链接，由管理员自己补域名。
@@ -550,7 +550,7 @@ func (a *app) setupObservabilityServices() {
 	// 版本摘要进诊断包：排障时第一个要问的就是「跑的是哪个版本」，
 	// 而它应当随包一起走，不必再让人回头去问。
 	a.diagnosticsSvc.Version = version.Summary()
-	a.networkSvc = network.NewService(db, mockAgent, queue, a.recorder)
+	a.networkSvc = vswitch.NewService(db, mockAgent, queue, a.recorder)
 	// 全局带宽总限（G-44）从设置读取：下发时现取值，改设置不需要重启。
 	a.networkSvc.SetSettingsProvider(a.settingsSvc)
 }

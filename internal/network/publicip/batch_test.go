@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"k_cockpit/internal/model"
-	"k_cockpit/internal/publicip"
+	"k_cockpit/internal/network/publicip"
 )
 
 // TestBatchUnbindReportsPerItem 覆盖批量最要紧的一条：**逐条如实报告**。

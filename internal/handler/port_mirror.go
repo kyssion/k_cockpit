@@ -5,10 +5,10 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
+	"k_cockpit/internal/network/portmirror"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"
-	"k_cockpit/internal/portmirror"
 )
 
 // PortMirror 提供端口镜像接口（F-4-09）。
