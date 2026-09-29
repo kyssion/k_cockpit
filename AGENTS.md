@@ -112,11 +112,16 @@ cd web && pnpm lint
 # 单元与组件测试（Vitest）
 cd web && pnpm test
 
+# E2E 冒烟（Playwright；自动拉起 mock 控制面与 vite，无需手工准备）
+cd web && pnpm test:e2e
+
 # 构建（产物在 web/dist，由控制面托管）
 cd web && pnpm build
 ```
 
-> E2E（Playwright）已规划未落地，随真实 agent 的验收环境补（口径见 [`docs/04-engineering/TESTING.md`](docs/04-engineering/TESTING.md)）。
+> E2E 目前是**冒烟档**（登录与导航链路，跑在 mock 栈上）；创建 / 电源 /
+> 迁移等核心链路的端到端覆盖依赖真实 agent，随 M5 验收补（口径见
+> [`docs/04-engineering/TESTING.md`](docs/04-engineering/TESTING.md)）。
 
 **本地运行提示**：默认配置使用 SQLite，数据文件写入 `data/`。表结构由 [`internal/platform/database/migrations/`](internal/platform/database/migrations/) 下的 SQL 迁移管理（**服务启动不做自动迁移**），执行方式见 [`docs/02-architecture/DATA_MODEL.md`](docs/02-architecture/DATA_MODEL.md) 第 6 节。
 

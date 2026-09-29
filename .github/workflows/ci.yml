@@ -84,3 +84,36 @@ jobs:
 
       - name: 构建
         run: pnpm build
+
+  e2e:
+    name: E2E 冒烟（Playwright，mock 栈）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: 安装依赖
+        run: pnpm --dir web install --frozen-lockfile
+
+      - name: 安装浏览器
+        run: pnpm --dir web exec playwright install --with-deps chromium
+
+      # 双 webServer（控制面 + vite）由 playwright 配置自行拉起，
+      # 这里只需要跑用例。生产构建不走这里——冒烟跑在 vite 开发服务器上，
+      # 与本地开发同一形态。
+      - name: 运行冒烟
+        run: pnpm --dir web test:e2e

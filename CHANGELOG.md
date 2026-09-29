@@ -17,6 +17,10 @@
 
 ## [Unreleased]
 
+### Added
+- **Playwright E2E 冒烟**（ADR-0006 规划落地）：`pnpm --dir web test:e2e` 一条命令自拉起独立控制面（临时 SQLite + mock + `cmd/e2e-init` 按模型建库——SQL 迁移是 PG 专用，冒烟栈不走）与 vite，覆盖「面板从零到能用」的最短链路：真实令牌初始化（ADR-0008 流程）、错误密码拒绝、管理员登录（含首次安全引导的跳过）、虚拟机列表导航。CI 新增 e2e job；创建 / 电源 / 迁移的全量覆盖仍按口径随 M5
+- `database.AllModels()` / `BuildTestSchema()`：全套表模型的显式清单（按 `TableName()` 枚举 61 个），仅供冒烟与测试建库——生产建库入口仍是 SQL 迁移
+
 ### Changed
 - **internal 按业务域分组**（[ADR-0010](docs/06-decisions/0010-group-internal-by-domain.md)）：58 个平铺包归入 `platform / compute / network / storage / ops` 五个域目录 + `node / agent / model` 顶层包；handler 按同名六域拆分子包；消歧改名 `network→vswitch`、`networkbridge→bridge`、`storage→pool`、`schedule→cron`。纯目录与命名迁移（`git mv` + import 更新，约 200 个文件），零逻辑改动，每域一个 commit、全量测试护航
 - 迁移中验证并否决两个子项：**auditlog 并入 audit** 被 `audit→authz→auth→audit` 依赖环否决（审计写侧必须比 auth 更底层，读写两包保留）；**端口转发/静态地址从 vm 抽到 network 域** 因深耦合否决（与 vm 拆包同批、随真实 agent 落地处理）

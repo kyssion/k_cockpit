@@ -77,7 +77,7 @@
 - [x] 跨节点迁移完整闭环（F-2-15 / F-6-03 / F-6-04）：热迁移 + 脏页阈值 + 目标接管 + 迁移目标清单（2026-09-28）
 - [x] 宿主机调优（F-6-07）与硬件直通（F-2-06 直通部分）
 - [x] 持续集成（GitHub Actions：后端 gofmt/vet/test + 前端 typecheck/lint/test/build）
-- [x] 前端测试基建（Vitest，请求层核心链路 / 通用件 / 工具；Playwright E2E 随 M5 验收环境补）
+- [x] 前端测试基建（Vitest，请求层核心链路 / 通用件 / 工具）与 **Playwright E2E 冒烟**（mock 栈自拉起，登录与导航链路；核心链路全量覆盖仍随 M5）
 - [x] 安全自查（0.1.0 版记录：[`../04-engineering/SECURITY_REVIEW.md`](../04-engineering/SECURITY_REVIEW.md)，14 项通过，3 项随 agent 复查）
 - [x] 压测与可观测性**口径**（[`../04-engineering/TESTING.md`](../04-engineering/TESTING.md)：mock 下压测数字会骗人，两者均随真实 agent 立项）
 - [ ] 容错与降级**全量核对**（[`CAPABILITY_MAP.md`](CAPABILITY_MAP.md) §5：降级触发来自 agent 能力自报，随 M5 验收）
