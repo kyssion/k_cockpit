@@ -71,6 +71,10 @@ type VM struct {
 	Remark    *string `gorm:"size:200"`
 	GroupName *string `gorm:"size:64"`
 
+	// MediaAutoEject 表示"初始化完成后自动弹出安装介质"还欠着没执行
+	// （F-2-17，Windows / ConfigDrive）。创建时置位，弹出循环发起弹出后
+	// 清零——它是这个一次性动作的记账位。
+	MediaAutoEject bool `gorm:"not null;default:false"`
 	// Present 表示虚拟化层是否仍存在该虚拟机。
 	//
 	// 为 false 说明它在面板之外被删除了。界面应把它标记为「已失效」而不是

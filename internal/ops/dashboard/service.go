@@ -63,6 +63,9 @@ type Service struct {
 	tuning TuningProvider
 	agent  agent.Client
 
+	// notices 返回非负载类的运维自检提示（F-8-03）；nil 时没有这一块。
+	notices func() []Alert
+
 	// 三个配额读数服务（G-32）。都是**可选**依赖：nil 时「我的配额」里
 	// 对应的维度不出现，而不是报错——配额是可选能力，与 vm.Service 的
 	// 可选注入是同一条约定。
@@ -194,6 +197,11 @@ func (s *Service) Summary(ctx context.Context, v authz.Viewer) (*Summary, error)
 	}
 	if v.IsAdmin {
 		out.Scope = ScopePlatform
+		// 运维自检提示只给管理员：租户改不了系统设置，把「SMTP 未配置」
+		// 展示给他只是噪音。
+		if s.notices != nil {
+			out.Alerts = append(out.Alerts, s.notices()...)
+		}
 	}
 
 	nodes, err := s.nodes(ctx, v)
@@ -570,3 +578,8 @@ func buildAlerts(nodes *NodeSummary, vms VMSummary, tasks TaskSummary, limited i
 func plural(n int, unit string) string {
 	return strconv.Itoa(n) + " " + unit
 }
+
+// SetNotices 装配非负载类自检提示（F-8-03：宿主状态横幅含「未配置 SMTP」
+// 等运维事项）。与告警中心分工：那边评估的是**资源与负载**状态，这里列
+// 的是**面板自身配置**的缺口——两者都不是负载，但都会让某个功能悄悄失效。
+func (s *Service) SetNotices(fn func() []Alert) { s.notices = fn }

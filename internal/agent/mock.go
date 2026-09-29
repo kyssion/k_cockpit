@@ -180,6 +180,11 @@ func stagePlan(op Operation) [][2]string {
 			{"domain_read", "读取域定义"},
 			{"root_port_count", "统计 PCIe 根端口"},
 		}
+	case OpVMInitReady:
+		return [][2]string{
+			{"guest_log_read", "读取来宾初始化日志"},
+			{"ready_check", "检查 cloudbase-init 完成标记"},
+		}
 	case OpVMNeighbors:
 		return [][2]string{
 			{"iface_resolve", "定位网口与网桥"},
@@ -1544,6 +1549,12 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 			Free:             2,
 			HotplugSupported: true,
 			MachineType:      "q35",
+		}
+
+	case OpVMInitReady:
+		data[InitReadyDataKey] = InitReadyInfo{
+			Ready:  true,
+			Detail: "mock：真实实现读来宾日志中 cloudbase-init 的完成标记",
 		}
 
 	case OpVMNeighbors:

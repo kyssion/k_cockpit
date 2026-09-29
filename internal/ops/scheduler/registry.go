@@ -51,6 +51,8 @@ const (
 	KeySchedulerRetention = "scheduler.retention"
 	// KeyStorageTrim 是存储空间的自动回收（G-52）。
 	KeyStorageTrim = "storage.trim"
+	// KeyVMMediaEject 是安装介质的自动弹出（F-2-17）。
+	KeyVMMediaEject = "vm.media_eject"
 )
 
 // Info 描述一个已注册的调度器。

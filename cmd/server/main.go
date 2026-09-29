@@ -25,6 +25,7 @@ import (
 	"k_cockpit/internal/compute/template"
 	"k_cockpit/internal/compute/vm"
 	"k_cockpit/internal/compute/vmtag"
+	"k_cockpit/internal/model"
 	"k_cockpit/internal/network/bridge"
 	"k_cockpit/internal/network/capture"
 	"k_cockpit/internal/network/firewall"
@@ -156,6 +157,7 @@ type app struct {
 	alertLoop      *alert.Loop
 	schedRetention *scheduler.RetentionLoop
 	trimLoop       *pool.TrimLoop
+	mediaEjectLoop *vm.MediaEjectLoop
 	passAuditLoop  *passaudit.Loop
 	authKeyLoop    *authkey.Loop
 	collector      *monitor.Collector
@@ -437,6 +439,7 @@ func (a *app) setupSchedulerRegistry() {
 		PasswordAuditInterval:  24 * time.Hour,
 		RetentionInterval:      time.Hour,
 		TrimInterval:           24 * time.Hour,
+		MediaEjectInterval:     time.Minute,
 	})
 	// 记录器在这里建好（在**所有**周期组件之前）：定时任务扫描器与采集器
 	// 构造之后马上就要接上它。
@@ -568,6 +571,26 @@ func (a *app) setupComputeServices() {
 	// 工作台「我的配额」（G-32）：三类配额的读数都从各自的判定服务取，
 	// 保证用户看到的数字与判定时用的是同一份。
 	a.dashboardSvc.SetQuotaReaders(a.computeQuotaSvc, a.quotaSvc, a.quotaEnforceSvc)
+	// 非负载类自检提示（F-8-03）：每次取摘要时现读设置——改完配置刷新
+	// 即消失，不等下一次评估周期。
+	a.dashboardSvc.SetNotices(func() []dashboard.Alert {
+		var out []dashboard.Alert
+		if a.settingsSvc.String("notification.smtp_host", "") == "" {
+			out = append(out, dashboard.Alert{
+				Level: "warning",
+				Text:  "未配置邮件发信（SMTP）：找回密码与邀请注册的邮件发不出去",
+				Link:  "/settings",
+			})
+		}
+		if a.settingsSvc.String(settings.KeySiteURL, "") == "" {
+			out = append(out, dashboard.Alert{
+				Level: "warning",
+				Text:  "未配置站点对外地址：邀请链接是站外打不开的相对路径",
+				Link:  "/settings",
+			})
+		}
+		return out
+	})
 	// 告警中心（F-8-07）。
 	a.alertSvc = alert.NewService(db)
 	a.vmSvc.SetComputeQuota(a.computeQuotaSvc)
@@ -617,6 +640,10 @@ func (a *app) setupBackground() {
 
 	// 配额评估循环：配额以月计，5 分钟一轮足够，而它要扫两张按天累计的表。
 	a.quotaLoop = quotaenforce.NewLoop(a.quotaEnforceSvc, quotaenforce.DefaultOptions())
+	// "关机"处置与用户通知（F-8-06）：关机复用 vm 的入队逻辑，通知只在
+	// 已验证邮箱 + SMTP 可用时发出。
+	a.quotaEnforceSvc.SetVMShutdown(a.vmSvc.ShutdownUserVMsOnNode)
+	a.quotaEnforceSvc.SetNotifier(a.notifyUserEmail)
 	a.quotaLoop.Observe(a.schedRecorder)
 
 	// 告警评估循环（F-8-07）：只读库表，不探测节点——评估每五分钟跑一次，
@@ -626,6 +653,8 @@ func (a *app) setupBackground() {
 
 	// 口令安全检查循环（F-10-06）：一天一次，判定在节点侧完成。
 	a.passAuditLoop = passaudit.NewLoop(a.passAuditSvc, passaudit.DefaultOptions())
+	// 命中通知（F-10-05）：发给命中者本人。
+	a.passAuditSvc.SetNotifier(a.notifyUserEmail)
 	a.passAuditLoop.Observe(a.schedRecorder)
 
 	// 会话密钥自动轮换（F-1-09）：间隔为 0 时这个循环什么都不做。
@@ -657,6 +686,9 @@ func (a *app) setupBackground() {
 			return a.settingsSvc.Bool(settings.KeyStorageAutoTrim, false)
 		},
 	})
+
+	// 安装介质自动弹出（F-2-17）：Windows 初始化就绪后弹出安装 ISO。
+	a.mediaEjectLoop = vm.NewMediaEjectLoop(a.vmSvc, a.db, a.mockAgent, a.schedRecorder, vm.MediaEjectOptions{})
 }
 
 // startBackground 启动全部后台周期组件。
@@ -670,6 +702,7 @@ func (a *app) startBackground() {
 	a.collector.Start(ctx)
 	go a.schedRetention.Start(ctx)
 	go a.trimLoop.Start(ctx)
+	go a.mediaEjectLoop.Start(ctx)
 }
 
 // stopBackground 停止需要优雅收尾的周期组件。
@@ -682,6 +715,7 @@ func (a *app) stopBackground() {
 	a.quotaLoop.Stop()
 	a.schedRetention.Stop()
 	a.trimLoop.Stop()
+	a.mediaEjectLoop.Stop()
 }
 
 // newHTTPServer 创建 Hertz 服务实例。
@@ -760,6 +794,26 @@ func (a *app) routerDeps() router.Deps {
 		InputFilterEnabled: func() bool {
 			return a.settingsSvc.Bool("security.request_filter_enabled", true)
 		},
+	}
+}
+
+// notifyUserEmail 把系统通知发给单个用户（配额处置 / 口令检查命中）。
+//
+// 只发**已验证**邮箱：发到没验证过的地址等于把面板存在的信息投给一个
+// 未必属于该用户的信箱。未绑定邮箱、SMTP 未配置都只记日志——通知是
+// 附属品，缺了它处置与检查照常生效。
+func (a *app) notifyUserEmail(ctx context.Context, userID int64, subject, body string) {
+	var user model.User
+	if err := a.db.WithContext(ctx).Select("email", "email_verified_at").
+		First(&user, userID).Error; err != nil || user.Email == nil || user.EmailVerifiedAt == nil {
+		return
+	}
+	if a.settingsSvc.String("notification.smtp_host", "") == "" {
+		log.Printf("[notify] 用户 %d 有已验证邮箱但 SMTP 未配置，通知未发出", userID)
+		return
+	}
+	if err := a.mailSvc.Send(ctx, *user.Email, subject, body); err != nil {
+		log.Printf("[notify] 通知邮件发送失败 user=%d: %v", userID, err)
 	}
 }
 

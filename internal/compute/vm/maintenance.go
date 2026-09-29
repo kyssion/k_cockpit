@@ -78,3 +78,62 @@ func (s *Service) ShutdownAllOnNode(
 	}
 	return enqueued, nil
 }
+
+// ShutdownUserVMsOnNode 为某用户在某节点上运行中的虚拟机逐台入队优雅关机，
+// 返回入队数。供配额超限的"关机"处置使用（F-8-06）。
+//
+// 与 ShutdownAllOnNode（站点维护）的差别只在**按归属过滤**：配额是按
+// 用户计的，处置也只应落在超额的人头上——把他人的机器一起关掉不是
+// "从严"，是事故。
+func (s *Service) ShutdownUserVMsOnNode(
+	ctx context.Context, nodeID, userID int64, v authz.Viewer, operatorName, clientIP string,
+) (int, error) {
+	var vms []model.VM
+	err := s.db.WithContext(ctx).
+		Where("node_id = ? AND owner_id = ? AND status = ? AND present = ?",
+			nodeID, userID, model.VMStatusRunning, true).
+		Find(&vms).Error
+	if err != nil {
+		log.Printf("[vm] 查询用户运行中虚拟机失败 node=%d user=%d: %v", nodeID, userID, err)
+		return 0, api.Internal()
+	}
+
+	enqueued := 0
+	for i := range vms {
+		m := &vms[i]
+		params := powerParams{
+			VMID: m.ID, VMName: m.Name,
+			Action:         string(PowerShutdown),
+			ObservedStatus: m.Status,
+		}
+		if _, err := s.queue.Enqueue(ctx, task.Spec{
+			Type:         model.TaskVMPower,
+			NodeID:       nodeID,
+			ResourceType: "vm",
+			ResourceID:   m.ID,
+			ResourceName: m.Name,
+			OwnerID:      ownerOf(m, v),
+			CreatedBy:    v.UserID,
+			Params:       params,
+		}); err != nil {
+			log.Printf("[vm] 配额关机入队失败 vm=%s: %v", m.Name, err)
+			continue
+		}
+		enqueued++
+
+		s.record(ctx, audit.Entry{
+			OperatorID:   v.UserID,
+			OperatorName: operatorName,
+			NodeID:       nodeID,
+			ResourceType: "vm",
+			ResourceID:   m.ID,
+			ResourceName: m.Name,
+			Action:       "vm.power.request",
+			Params:       map[string]any{"action": string(PowerShutdown), "observed_status": m.Status, "bulk": "quota_enforce"},
+			BeforeState:  map[string]any{"status": m.Status},
+			Success:      true,
+			ClientIP:     clientIP,
+		})
+	}
+	return enqueued, nil
+}

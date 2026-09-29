@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -100,5 +101,40 @@ func TestInputFilterDisabled(t *testing.T) {
 	w := ut.PerformRequest(h.Engine, "GET", "/.env", nil)
 	if w.Code == consts.StatusForbidden {
 		t.Error("开关关闭时不应拦截")
+	}
+}
+
+// no-store 只落在 API 响应上：静态资源（SPA 产物）正该被缓存。
+func TestNoStoreHeaderOnAPIOnly(t *testing.T) {
+	h := newGuardServer(t, nil)
+	h.GET("/assets/app.js", func(ctx context.Context, c *app.RequestContext) {
+		c.String(consts.StatusOK, "ok")
+	})
+
+	w := ut.PerformRequest(h.Engine, "GET", "/api/v1/ok", nil)
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("API 响应应带 no-store, 实际 %q", got)
+	}
+
+	w = ut.PerformRequest(h.Engine, "GET", "/assets/app.js", nil)
+	if got := w.Header().Get("Cache-Control"); got == "no-store" {
+		t.Error("静态资源不应带 no-store")
+	}
+}
+
+// 超长查询参数与路径在进业务之前被拦下。
+func TestInputFilterRejectsOverlongQuery(t *testing.T) {
+	h := newGuardServer(t, nil)
+
+	long := "/api/v1/ok?q=" + strings.Repeat("a", 3000)
+	w := ut.PerformRequest(h.Engine, "GET", long, nil)
+	if w.Code != consts.StatusForbidden {
+		t.Errorf("超长查询应 403, 实际 %d", w.Code)
+	}
+
+	longPath := "/api/v1/" + strings.Repeat("a", 1100)
+	w = ut.PerformRequest(h.Engine, "GET", longPath, nil)
+	if w.Code != consts.StatusForbidden {
+		t.Errorf("超长路径应 403, 实际 %d", w.Code)
 	}
 }

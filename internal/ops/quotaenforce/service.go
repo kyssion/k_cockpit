@@ -48,6 +48,13 @@ type Service struct {
 	agent agent.Client
 	audit *audit.Recorder
 	now   func() time.Time
+	// shutdownVMs 执行"关机"处置（F-8-06）：由 vm 服务提供、main 装配；
+	// nil 时该处置只记录状态与下发参数，不实际关机（与真实 agent 落地
+	// 前的其余节点侧动作同一口径）。
+	shutdownVMs func(ctx context.Context, nodeID, userID int64, v authz.Viewer, operatorName, clientIP string) (int, error)
+	// notify 把处置结果通知用户（F-8-06"可通知"）：main 装配邮件发送；
+	// nil 或发送失败都只记日志——通知是处置的附属品，不能反噬处置本身。
+	notify func(ctx context.Context, userID int64, subject, body string)
 }
 
 // NewService 构造服务。
@@ -146,7 +153,7 @@ func (s *Service) Set(
 		req.Action = model.QuotaActionThrottle
 	}
 	if !model.ValidQuotaAction(req.Action) {
-		return nil, api.InvalidParameter("处置方式只能是限速或断网")
+		return nil, api.InvalidParameter("处置方式只能是限速、断网或关机")
 	}
 	// 现在不存在的用户不该有配额：一条指向空用户的配额，界面上无法显示
 	// 是谁，而判定时也永远不会命中。
@@ -462,6 +469,11 @@ func (s *Service) apply(
 		return api.Internal()
 	}
 
+	// 首次进入处置态才触发关机与通知（F-8-06 的"自动关机并可通知"）：
+	// q.LimitedAt 还是 nil 说明这条配额此前不在处置中——上面那条 Updates
+	// 只在首次写 limited_at，用它做边沿判定，每轮评估天然只触发一次。
+	firstLimited := status == model.QuotaStatusLimited && q.LimitedAt == nil
+
 	// 下发到节点。
 	if status == model.QuotaStatusLimited {
 		s.enqueue(ctx, q, true)
@@ -470,7 +482,43 @@ func (s *Service) apply(
 		// 不撤销的话，用户在界面上看到"已恢复"，而网络还是慢的。
 		s.enqueue(ctx, q, false)
 	}
+
+	if firstLimited {
+		s.onLimited(ctx, q, used)
+	}
 	return nil
+}
+
+// onLimited 是"首次进入处置态"的后续动作：关机处置执行 + 用户通知。
+//
+// 两者都**不反噬处置**：关机入队失败只记日志（下一轮评估会重试，配额
+// 状态本身就是幂等的），通知失败同理——用户没收到邮件不该让节点上的
+// 处置回滚。
+func (s *Service) onLimited(ctx context.Context, q *model.ResourceQuota, used int64) {
+	if q.Action == model.QuotaActionShutdown && s.shutdownVMs != nil {
+		// 系统触发的处置：操作者记为配额处置，CreatedBy 为 0（系统）。
+		if n, err := s.shutdownVMs(ctx, q.NodeID, q.UserID,
+			authz.Viewer{IsAdmin: true}, "配额处置（自动）", ""); err != nil {
+			log.Printf("[quotaenforce] 关机处置失败 quota=%d user=%d: %v", q.ID, q.UserID, err)
+		} else if n > 0 {
+			log.Printf("[quotaenforce] 已为用户 %d 在节点 %d 入队 %d 台关机（配额 %s 超限）",
+				q.UserID, q.NodeID, n, q.Dimension)
+		}
+	}
+
+	if s.notify != nil {
+		var node model.Node
+		nodeName := ""
+		if err := s.db.WithContext(ctx).Select("name").First(&node, q.NodeID).Error; err == nil {
+			nodeName = node.Name
+		}
+		subject := "配额超限处置通知"
+		body := fmt.Sprintf(
+			"你在节点 %s 上的配额（%s）已超限：用量 %d / 上限 %d，已按设置执行「%s」处置。\n"+
+				"恢复方式：等待本周期重置，或联系管理员提高上限 / 重置用量。\n",
+			nodeName, q.Dimension, used, q.LimitValue, actionLabel(q.Action))
+		s.notify(ctx, q.UserID, subject, body)
+	}
 }
 
 func (s *Service) reset(ctx context.Context, q *model.ResourceQuota) error {
@@ -657,8 +705,11 @@ func toView(q *model.ResourceQuota, used int64, period string) View {
 }
 
 func actionLabel(a string) string {
-	if a == model.QuotaActionBlock {
+	switch a {
+	case model.QuotaActionBlock:
 		return "断网"
+	case model.QuotaActionShutdown:
+		return "关机"
 	}
 	return "限速"
 }
@@ -668,4 +719,14 @@ func SortedDims() []string {
 	out := []string{model.QuotaDimTrafficIn, model.QuotaDimTrafficOut, model.QuotaDimRuntime}
 	sort.Strings(out)
 	return out
+}
+
+// SetVMShutdown 装配"关机"处置的执行（由 vm.Service.ShutdownUserVMsOnNode 提供）。
+func (s *Service) SetVMShutdown(fn func(ctx context.Context, nodeID, userID int64, v authz.Viewer, operatorName, clientIP string) (int, error)) {
+	s.shutdownVMs = fn
+}
+
+// SetNotifier 装配处置通知（邮件）。
+func (s *Service) SetNotifier(fn func(ctx context.Context, userID int64, subject, body string)) {
+	s.notify = fn
 }

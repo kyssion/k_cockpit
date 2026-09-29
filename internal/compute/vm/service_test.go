@@ -102,6 +102,8 @@ func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task
 	}
 	queue.Register(createExec)
 	queue.Register(vm.NewPowerExecutor(db, client))
+	// 光驱执行器：自动弹出循环（media_eject）经 enqueueCDROM 入队。
+	queue.Register(vm.NewCDROMExecutor(db, client))
 	queue.Register(vm.NewDeleteExecutor(db, client))
 	queue.Register(vm.NewSnapshotCreateExecutor(db, client))
 	queue.Register(vm.NewSnapshotRestoreExecutor(db, client))

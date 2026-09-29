@@ -341,6 +341,12 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 		DiskIOPSRead:    p.DiskIOPSRead,
 		DiskIOPSWrite:   p.DiskIOPSWrite,
 	}
+	// Windows / ConfigDrive 初始化且挂着安装 ISO 时，登记"就绪后自动弹出"
+	// （F-2-17）：cloudbase-init 完成前安装介质必须留在光驱里，完成后由
+	// 弹出循环（media_eject.go）依据节点探测结果弹出。没有安装 ISO 就
+	// 没有可弹的东西，不登记。
+	vm.MediaAutoEject = p.InitMode == "configdrive" && p.ISOFileID > 0
+
 	if p.TemplateID > 0 {
 		vm.TemplateID = &p.TemplateID
 		vm.CloneMode = p.CloneMode

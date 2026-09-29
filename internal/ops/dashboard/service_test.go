@@ -293,3 +293,29 @@ func hasAlert(alerts []dashboard.Alert, text string) bool {
 	}
 	return false
 }
+
+// 非负载类自检提示（F-8-03）：只出现在管理员视角，租户看不到。
+func TestNoticesAdminOnly(t *testing.T) {
+	_, svc := newEnv(t, fakeRuntime{hb: map[int64]time.Time{}})
+	svc.SetNotices(func() []dashboard.Alert {
+		return []dashboard.Alert{{Level: "warning", Text: "未配置邮件发信（SMTP）", Link: "/settings"}}
+	})
+
+	admin, err := svc.Summary(context.Background(), authz.Viewer{UserID: 1, IsAdmin: true})
+	if err != nil {
+		t.Fatalf("取管理员摘要失败: %v", err)
+	}
+	if len(admin.Alerts) == 0 || admin.Alerts[0].Text != "未配置邮件发信（SMTP）" {
+		t.Errorf("管理员应看到自检提示: %+v", admin.Alerts)
+	}
+
+	tenant, err := svc.Summary(context.Background(), authz.Viewer{UserID: 2})
+	if err != nil {
+		t.Fatalf("取租户摘要失败: %v", err)
+	}
+	for _, a := range tenant.Alerts {
+		if a.Text == "未配置邮件发信（SMTP）" {
+			t.Error("租户不应看到系统配置类提示：他改不了设置，看到只是噪音")
+		}
+	}
+}

@@ -8,7 +8,8 @@
  *
  *  默认不限   上限填 0 表示不限。默认给一个上限会让用户在自己什么都没做的
  *              时候撞上一堵看不见的墙。
- *  处置两档   **限速**（还能用但变慢，默认）与**断网**（停掉）。后者会让业务
+ *  处置三档   **限速**（还能用但变慢，默认）、**断网**（停掉网络）与**关机**
+ *            （逐台关停虚拟机，F-8-06）。后两档会让业务
  *              直接中断，选它应当是有意为之。
  *  warned 与 limited 是两回事   前者"快到了"，后者"**已经处置了**"。不分开
  *              的话，用户在网络变慢时无法判断是自己用超了还是会话出了问题。
@@ -224,7 +225,7 @@ function QuotaRow({
       <td className="px-4 py-2 text-xs text-ink-3">
         {/* 处置时刻要单独显示：用户问「我的网什么时候开始变慢的」，答案在这里。 */}
         {q.limited_at
-          ? `已于 ${formatTime(q.limited_at)} 处置（${q.action === 'block' ? '断网' : '限速'}）`
+          ? `已于 ${formatTime(q.limited_at)} 处置（${QUOTA_ACTION_LABEL[q.action] ?? q.action}）`
           : q.detail || ''}
       </td>
       <td className="whitespace-nowrap px-4 py-2 text-right text-sm">
@@ -265,7 +266,7 @@ function QuotaModal({
 }) {
   const [dim, setDim] = useState(target?.dim ?? 'traffic_in')
   const [limit, setLimit] = useState('')
-  const [action, setAction] = useState<'throttle' | 'block'>('throttle')
+  const [action, setAction] = useState<'throttle' | 'block' | 'shutdown'>('throttle')
   const [seeded, setSeeded] = useState<string | null>(null)
 
   // 换目标时用已有值初始化。
@@ -360,6 +361,22 @@ function QuotaModal({
               </span>
             </span>
           </label>
+          {/* 三档里最重的一档（F-8-06）：砍的是机器本身而不是网络。 */}
+          <label className="flex cursor-pointer gap-2.5 rounded-control border border-danger/40 px-3 py-2">
+            <input
+              type="radio"
+              checked={action === 'shutdown'}
+              onChange={() => setAction('shutdown')}
+              className="mt-1"
+            />
+            <span className="flex flex-col">
+              <span className="text-base text-danger">关机</span>
+              <span className="text-xs text-ink-3">
+                把该用户在这台节点上运行中的虚拟机逐台优雅关机。适用于超额量级已经
+                影响宿主机的场景——恢复需要逐台开机。
+              </span>
+            </span>
+          </label>
         </div>
 
         <p className="rounded-control bg-sunken px-3 py-2 text-xs text-ink-3">
@@ -369,6 +386,12 @@ function QuotaModal({
       </div>
     </Modal>
   )
+}
+
+const QUOTA_ACTION_LABEL: Record<string, string> = {
+  throttle: '限速',
+  block: '断网',
+  shutdown: '关机',
 }
 
 /**

@@ -59,3 +59,22 @@ type NeighborEntry struct {
 	// Unavailable 非空表示读不到邻居表（节点未实现）。
 	Unavailable string
 }
+
+// OpVMInitReady 探测首次启动初始化是否完成（F-2-17）。
+//
+// Windows 走 ConfigDrive + cloudbase-init：初始化完成前安装介质必须留在
+// 光驱里（cloud-init 阶段还会读它），完成后应弹出——装好的系统不该再从
+// 安装盘引导。判定依据（来宾日志里 cloudbase-init 的完成标记）只有节点
+// 能看到，因此走按需探测而不是控制面计时。
+const OpVMInitReady OpKind = "vm.init.ready"
+
+// InitReadyDataKey 是初始化就绪结果的键。
+const InitReadyDataKey = "init_ready"
+
+// InitReadyInfo 是初始化就绪探测的结果。
+type InitReadyInfo struct {
+	// Ready 为 true 表示首次启动初始化已完成，可以弹出安装介质。
+	Ready bool
+	// Detail 是节点给的说明（依据哪条日志 / 为何还没就绪），供排障。
+	Detail string `json:"detail,omitempty"`
+}

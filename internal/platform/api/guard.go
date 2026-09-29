@@ -28,9 +28,26 @@ func SecurityHeaders() app.HandlerFunc {
 		// no-referrer 而不是默认的 strict-origin：面板地址可能携带内网
 		// 信息，外链跳转时没有必要把它带出去。
 		c.Response.Header.Set("Referrer-Policy", "no-referrer")
+		// API 响应一律不缓存（F-10-04）：接口返回的是**此刻的状态**
+		//（虚拟机列表、任务进度），被中间层缓存后用户会看到过去时。
+		// 静态资源不走这条：SPA 的带哈希产物正该被缓存。
+		path := string(c.Request.URI().Path())
+		if strings.HasPrefix(path, "/api/") || path == "/health" {
+			c.Response.Header.Set("Cache-Control", "no-store")
+		}
 		c.Next(ctx)
 	}
 }
+
+// 请求行各段的长度上限（F-10-03 的"超长查询参数"防护）。
+//
+// 取值依据：正常业务的查询串（分页 + 过滤 + 排序）远用不到 2 KB；而
+// 攻击者借超长查询串做的事（填充日志、撑爆解析、绕过 WAF 前缀匹配）
+// 需要的是数量级。给一个宽松十倍的余量，正常请求永远碰不到它。
+const (
+	maxPathLen  = 1024
+	maxQueryLen = 2048
+)
 
 // 携带请求体且声明了 Content-Type 时允许的类型。
 //
@@ -78,6 +95,17 @@ func InputFilter(enabled func() bool) app.HandlerFunc {
 		if reason := rejectReason(raw); reason != "" {
 			log.Printf("[guard] 拒绝请求 ip=%s uri=%s reason=%s", c.ClientIP(), raw, reason)
 			Fail(c, PermissionDenied("请求被拒绝"))
+			// Hertz 的 Next 是循环实现：只 return 不阻断链，后续 handler
+			// 仍会执行并覆盖状态码（与 auth 中间件同一写法）。
+			c.Abort()
+			return
+		}
+		// 长度上限单独拦（F-10-03）：理由不混进 rejectReason——那里判的是
+		// 内容恶意，这里判的是尺寸异常，日志里要能分清是哪一类。
+		if p, q := string(c.Request.URI().Path()), string(c.Request.URI().QueryString()); len(p) > maxPathLen || len(q) > maxQueryLen {
+			log.Printf("[guard] 拒绝请求 ip=%s path_len=%d query_len=%d", c.ClientIP(), len(p), len(q))
+			Fail(c, PermissionDenied("请求路径或查询参数过长"))
+			c.Abort()
 			return
 		}
 
@@ -98,6 +126,7 @@ func InputFilter(enabled func() bool) app.HandlerFunc {
 					log.Printf("[guard] 拒绝请求 ip=%s path=%s content_type=%s",
 						c.ClientIP(), string(c.Request.URI().Path()), ct)
 					Fail(c, PermissionDenied("不支持的请求内容类型"))
+					c.Abort()
 					return
 				}
 			}

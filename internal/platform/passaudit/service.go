@@ -25,8 +25,11 @@ import (
 
 // Service 提供口令检查。
 type Service struct {
-	db    *gorm.DB
-	agent agent.Client
+	// notify 把命中结果通知到用户邮箱（F-10-05"定期扫描通知"）；nil 或
+	// 发送失败只记日志——通知是检查的附属品。
+	notify func(ctx context.Context, userID int64, subject, body string)
+	db     *gorm.DB
+	agent  agent.Client
 	// enabled 读取设置项 security.password_breach_check。
 	enabled func() bool
 	audit   *audit.Recorder
@@ -102,6 +105,14 @@ func (s *Service) RunNow(ctx context.Context) (*Result, error) {
 			continue
 		}
 		out.Hits = append(out.Hits, Hit{UserID: user.ID, Username: user.Username, Reason: h.Reason})
+
+		// 通知命中者本人（F-10-05）：他是最能解决这件事的人。不通知
+		// 管理员——清单页已经给他看全量命中，邮件再发一份只会复制噪音。
+		if s.notify != nil {
+			s.notify(ctx, user.ID, "口令安全检查：请修改你的密码",
+				"定期口令检查发现你的密码命中了弱口令 / 已知泄露口令清单（"+h.Reason+"）。\n"+
+					"请在登录后通过「账号设置 → 修改密码」更换；面板不会在邮件里附带任何链接。\n")
+		}
 	}
 
 	if s.audit != nil {
@@ -156,4 +167,9 @@ func decodeAudit(data map[string]any) agent.PasswordAuditInfo {
 		return agent.PasswordAuditInfo{}
 	}
 	return info
+}
+
+// SetNotifier 装配命中通知（邮件）。
+func (s *Service) SetNotifier(fn func(ctx context.Context, userID int64, subject, body string)) {
+	s.notify = fn
 }

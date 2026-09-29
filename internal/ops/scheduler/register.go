@@ -57,6 +57,11 @@ func RegisterBuiltins(r *Registry, opts BuiltinOptions) {
 		IntervalSeconds: int(opts.RetentionInterval.Seconds()),
 	})
 	r.Register(Info{
+		Key: KeyVMMediaEject, Name: "安装介质自动弹出", Group: GroupScheduled,
+		Description:     "Windows（ConfigDrive）初始化完成、cloudbase-init 就绪后自动弹出安装介质。就绪判定由节点探测（来宾日志），未就绪的机器下一轮再看。",
+		IntervalSeconds: int(opts.MediaEjectInterval.Seconds()),
+	})
+	r.Register(Info{
 		Key: KeyStorageTrim, Name: "存储空间自动回收", Group: GroupMaintain,
 		Description:     "开启后每天对全部在线节点执行一次 trim，回收已删除虚拟磁盘占用的块。执行结果（含失败节点）记入调度事件。",
 		IntervalSeconds: int(opts.TrimInterval.Seconds()),
@@ -74,4 +79,5 @@ type BuiltinOptions struct {
 	QuotaEvalInterval      time.Duration
 	RetentionInterval      time.Duration
 	TrimInterval           time.Duration
+	MediaEjectInterval     time.Duration
 }

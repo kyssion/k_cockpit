@@ -24,6 +24,13 @@ const (
 	// **不是默认值**：它会让业务直接中断。选它的人应当是有意为之，
 	// 而不是"没注意"。
 	QuotaActionBlock = "block"
+	// QuotaActionShutdown 关机（F-8-06）：把该用户在该节点上运行中的
+	// 虚拟机逐台优雅关机。
+	//
+	// 三档里最重的一档，与断网的分界：断网砍的是**网络**（机器还活着，
+	// 恢复后业务立即继续），关机砍的是**机器本身**（释放全部宿主机资源，
+	// 恢复需要逐台开机）。适用于"超的量级已经影响到宿主机"的场景。
+	QuotaActionShutdown = "shutdown"
 )
 
 // 配额状态。
@@ -129,5 +136,5 @@ func ValidQuotaDim(dim string) bool {
 
 // ValidQuotaAction 报告处置动作是否合法。
 func ValidQuotaAction(a string) bool {
-	return a == QuotaActionThrottle || a == QuotaActionBlock
+	return a == QuotaActionThrottle || a == QuotaActionBlock || a == QuotaActionShutdown
 }
