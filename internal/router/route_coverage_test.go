@@ -32,7 +32,9 @@ func TestEveryHandlerMethodIsRouted(t *testing.T) {
 	// 后缀，而下面「实际使用」那条正则捕获的是含后缀的完整名——两者对不上，
 	// 于是每一个方法都会被报成「没有路由」。这个错误的表现是**满屏假阳性**，
 	// 而假阳性会让人把整道检查当成没用，然后把它关掉。
-	regRe := regexp.MustCompile(`(\w+Handler)\s*:=\s*handler\.New(\w+)\(`)
+	// handler 按域拆包（ADR-0010）后，构造器前缀是各域包名
+	//（platform / compute / network / storage / ops / nodehandler）。
+	regRe := regexp.MustCompile(`(\w+Handler)\s*:=\s*\w+\.New(\w+)\(`)
 	registered := map[string]string{} // 变量名 → 类型名
 	for _, m := range regRe.FindAllStringSubmatch(routerSrc, -1) {
 		registered[m[1]] = m[2]
@@ -54,7 +56,7 @@ func TestEveryHandlerMethodIsRouted(t *testing.T) {
 	// 3) handler 包里的公开方法：类型名 → 方法集合。
 	methodRe := regexp.MustCompile(`func \(\w+ \*(\w+)\) ([A-Z]\w*)\(`)
 	methods := map[string]map[string]bool{}
-	handlerFiles, err := filepath.Glob(filepath.Join(root, "internal/handler/*.go"))
+	handlerFiles, err := filepath.Glob(filepath.Join(root, "internal/handler/*/*.go"))
 	if err != nil {
 		t.Fatalf("列 handler 文件失败: %v", err)
 	}
@@ -117,7 +119,7 @@ func TestRegisteredHandlersAreWired(t *testing.T) {
 	root := repoRoot(t)
 	src := readFile(t, filepath.Join(root, "internal/router/router.go"))
 
-	regRe := regexp.MustCompile(`(\w+Handler)\s*:=\s*handler\.New(\w+)\(`)
+	regRe := regexp.MustCompile(`(\w+Handler)\s*:=\s*\w+\.New(\w+)\(`)
 	useRe := regexp.MustCompile(`(\w+Handler)\.`)
 
 	used := map[string]bool{}

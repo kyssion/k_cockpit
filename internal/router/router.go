@@ -17,7 +17,12 @@ import (
 	"k_cockpit/internal/compute/template"
 	"k_cockpit/internal/compute/vm"
 	"k_cockpit/internal/compute/vmtag"
-	"k_cockpit/internal/handler"
+	"k_cockpit/internal/handler/compute"
+	"k_cockpit/internal/handler/network"
+	nodehandler "k_cockpit/internal/handler/node"
+	"k_cockpit/internal/handler/ops"
+	"k_cockpit/internal/handler/platform"
+	"k_cockpit/internal/handler/storage"
 	"k_cockpit/internal/network/bridge"
 	"k_cockpit/internal/network/capture"
 	"k_cockpit/internal/network/firewall"
@@ -180,12 +185,12 @@ func Register(h *server.Hertz, deps Deps) {
 	// RequestLogger 放在**最外层**：这样连 401 也能记到，而"为什么一直 401"
 	// 恰恰是最需要看请求日志的场景。它内部按开关决定是否落库。
 	if deps.ReqLog != nil {
-		h.Use(handler.RequestLogger(deps.ReqLog))
+		h.Use(platform.RequestLogger(deps.ReqLog))
 	}
 	h.Use(api.SecurityHeaders(), api.InputFilter(deps.InputFilterEnabled))
 	h.Use(api.RequestID(), api.Recover(), api.AccessLog())
 
-	h.GET("/health", handler.Health(deps.DB))
+	h.GET("/health", platform.Health(deps.DB))
 
 	// 登录阶段的二次验证复用 risk 的校验逻辑（恢复码一次性、TOTP 容差与
 	// 算法参数只有一处定义）。接线放在这里而不是启动脚本里：漏接的表现是
@@ -194,57 +199,57 @@ func Register(h *server.Hertz, deps Deps) {
 		deps.Auth.SetLoginVerifier(deps.Risk)
 	}
 
-	authHandler := handler.NewAuth(deps.Auth, deps.SecureCookie, deps.Risk)
-	setupHandler := handler.NewSetup(deps.Bootstrap, deps.Auth, deps.SecureCookie)
-	nodeHandler := handler.NewNode(deps.Node, deps.SimulateAgent, deps.Risk)
-	vmHandler := handler.NewVM(deps.VM, deps.Risk)
-	taskHandler := handler.NewTask(deps.Task, deps.Bus)
-	securityHandler := handler.NewSecurity(deps.Risk, deps.Auth)
-	accountHandler := handler.NewAccount(deps.Auth, deps.Risk, deps.AuditRecorder)
-	scheduleHandler := handler.NewSchedule(deps.Schedule, deps.Risk)
-	storageHandler := handler.NewStorage(deps.Storage, deps.Risk)
-	networkHandler := handler.NewNetwork(deps.Network)
-	vpcACLHandler := handler.NewVpcACL(deps.VpcACL)
-	reqLogHandler := handler.NewReqLog(deps.ReqLog)
-	passAuditHandler := handler.NewPassAudit(deps.PassAudit)
-	authKeyHandler := handler.NewAuthKey(deps.AuthKey, deps.Risk)
-	inviteHandler := handler.NewInvite(deps.Invite)
-	settingsHandler := handler.NewSettings(deps.Settings, deps.Mailer)
-	consoleHandler := handler.NewConsole(deps.VM, deps.Risk)
-	templateHandler := handler.NewTemplate(deps.Template)
-	quotaHandler := handler.NewQuota(deps.Quota)
-	publicIPHandler := handler.NewPublicIP(deps.PublicIP)
-	sgHandler := handler.NewSecurityGroup(deps.SecurityGroup)
-	userStorageHandler := handler.NewUserStorage(deps.UserStorage)
-	volumeHandler := handler.NewStorageVolume(deps.Storage)
-	schedulerHandler := handler.NewScheduler(deps.Scheduler)
-	portSecurityHandler := handler.NewPortSecurity(deps.PortSecurity)
-	captureHandler := handler.NewCapture(deps.Capture)
-	diagnosticsHandler := handler.NewDiagnostics(deps.Diagnostics)
-	versionHandler := handler.NewVersion()
-	loggingHandler := handler.NewLogging(deps.Logging, deps.AuditRecorder)
-	quotaEnforceHandler := handler.NewQuotaEnforce(deps.QuotaEnforce)
-	hostFirewallHandler := handler.NewHostFirewall(deps.HostFirewall)
-	passthroughHandler := handler.NewPassthrough(deps.Passthrough)
-	tuningHandler := handler.NewHostTuning(deps.HostTuning)
-	platformCheckHandler := handler.NewPlatformCheck(deps.PlatformCheck)
-	accessControlHandler := handler.NewAccessControl(deps.AccessControl)
-	firewallHandler := handler.NewFirewall(deps.Firewall)
-	apiKeyHandler := handler.NewAPIKey(deps.APIKey)
-	mirrorHandler := handler.NewPortMirror(deps.PortMirror)
-	netHandler := handler.NewNetworkBridge(deps.NetworkBridge)
-	auditHandler := handler.NewAuditLog(deps.AuditLog)
-	userAdminHandler := handler.NewUserAdmin(deps.UserAdmin)
-	tagHandler := handler.NewVMTag(deps.VMTag)
-	monitorHandler := handler.NewMonitor(deps.Monitor)
-	dashboardHandler := handler.NewDashboard(deps.Dashboard)
+	authHandler := platform.NewAuth(deps.Auth, deps.SecureCookie, deps.Risk)
+	setupHandler := platform.NewSetup(deps.Bootstrap, deps.Auth, deps.SecureCookie)
+	nodeHandler := nodehandler.NewNode(deps.Node, deps.SimulateAgent, deps.Risk)
+	vmHandler := compute.NewVM(deps.VM, deps.Risk)
+	taskHandler := ops.NewTask(deps.Task, deps.Bus)
+	securityHandler := platform.NewSecurity(deps.Risk, deps.Auth)
+	accountHandler := platform.NewAccount(deps.Auth, deps.Risk, deps.AuditRecorder)
+	scheduleHandler := ops.NewSchedule(deps.Schedule, deps.Risk)
+	storageHandler := storage.NewStorage(deps.Storage, deps.Risk)
+	networkHandler := network.NewNetwork(deps.Network)
+	vpcACLHandler := network.NewVpcACL(deps.VpcACL)
+	reqLogHandler := platform.NewReqLog(deps.ReqLog)
+	passAuditHandler := platform.NewPassAudit(deps.PassAudit)
+	authKeyHandler := platform.NewAuthKey(deps.AuthKey, deps.Risk)
+	inviteHandler := platform.NewInvite(deps.Invite)
+	settingsHandler := platform.NewSettings(deps.Settings, deps.Mailer)
+	consoleHandler := compute.NewConsole(deps.VM, deps.Risk)
+	templateHandler := compute.NewTemplate(deps.Template)
+	quotaHandler := storage.NewQuota(deps.Quota)
+	publicIPHandler := network.NewPublicIP(deps.PublicIP)
+	sgHandler := network.NewSecurityGroup(deps.SecurityGroup)
+	userStorageHandler := storage.NewUserStorage(deps.UserStorage)
+	volumeHandler := storage.NewStorageVolume(deps.Storage)
+	schedulerHandler := ops.NewScheduler(deps.Scheduler)
+	portSecurityHandler := network.NewPortSecurity(deps.PortSecurity)
+	captureHandler := network.NewCapture(deps.Capture)
+	diagnosticsHandler := ops.NewDiagnostics(deps.Diagnostics)
+	versionHandler := platform.NewVersion()
+	loggingHandler := platform.NewLogging(deps.Logging, deps.AuditRecorder)
+	quotaEnforceHandler := ops.NewQuotaEnforce(deps.QuotaEnforce)
+	hostFirewallHandler := network.NewHostFirewall(deps.HostFirewall)
+	passthroughHandler := compute.NewPassthrough(deps.Passthrough)
+	tuningHandler := ops.NewHostTuning(deps.HostTuning)
+	platformCheckHandler := ops.NewPlatformCheck(deps.PlatformCheck)
+	accessControlHandler := platform.NewAccessControl(deps.AccessControl)
+	firewallHandler := network.NewFirewall(deps.Firewall)
+	apiKeyHandler := platform.NewAPIKey(deps.APIKey)
+	mirrorHandler := network.NewPortMirror(deps.PortMirror)
+	netHandler := network.NewNetworkBridge(deps.NetworkBridge)
+	auditHandler := platform.NewAuditLog(deps.AuditLog)
+	userAdminHandler := platform.NewUserAdmin(deps.UserAdmin)
+	tagHandler := compute.NewVMTag(deps.VMTag)
+	monitorHandler := ops.NewMonitor(deps.Monitor)
+	dashboardHandler := ops.NewDashboard(deps.Dashboard)
 	// 接口清单取自**已注册的路由**，因此必须在全部路由注册完成之后构造。
-	apiDocsHandler := handler.NewAPIDocs(h)
-	computeQuotaHandler := handler.NewComputeQuota(deps.ComputeQuota)
-	searchHandler := handler.NewSearch(deps.Search)
-	alertHandler := handler.NewAlert(deps.Alert)
-	importerHandler := handler.NewImporter(deps.Importer)
-	maintenanceHandler := handler.NewMaintenance(deps.Maintenance, deps.Risk)
+	apiDocsHandler := platform.NewAPIDocs(h)
+	computeQuotaHandler := compute.NewComputeQuota(deps.ComputeQuota)
+	searchHandler := ops.NewSearch(deps.Search)
+	alertHandler := ops.NewAlert(deps.Alert)
+	importerHandler := compute.NewImporter(deps.Importer)
+	maintenanceHandler := ops.NewMaintenance(deps.Maintenance, deps.Risk)
 
 	// 挂上 API 凭证认证：客户端可用 `Authorization: Bearer kc_...` 代替会话 Cookie。
 	//
