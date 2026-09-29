@@ -5,7 +5,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/computequota"
+	"k_cockpit/internal/compute/computequota"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/auth"
 )

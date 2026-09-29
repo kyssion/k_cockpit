@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"k_cockpit/internal/computequota"
+	"k_cockpit/internal/compute/computequota"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/authz"

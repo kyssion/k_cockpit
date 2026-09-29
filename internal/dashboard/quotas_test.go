@@ -7,7 +7,7 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/computequota"
+	"k_cockpit/internal/compute/computequota"
 	"k_cockpit/internal/dashboard"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/authz"

@@ -15,11 +15,11 @@ import (
 
 	"gorm.io/gorm"
 
+	vmsvc "k_cockpit/internal/compute/vm"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/scheduler"
 	"k_cockpit/internal/task"
-	vmsvc "k_cockpit/internal/vm"
 )
 
 // Options 是调度器的运行参数。

@@ -24,7 +24,7 @@ import (
 	"gorm.io/gorm"
 
 	"k_cockpit/internal/agent"
-	"k_cockpit/internal/computequota"
+	"k_cockpit/internal/compute/computequota"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/node"
 	"k_cockpit/internal/platform/api"

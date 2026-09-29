@@ -7,12 +7,12 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
+	"k_cockpit/internal/compute/vm"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/platform/risk"
-	"k_cockpit/internal/vm"
 )
 
 // VM 提供虚拟机接口（F-2-01 ~ F-2-04）。

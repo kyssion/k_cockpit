@@ -8,11 +8,11 @@ import (
 	"github.com/hertz-contrib/websocket"
 
 	"k_cockpit/internal/agent"
+	"k_cockpit/internal/compute/vm"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/platform/risk"
-	"k_cockpit/internal/vm"
 )
 
 // consoleWriteBuffer 是单个 WebSocket 帧的最大字节数。
