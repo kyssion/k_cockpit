@@ -10,8 +10,6 @@ import (
 	"testing"
 
 	"gorm.io/gorm/schema"
-
-	"k_cockpit/internal/model"
 )
 
 // TestUniqueIndexesMatchBetweenModelAndMigration 静态比对「唯一索引」在两个
@@ -34,24 +32,10 @@ import (
 func TestUniqueIndexesMatchBetweenModelAndMigration(t *testing.T) {
 	fromMigration := migrationUniqueIndexes(t)
 
-	models := []any{
-		&model.AuditLog{}, &model.VMCredential{}, &model.VpcSwitch{},
-		&model.Node{}, &model.Session{}, &model.SystemSetting{},
-		&model.StoragePool{}, &model.Task{}, &model.TaskStage{}, &model.User{},
-		&model.VM{}, &model.VMSnapshot{}, &model.VMSchedule{},
-		&model.VMLock{}, &model.PortForward{},
-		&model.VMInterface{}, &model.StaticIP{}, &model.Template{},
-		&model.PublicIP{}, &model.PublicIPBinding{},
-		&model.SecurityGroup{}, &model.SecurityGroupRule{}, &model.InterfaceSecurityGroup{},
-		&model.ShareMount{}, &model.StorageVolume{},
-		&model.SchedulerEvent{}, &model.PortSecurityPolicy{},
-		&model.NetworkCapture{}, &model.ResourceQuota{},
-		&model.HostFirewallPolicy{}, &model.HostFirewallRule{}, &model.VMPassthrough{},
-		&model.CPUAffinityPreset{}, &model.VMCDROM{},
-		&model.FirewallPolicy{}, &model.FirewallRule{}, &model.FirewallVMPolicy{},
-		&model.UserAPIKey{}, &model.AuthActionToken{},
-		&model.PortMirror{}, &model.NetworkBridge{},
-	}
+	// 清单来自 AllModels()（同 model_alignment_test 的理由）：没有声明
+	// 唯一索引的模型在这里自然贡献为零，遍历全集不会产生噪声——
+	// 而维护子集清单的结局是“后来加的模型永远不被核对”。
+	models := AllModels()
 
 	var cache sync.Map
 	problems := 0

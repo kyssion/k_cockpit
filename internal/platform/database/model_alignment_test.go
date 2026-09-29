@@ -9,8 +9,6 @@ import (
 	"testing"
 
 	"gorm.io/gorm/schema"
-
-	"k_cockpit/internal/model"
 )
 
 // TestModelColumnsExistInMigrations 静态比对「模型字段名」与「迁移 SQL 里的列名」。
@@ -32,26 +30,10 @@ import (
 func TestModelColumnsExistInMigrations(t *testing.T) {
 	columns := migrationColumns(t)
 
-	models := []any{
-		&model.AuditLog{}, &model.VMCredential{}, &model.VpcSwitch{},
-		&model.Node{}, &model.Session{}, &model.SystemSetting{},
-		&model.StoragePool{}, &model.Task{}, &model.User{}, &model.VM{},
-		&model.VMSnapshot{}, &model.VMSchedule{}, &model.VMLock{}, &model.PortForward{},
-		&model.TaskStage{}, &model.VMInterface{}, &model.StaticIP{},
-		&model.Template{}, &model.VMExport{}, &model.UserStorage{},
-		&model.ImageImport{}, &model.VMMigration{},
-		&model.PublicIP{}, &model.PublicIPBinding{},
-		&model.SecurityGroup{}, &model.SecurityGroupRule{}, &model.InterfaceSecurityGroup{},
-		&model.ShareMount{}, &model.StorageVolume{},
-		&model.SchedulerEvent{}, &model.PortSecurityPolicy{},
-		&model.NetworkCapture{}, &model.ResourceQuota{},
-		&model.HostFirewallPolicy{}, &model.HostFirewallRule{}, &model.VMPassthrough{},
-		&model.CPUAffinityPreset{}, &model.VMCDROM{},
-		&model.FirewallPolicy{}, &model.FirewallRule{}, &model.FirewallVMPolicy{},
-		&model.UserAPIKey{}, &model.AuthActionToken{},
-		&model.PortMirror{}, &model.NetworkBridge{},
-		&model.HostStatsRecord{},
-	}
+	// 清单来自 AllModels()（testschema.go）——模型登记只有一处：
+	// 测试自己维护一份子集的结局就是“后加的模型永远不被核对”，
+	// 这正是本测试要消灭的盲区曾经发生在它自己身上的样子。
+	models := AllModels()
 
 	var cache sync.Map
 	problems := 0
@@ -181,4 +163,63 @@ func parseColumnList(body string) []string {
 		out = append(out, strings.ToLower(strings.Trim(fields[0], `"`+"`")))
 	}
 	return out
+}
+
+// TestAllModelsCoversEveryTableName 断言 model 包里**每一个**实现了
+// TableName 的模型都登记进了 AllModels()。
+//
+// 对齐检查的盲区曾经就是“清单缺了后来加的模型”——把清单收敛到
+// AllModels() 之后，剩下的口子是“新模型忘了登记”。用源码扫描把
+// model 包里的 TableName 声明数出来对账：忘了登记，这里先红，
+// 而不是等冒烟栈在运行期报 no such table。
+func TestAllModelsCoversEveryTableName(t *testing.T) {
+	// 接收者是值形式（`func (Node) TableName() ...`）——项目约定如此，
+	// 写成 `(\w+ \w+)` 会漏掉全部声明然后静默通过。
+	declRe := regexp.MustCompile(
+		`(?m)^func \((\w+)\) TableName\(\) string \{ return "(\w+)"`)
+
+	entries, err := os.ReadDir("../../model")
+	if err != nil {
+		t.Fatalf("读取 model 包失败: %v", err)
+	}
+	declared := map[string]string{} // 表名 → 模型名
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join("../../model", e.Name()))
+		if err != nil {
+			t.Fatalf("读取 %s 失败: %v", e.Name(), err)
+		}
+		for _, m := range declRe.FindAllStringSubmatch(string(raw), -1) {
+			declared[m[2]] = m[1]
+		}
+	}
+	if len(declared) == 0 {
+		t.Fatal("没有从 model 包扫到任何 TableName 声明——正则或路径可能不对")
+	}
+
+	var cache sync.Map
+	registered := map[string]bool{}
+	for _, m := range AllModels() {
+		parsed, err := schema.Parse(m, &cache, schema.NamingStrategy{})
+		if err != nil {
+			t.Fatalf("解析 %T 失败: %v", m, err)
+		}
+		registered[parsed.Table] = true
+	}
+
+	var missing []string
+	for table, name := range declared {
+		if !registered[table] {
+			missing = append(missing, name+"（表 "+table+"）")
+		}
+	}
+	if len(missing) > 0 {
+		t.Errorf("以下模型实现了 TableName 但没有登记进 AllModels()：\n  %s\n"+
+			"登记它（internal/platform/database/testschema.go）——对齐检查与"+
+			"冒烟建库都以那份清单为准。", strings.Join(missing, "\n  "))
+	} else {
+		t.Logf("已登记全部 %d 个模型", len(declared))
+	}
 }

@@ -17,6 +17,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **模型对齐检查的盲区**：`model_alignment_test` / `index_alignment_test` 各自维护的模型子清单缺了 15 个后来加的模型（Alert、ComputeQuota、UserInvite、VMTag 等），从未被"模型 vs SQL 迁移"核对。清单收敛到 `database.AllModels()` 单一来源后全量核对：列级无漂移；索引级抓到一处真实缺口——**`user_invite` 的令牌唯一索引只在迁移里、模型未声明**，AutoMigrate 建的测试库因此没有这条约束（补 `uniqueIndex` tag 对齐）。另加一道源码扫描测试，断言 model 包每个 `TableName()` 都登记进 `AllModels()`——新模型忘了登记会在 CI 先红，而不是等冒烟栈运行期报 no such table
+
 ### Added
 - **Playwright E2E 冒烟**（ADR-0006 规划落地）：`pnpm --dir web test:e2e` 一条命令自拉起独立控制面（临时 SQLite + mock + `cmd/e2e-init` 按模型建库——SQL 迁移是 PG 专用，冒烟栈不走）与 vite，覆盖「面板从零到能用」的最短链路：真实令牌初始化（ADR-0008 流程）、错误密码拒绝、管理员登录（含首次安全引导的跳过）、虚拟机列表导航。CI 新增 e2e job；创建 / 电源 / 迁移的全量覆盖仍按口径随 M5
 - `database.AllModels()` / `BuildTestSchema()`：全套表模型的显式清单（按 `TableName()` 枚举 61 个），仅供冒烟与测试建库——生产建库入口仍是 SQL 迁移
