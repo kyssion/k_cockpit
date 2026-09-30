@@ -9,7 +9,7 @@ import { EmptyState, PageLoading } from '@/components/common/Feedback'
 import { Modal } from '@/components/common/Modal'
 import { StatusBadge } from '@/components/common/StatusBadge'
 import { formatDateTime, relativeTime } from '@/utils/format'
-import { TASK_STATUS_LABEL, TASK_STATUS_TONE, taskTypeLabel } from '@/utils/labels'
+import { TASK_STATUS_LABEL, TASK_STATUS_PULSE, TASK_STATUS_TONE, taskTypeLabel } from '@/utils/labels'
 
 const PAGE_SIZE = 20
 
@@ -231,7 +231,7 @@ function TaskRow({
   const active = isActive(task.status)
 
   return (
-    <tr className="border-t border-line hover:bg-sunken">
+    <tr className="border-t border-line transition-colors duration-(--kc-duration-fast) ease-(--kc-ease) hover:bg-sunken">
       <td className="kc-mono px-4 py-2.5">
         {/* ID 本身是入口：任务号是用户在各处会看到的标识（「任务 #12 正在执行」），
             从这里点进去比在行尾再放一个按钮更自然。 */}
@@ -246,7 +246,7 @@ function TaskRow({
       </td>
       <td className="px-4 py-2.5">
         <div className="flex flex-col gap-1">
-          <StatusBadge tone={TASK_STATUS_TONE[task.status]}>
+          <StatusBadge tone={TASK_STATUS_TONE[task.status]} pulse={TASK_STATUS_PULSE[task.status]}>
             {TASK_STATUS_LABEL[task.status]}
           </StatusBadge>
           {task.cancel_requested && active && (
@@ -365,7 +365,7 @@ function TaskDetailDrawer({
         {t && (
           <div className="flex flex-col gap-4 p-4">
             <div className="flex items-center gap-2">
-              <StatusBadge tone={TASK_STATUS_TONE[t.status]}>
+              <StatusBadge tone={TASK_STATUS_TONE[t.status]} pulse={TASK_STATUS_PULSE[t.status]}>
                 {TASK_STATUS_LABEL[t.status]}
               </StatusBadge>
               {t.cancel_requested && isActive(t.status) && (

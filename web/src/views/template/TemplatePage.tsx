@@ -167,7 +167,7 @@ export function TemplatePage() {
           <Button size="sm" variant="secondary" onClick={() => setImportOpen(true)}>
             导入模板包
           </Button>
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
+          <Button size="sm" variant="hero" onClick={() => setCreateOpen(true)}>
             从虚拟机创建模板
           </Button>
         </div>

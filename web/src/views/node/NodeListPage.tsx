@@ -11,7 +11,7 @@ import { Input } from '@/components/common/Input'
 import { Modal } from '@/components/common/Modal'
 import { StatusBadge } from '@/components/common/StatusBadge'
 import { relativeTime } from '@/utils/format'
-import { NODE_STATUS_LABEL, NODE_STATUS_TONE } from '@/utils/labels'
+import { NODE_STATUS_LABEL, NODE_STATUS_PULSE, NODE_STATUS_TONE } from '@/utils/labels'
 
 /** 运行态 → 语义色与中文名统一取自 utils/labels（列表与详情页共用一份）。 */
 
@@ -54,7 +54,7 @@ export function NodeListPage() {
             接入宿主机后，节点上的虚拟机、存储与网络资源才可被管理。
           </p>
         </div>
-        <Button size="sm" onClick={() => setEnrollOpen(true)}>
+        <Button size="sm" variant="hero" onClick={() => setEnrollOpen(true)}>
           接入节点
         </Button>
       </header>
@@ -73,7 +73,7 @@ export function NodeListPage() {
             title="还没有接入任何节点"
             description="节点是虚拟机的运行载体。点击「接入节点」生成一次性令牌，再在目标宿主机上完成接入。"
             action={
-              <Button size="sm" onClick={() => setEnrollOpen(true)}>
+              <Button size="sm" variant="hero" onClick={() => setEnrollOpen(true)}>
                 接入第一个节点
               </Button>
             }
@@ -96,7 +96,7 @@ export function NodeListPage() {
             </thead>
             <tbody>
               {nodes.data.map((node) => (
-                <tr key={node.id} className="border-t border-line hover:bg-sunken">
+                <tr key={node.id} className="border-t border-line transition-colors duration-(--kc-duration-fast) ease-(--kc-ease) hover:bg-sunken">
                   <td className="px-4 py-2.5">
                     <Link
                       to={`/node/${node.id}`}
@@ -124,6 +124,7 @@ export function NodeListPage() {
                   <td className="px-4 py-2.5">
                     <StatusBadge
                       tone={NODE_STATUS_TONE[node.status]}
+                      pulse={NODE_STATUS_PULSE[node.status]}
                       striped={node.maintenance_mode}
                     >
                       {node.maintenance_mode ? '维护中' : NODE_STATUS_LABEL[node.status]}

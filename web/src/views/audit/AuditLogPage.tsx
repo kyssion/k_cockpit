@@ -214,7 +214,7 @@ export function AuditLogPage() {
                 {(data?.items ?? []).map((e) => (
                   <tr
                     key={e.id}
-                    className="cursor-pointer border-t border-line hover:bg-sunken"
+                    className="cursor-pointer border-t border-line transition-colors duration-(--kc-duration-fast) ease-(--kc-ease) hover:bg-sunken"
                     onClick={() => setDetail(e)}
                   >
                     <td className="px-4 py-2.5 text-ink-3">{relativeTime(e.at)}</td>

@@ -89,7 +89,9 @@ import {
   POWER_ACTION_DANGEROUS,
   POWER_ACTION_LABEL,
   TASK_STATUS_LABEL,
+  TASK_STATUS_PULSE,
   TASK_STATUS_TONE,
+  VM_STATUS_PULSE,
   VM_STATUS_LABEL,
   VM_STATUS_TONE,
   taskTypeLabel,
@@ -285,7 +287,7 @@ export function VmDetailPage() {
             {/* 元信息行集中在标题下：节点、地址、规格是「这台机器是什么」的
                 三件事，原先散在下方几张卡里，核对时得在页面上来回找。 */}
             <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-ink-3">
-              <StatusBadge tone={VM_STATUS_TONE[vm.status]}>
+              <StatusBadge tone={VM_STATUS_TONE[vm.status]} pulse={VM_STATUS_PULSE[vm.status]}>
                 {VM_STATUS_LABEL[vm.status]}
               </StatusBadge>
               {vm.stale && (
@@ -1128,7 +1130,7 @@ function SystemTab({
                   <td className="kc-mono px-4 py-2.5 text-ink-3">#{t.id}</td>
                   <td className="px-4 py-2.5 text-ink">{taskTypeLabel(t.type)}</td>
                   <td className="px-4 py-2.5">
-                    <StatusBadge tone={TASK_STATUS_TONE[t.status]}>
+                    <StatusBadge tone={TASK_STATUS_TONE[t.status]} pulse={TASK_STATUS_PULSE[t.status]}>
                       {TASK_STATUS_LABEL[t.status]}
                     </StatusBadge>
                   </td>

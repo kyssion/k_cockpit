@@ -50,6 +50,15 @@
   --kc-duration-base: 180ms;
   --kc-duration-slow: 240ms;
   --kc-ease: cubic-bezier(0.2, 0, 0, 1);
+  /* 呼吸点与漂浮是循环动画，用对称的 ease-in-out，不走交互缓动 */
+  --kc-duration-breathe: 2s;
+
+  /* hero 渐变与光晕：页面级主操作专用（每个视图至多一处）。光晕用
+     color-mix 从品牌色派生，自动跟随主题换色，不必为两套主题配色值。 */
+  --kc-brand-grad-from: #8b93fa;
+  --kc-brand-grad-to: #a78bfa;
+  --kc-shadow-glow: 0 0 20px color-mix(in oklab, var(--kc-brand) 30%, transparent);
+  --kc-shadow-glow-strong: 0 0 28px color-mix(in oklab, var(--kc-brand) 44%, transparent);
 
   /* 阴影（仅三档，禁止自创） */
   --kc-shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
@@ -58,7 +67,7 @@
 }
 
 [data-theme='light'] {
-  --kc-bg-base: #f5f6f8;
+  --kc-bg-base: #f4f6fb;
   --kc-bg-surface: #ffffff;
   --kc-bg-raised: #ffffff;
   --kc-bg-sunken: #eef0f4;
@@ -79,9 +88,14 @@
   --kc-info: #0369a1;
   --kc-idle: #5b6675;
 
-  --kc-shadow-1: 0 1px 2px rgb(16 24 40 / 0.05);
-  --kc-shadow-2: 0 1px 2px rgb(16 24 40 / 0.05), 0 4px 12px rgb(16 24 40 / 0.08);
-  --kc-shadow-3: 0 2px 4px rgb(16 24 40 / 0.05), 0 12px 32px rgb(16 24 40 / 0.14);
+  --kc-brand-grad-from: #4f46e5;
+  --kc-brand-grad-to: #7c3aed;
+  --kc-shadow-glow: 0 4px 16px color-mix(in oklab, var(--kc-brand) 24%, transparent);
+  --kc-shadow-glow-strong: 0 4px 22px color-mix(in oklab, var(--kc-brand) 36%, transparent);
+
+  --kc-shadow-1: 0 1px 2px rgb(16 24 40 / 0.04);
+  --kc-shadow-2: 0 1px 2px rgb(16 24 40 / 0.04), 0 4px 12px rgb(16 24 40 / 0.07);
+  --kc-shadow-3: 0 2px 4px rgb(16 24 40 / 0.04), 0 12px 32px rgb(16 24 40 / 0.12);
 }
 
 /* 入场/退场关键帧：只声明 from（或 to），终态就是元素的自然状态，
@@ -106,6 +120,27 @@
   to {
     opacity: 0;
     transform: translateY(8px);
+  }
+}
+/* 呼吸：状态点的「活着」信号。只动 opacity/transform，无布局位移。 */
+@keyframes kc-breathe {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(0.75);
+  }
+}
+/* 漂浮：登录页示例卡的悬浮感，往复而非循环跳变。 */
+@keyframes kc-float {
+  from {
+    transform: translateY(-5px);
+  }
+  to {
+    transform: translateY(6px);
   }
 }
 
@@ -145,6 +180,10 @@
   --color-info: var(--kc-info);
   --color-idle: var(--kc-idle);
 
+  /* hero 渐变端点（品牌渐变，配 bg-linear-to-r 的 from/to 用） */
+  --color-hero-from: var(--kc-brand-grad-from);
+  --color-hero-to: var(--kc-brand-grad-to);
+
   /* 字号：按 FRONTEND §4.3 重定义语义，避免出现 13px 之类的游离值 */
   --text-xs: 12px;
   --text-sm: 13px;
@@ -152,6 +191,8 @@
   --text-md: 16px;
   --text-lg: 20px;
   --text-xl: 24px;
+  /* 展示级：仅登录页品牌区这类营销面（§4.3 不进工作台正文） */
+  --text-2xl: 30px;
 
   /* 圆角：控件 8 / 卡片与弹层 12 / 徽标 999 */
   --radius-control: 8px;
@@ -162,15 +203,21 @@
   --shadow-1: var(--kc-shadow-1);
   --shadow-2: var(--kc-shadow-2);
   --shadow-3: var(--kc-shadow-3);
+  --shadow-glow: var(--kc-shadow-glow);
+  --shadow-glow-strong: var(--kc-shadow-glow-strong);
 
   /* 动效：缓动与入场/退场动画（FRONTEND §4.6）。
-     pop 用于弹窗类浮层，fade-rise 用于页面内容与滑入的常驻栏。 */
+     pop 用于弹窗类浮层，fade-rise 用于页面内容与滑入的常驻栏；
+     breathe 只给「此刻活着」的状态点，float 只给登录页示例卡。 */
   --ease-standard: var(--kc-ease);
   --animate-fade-in: kc-fade-in var(--kc-duration-base) var(--kc-ease) both;
   --animate-fade-out: kc-fade-out var(--kc-duration-slow) var(--kc-ease) both;
   --animate-fade-rise: kc-rise var(--kc-duration-slow) var(--kc-ease) both;
   --animate-pop-in: kc-rise var(--kc-duration-slow) var(--kc-ease) both;
   --animate-pop-out: kc-rise-out var(--kc-duration-slow) var(--kc-ease) both;
+  --animate-breathe: kc-breathe var(--kc-duration-breathe) ease-in-out infinite;
+  --animate-float: kc-float 7s ease-in-out infinite alternate;
+  --animate-float-slow: kc-float 10s ease-in-out infinite alternate;
 
   /* 字体栈：系统 UI 字体，避免为中文引入体积庞大的 Web 字体 */
   --font-sans:

@@ -154,7 +154,7 @@ export function StoragePoolPage() {
                   </thead>
                   <tbody>
                     {pools.data.map((pool) => (
-                      <tr key={pool.id} className="border-t border-line hover:bg-sunken">
+                      <tr key={pool.id} className="border-t border-line transition-colors duration-(--kc-duration-fast) ease-(--kc-ease) hover:bg-sunken">
                         <td className="px-4 py-2.5">
                           <span className="kc-mono text-ink">{pool.device_path || pool.device_id}</span>
                           {pool.is_default && (
@@ -360,7 +360,7 @@ function DiskRow({
   }
 
   return (
-    <tr className="border-t border-line hover:bg-sunken">
+    <tr className="border-t border-line transition-colors duration-(--kc-duration-fast) ease-(--kc-ease) hover:bg-sunken">
       <td className="px-4 py-2.5">
         <span className="kc-mono text-ink">{disk.path}</span>
         {disk.mount_point && (

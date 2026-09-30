@@ -26,10 +26,16 @@ interface StatusBadgeProps {
   children: string
   /** 叠加条纹：用于「维护中」这类需要与常规状态区分的场景。 */
   striped?: boolean
+  /**
+   * 状态点呼吸（§4.6）：只给「此刻活着」的状态（运行中/执行中/在线），
+   * 取值来自 utils/labels.ts 的 *_STATUS_PULSE——语义收敛在一处，
+   * 终态误呼吸会让人误判。
+   */
+  pulse?: boolean
   className?: string
 }
 
-export function StatusBadge({ tone, children, striped = false, className }: StatusBadgeProps) {
+export function StatusBadge({ tone, children, striped = false, pulse = false, className }: StatusBadgeProps) {
   return (
     <span
       className={cn(
@@ -40,7 +46,9 @@ export function StatusBadge({ tone, children, striped = false, className }: Stat
         className,
       )}
     >
-      {!striped && <span aria-hidden className={cn('size-1.5 rounded-pill', dots[tone])} />}
+      {!striped && (
+        <span aria-hidden className={cn('size-1.5 rounded-pill', dots[tone], pulse && 'animate-breathe')} />
+      )}
       {children}
     </span>
   )

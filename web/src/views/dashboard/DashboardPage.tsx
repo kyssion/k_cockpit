@@ -26,7 +26,7 @@ import { MyQuotaPanel } from './MyQuotaPanel'
 import { cn } from '@/utils/cn'
 import { formatBytes, relativeTime } from '@/utils/format'
 import { readRecentVisits } from '@/utils/recentVisits'
-import { VM_STATUS_LABEL, VM_STATUS_TONE } from '@/utils/labels'
+import { VM_STATUS_LABEL, VM_STATUS_PULSE, VM_STATUS_TONE } from '@/utils/labels'
 import type { VmStatus } from '@/api/vm'
 
 /**
@@ -191,7 +191,7 @@ export function DashboardPage() {
                   </thead>
                   <tbody>
                     {summary.data.recent_vms.map((vm) => (
-                      <tr key={vm.id} className="border-t border-line hover:bg-sunken">
+                      <tr key={vm.id} className="border-t border-line transition-colors duration-(--kc-duration-fast) ease-(--kc-ease) hover:bg-sunken">
                         <td className="px-4 py-2.5">
                           <Link
                             to={`/vm/${vm.id}`}
@@ -201,7 +201,7 @@ export function DashboardPage() {
                           </Link>
                         </td>
                         <td className="px-4 py-2.5">
-                          <StatusBadge tone={VM_STATUS_TONE[vm.status as VmStatus] ?? 'idle'}>
+                          <StatusBadge tone={VM_STATUS_TONE[vm.status as VmStatus] ?? 'idle'} pulse={VM_STATUS_PULSE[vm.status as VmStatus] ?? false}>
                             {VM_STATUS_LABEL[vm.status as VmStatus] ?? vm.status}
                           </StatusBadge>
                         </td>

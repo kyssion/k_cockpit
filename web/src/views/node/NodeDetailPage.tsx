@@ -26,7 +26,7 @@ import { Modal } from '@/components/common/Modal'
 import { Meter } from '@/components/common/Meter'
 import { StatusBadge } from '@/components/common/StatusBadge'
 import { formatBytes, formatDateTime, relativeTime } from '@/utils/format'
-import { ENROLL_STATE_LABEL, NODE_STATUS_LABEL, NODE_STATUS_TONE } from '@/utils/labels'
+import { ENROLL_STATE_LABEL, NODE_STATUS_LABEL, NODE_STATUS_PULSE, NODE_STATUS_TONE } from '@/utils/labels'
 
 type TabKey = 'overview' | 'storage' | 'network' | 'vms' | 'monitor'
 
@@ -93,7 +93,7 @@ export function NodeDetailPage() {
           <div>
             <h1 className="text-xl font-semibold text-ink">{node.name}</h1>
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
-              <StatusBadge tone={NODE_STATUS_TONE[node.status]}>
+              <StatusBadge tone={NODE_STATUS_TONE[node.status]} pulse={NODE_STATUS_PULSE[node.status]}>
                 {NODE_STATUS_LABEL[node.status]}
               </StatusBadge>
               <StatusBadge tone={node.enroll_state === 'enrolled' ? 'info' : 'warning'}>

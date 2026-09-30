@@ -23,7 +23,7 @@ import { CreateVmWizard } from './CreateVmWizard'
 import { StatusBadge } from '@/components/common/StatusBadge'
 import { vmTagApi } from '@/api/vmtag'
 import { formatDateTime, relativeTime } from '@/utils/format'
-import { VM_STATUS_LABEL, VM_STATUS_TONE } from '@/utils/labels'
+import { VM_STATUS_LABEL, VM_STATUS_PULSE, VM_STATUS_TONE } from '@/utils/labels'
 
 const PAGE_SIZE = 20
 
@@ -234,7 +234,7 @@ export function VmListPage() {
             共 {total} 台。状态来自最近一次与虚拟化层对账的结果。
           </p>
         </div>
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
+        <Button size="sm" variant="hero" onClick={() => setCreateOpen(true)}>
           <span className="flex items-center gap-1.5">
             <Icon name="plus" className="h-3.5 w-3.5" />
             创建虚拟机
@@ -318,7 +318,7 @@ export function VmListPage() {
                   清空搜索
                 </Button>
               ) : (
-                <Button size="sm" onClick={() => setCreateOpen(true)}>
+                <Button size="sm" variant="hero" onClick={() => setCreateOpen(true)}>
                   创建第一台虚拟机
                 </Button>
               )
@@ -742,7 +742,7 @@ function VmRow({
       className={
         // 悬停用 sunken 而不是 raised：表格本身就在 raised 卡片里，
         // 同色悬停等于没有反馈。
-        (selected ? 'border-t border-line bg-brand/5' : 'border-t border-line hover:bg-sunken/70') +
+        (selected ? 'border-t border-line bg-brand/5' : 'border-t border-line transition-colors duration-(--kc-duration-fast) ease-(--kc-ease) hover:bg-sunken/70') +
         // 维护模式（G-37）：整行淡化但仍可读——它标注的是"这台机器现在
         // 动不了"，而淡化比隐藏诚实，比报错友好。
         (vm.node_maintenance ? ' opacity-60' : '')
@@ -782,7 +782,7 @@ function VmRow({
       </td>
       <td className="px-4 py-2.5">
         <div className="flex items-center gap-2">
-          <StatusBadge tone={VM_STATUS_TONE[vm.status]}>{VM_STATUS_LABEL[vm.status]}</StatusBadge>
+          <StatusBadge tone={VM_STATUS_TONE[vm.status]} pulse={VM_STATUS_PULSE[vm.status]}>{VM_STATUS_LABEL[vm.status]}</StatusBadge>
           {/* 投影过期时明确提示：把陈旧数据显示成当前状态，排障时比没有数据更危险。 */}
           {vm.stale && (
             <span className="text-xs text-warning" title={`最近对账：${formatDateTime(vm.last_synced_at)}`}>
@@ -857,7 +857,7 @@ function VmCard({
           </div>
           <p className="mt-1 text-xs text-ink-3">{nodeName ?? `#${vm.node_id}`}</p>
         </div>
-        <StatusBadge tone={VM_STATUS_TONE[vm.status]}>{VM_STATUS_LABEL[vm.status]}</StatusBadge>
+        <StatusBadge tone={VM_STATUS_TONE[vm.status]} pulse={VM_STATUS_PULSE[vm.status]}>{VM_STATUS_LABEL[vm.status]}</StatusBadge>
       </div>
 
       <dl className="mt-3 grid grid-cols-2 gap-y-1 text-sm">

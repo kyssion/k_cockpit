@@ -22,7 +22,7 @@ import { EmptyState, PageLoading } from '@/components/common/Feedback'
 import { Modal } from '@/components/common/Modal'
 import { StatusBadge } from '@/components/common/StatusBadge'
 import { relativeTime } from '@/utils/format'
-import { VM_STATUS_LABEL, VM_STATUS_TONE } from '@/utils/labels'
+import { VM_STATUS_LABEL, VM_STATUS_PULSE, VM_STATUS_TONE } from '@/utils/labels'
 
 export function TrashPage() {
   const queryClient = useQueryClient()
@@ -114,10 +114,10 @@ export function TrashPage() {
             </thead>
             <tbody>
               {items.map((it) => (
-                <tr key={it.id} className="border-t border-line hover:bg-sunken">
+                <tr key={it.id} className="border-t border-line transition-colors duration-(--kc-duration-fast) ease-(--kc-ease) hover:bg-sunken">
                   <td className="px-4 py-2.5 text-ink">{it.name}</td>
                   <td className="px-4 py-2.5">
-                    <StatusBadge tone={VM_STATUS_TONE[it.status] ?? 'idle'}>
+                    <StatusBadge tone={VM_STATUS_TONE[it.status] ?? 'idle'} pulse={VM_STATUS_PULSE[it.status] ?? false}>
                       {VM_STATUS_LABEL[it.status] ?? it.status}
                     </StatusBadge>
                   </td>

@@ -50,6 +50,8 @@ body {
   :focus-visible {
     outline: 2px solid var(--kc-brand);
     outline-offset: 2px;
+    /* 品牌色微光晕：让键盘焦点在深浅两套主题下都「亮」起来 */
+    box-shadow: 0 0 0 5px color-mix(in oklab, var(--kc-brand) 15%, transparent);
   }
 }
 

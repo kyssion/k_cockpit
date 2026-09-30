@@ -44,6 +44,20 @@ export const VM_STATUS_TONE: Record<VmStatus, StatusTone> = {
   unknown: 'idle',
 }
 
+/**
+ * 「此刻活着」的状态才呼吸（FRONTEND §4.6）：状态点 2s 呼吸只给
+ * 运行中——暂停/挂起/错误是**需要人处理**的静止状态，呼吸会让人
+ * 以为它还在正常跑；终态呼吸更是误导。
+ */
+export const VM_STATUS_PULSE: Record<VmStatus, boolean> = {
+  running: true,
+  stopped: false,
+  paused: false,
+  suspended: false,
+  error: false,
+  unknown: false,
+}
+
 export const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
   pending: '排队中',
   running: '执行中',
@@ -63,6 +77,16 @@ export const TASK_STATUS_TONE: Record<TaskStatus, StatusTone> = {
   // unknown 用 idle 而非 danger：它不是失败，只是还没有结论。
   // 标成红色会让人去排查一个可能已经成功的操作。
   unknown: 'idle',
+}
+
+/** 执行中的任务在跑：呼吸点给「正在进行」的实感；排队是静止的等待，不呼吸。 */
+export const TASK_STATUS_PULSE: Record<TaskStatus, boolean> = {
+  pending: false,
+  running: true,
+  success: false,
+  failed: false,
+  canceled: false,
+  unknown: false,
 }
 
 export const TASK_TYPE_LABEL: Record<string, string> = {
@@ -132,6 +156,13 @@ export const NODE_STATUS_TONE: Record<NodeStatus, StatusTone> = {
   // 灰色会让它在一屏节点里被略过去。
   offline: 'danger',
   unknown: 'idle',
+}
+
+/** 在线的节点心跳还在跳：呼吸点；离线恰恰是「停了」，不能呼吸。 */
+export const NODE_STATUS_PULSE: Record<NodeStatus, boolean> = {
+  online: true,
+  offline: false,
+  unknown: false,
 }
 
 /** 节点注册状态。 */

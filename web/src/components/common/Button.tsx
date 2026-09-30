@@ -2,13 +2,16 @@ import type { ButtonHTMLAttributes, ReactNode } from 'react'
 
 import { cn } from '@/utils/cn'
 
-type Variant = 'primary' | 'secondary' | 'danger' | 'ghost'
+type Variant = 'primary' | 'hero' | 'secondary' | 'danger' | 'ghost'
 type Size = 'sm' | 'md'
 
 const variants: Record<Variant, string> = {
   // 实底上的文字用 on-brand / on-danger：暗色主题下亮底配白字达不到 AA
   // （见 tokens.css 头注），亮底配深字是暗色主题的现代惯例。
   primary: 'bg-brand text-on-brand hover:bg-brand-hover active:bg-brand-active',
+  // hero：页面级主操作专用（每个视图至多一处）——品牌渐变底 + 光晕，
+  // hover 时光晕增强、渐变微亮；按压下潜由下方公共类提供。
+  hero: 'bg-linear-to-r from-hero-from to-hero-to text-on-brand shadow-glow',
   secondary: 'border border-line-strong bg-surface text-ink hover:bg-sunken',
   danger: 'bg-danger text-on-danger hover:opacity-90',
   ghost: 'text-ink-2 hover:bg-sunken hover:text-ink',
