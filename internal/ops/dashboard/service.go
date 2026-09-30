@@ -247,7 +247,8 @@ func (s *Service) Summary(ctx context.Context, v authz.Viewer) (*Summary, error)
 	}
 	out.RecentVMs = recent
 
-	out.Alerts = buildAlerts(nodes, vms, tasks, limited)
+	// 追加而非覆盖：管理员的运维自检提示在上面已先行放入。
+	out.Alerts = append(out.Alerts, buildAlerts(nodes, vms, tasks, limited)...)
 	return out, nil
 }
 
