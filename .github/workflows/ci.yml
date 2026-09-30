@@ -20,6 +20,8 @@ concurrency:
 
 permissions:
   contents: read
+  # 仅用于失败时上传测试日志 artifact（upload-artifact 需要 actions 写权限）
+  actions: write
 
 jobs:
   backend:
@@ -48,8 +50,21 @@ jobs:
       - name: 静态检查
         run: go vet ./...
 
+      # 测试输出同步落盘：偶发失败（如某次 CI 单测红而同一提交重跑即绿）
+      # 时，失败 artifact 里带着完整的 --- FAIL 行，不必再靠猜。
       - name: 单元测试
-        run: go test ./...
+        run: |
+          set -o pipefail
+          go test ./... 2>&1 | tee /tmp/go-test.log
+
+      - name: 上传测试日志（仅失败时）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-test-log-${{ github.run_id }}
+          path: /tmp/go-test.log
+          retention-days: 14
+          if-no-files-found: ignore
 
   frontend:
     name: 前端（typecheck / lint / test / build）
