@@ -29,9 +29,10 @@ export function TabBar() {
             key={t.path}
             className={cn(
               'group flex h-7 shrink-0 items-center gap-1 rounded-control border px-2.5 text-sm',
+              'transition-colors duration-(--kc-duration-fast) ease-(--kc-ease)',
               active
                 ? 'border-brand/40 bg-brand/10 text-brand'
-                : 'border-transparent text-ink-3 hover:bg-raised hover:text-ink-2',
+                : 'border-transparent text-ink-3 hover:bg-sunken hover:text-ink-2',
             )}
           >
             <NavLink to={t.path} className="max-w-[160px] truncate">

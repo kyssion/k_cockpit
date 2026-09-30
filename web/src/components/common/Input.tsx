@@ -27,6 +27,9 @@ export function Input({ label, error, hint, className, ...rest }: InputProps) {
         className={cn(
           'h-9 rounded-control border bg-sunken px-3 text-base text-ink',
           'placeholder:text-ink-3',
+          // 边框色平滑聚焦：鼠标点击时只有边框变色，安静不抢眼；
+          // 键盘焦点另有全局 :focus-visible 外圈兜底。
+          'transition-[border-color] duration-(--kc-duration-fast) ease-(--kc-ease)',
           'focus:outline-none focus-visible:border-brand',
           error ? 'border-danger' : 'border-line-strong',
           className,

@@ -759,7 +759,7 @@ function StepRail({
                   className={
                     'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[11px] ' +
                     (active
-                      ? 'border-brand bg-brand text-white'
+                      ? 'border-brand bg-brand text-on-brand'
                       : done
                         ? 'border-brand/40 bg-brand/15 text-brand'
                         : 'border-line-strong text-ink-3')

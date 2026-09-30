@@ -29,10 +29,21 @@ function read(): ThemeMode {
   return 'system'
 }
 
+/** 主题过渡类的存活时间：略长于 --kc-duration-base，播完才摘。 */
+const THEME_ANIM_MS = 300
+let themeAnimTimer: number | undefined
+
 /** 把偏好落到 `<html data-theme>`。 */
 function apply(mode: ThemeMode) {
   const resolved = mode === 'system' ? (systemPrefersDark() ? 'dark' : 'light') : mode
-  document.documentElement.dataset.theme = resolved
+  const root = document.documentElement
+  // 已有主题且确实要变才挂过渡类：首帧渲染不动画（否则打开页面就是一次闪变）。
+  if (root.dataset.theme && root.dataset.theme !== resolved) {
+    root.classList.add('kc-theme-anim')
+    clearTimeout(themeAnimTimer)
+    themeAnimTimer = window.setTimeout(() => root.classList.remove('kc-theme-anim'), THEME_ANIM_MS)
+  }
+  root.dataset.theme = resolved
 }
 
 /**

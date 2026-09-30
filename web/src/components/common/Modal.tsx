@@ -1,6 +1,9 @@
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 
 import { Button } from './Button'
+
+/** 退场动画时长：与 --kc-duration-slow 对齐，播完才卸载（FRONTEND §4.6）。 */
+const EXIT_MS = 240
 
 interface ModalProps {
   open: boolean
@@ -54,17 +57,39 @@ export function Modal({
     return () => document.removeEventListener('keydown', onKey)
   }, [open, onClose, dismissable])
 
-  if (!open) return null
+  // 退场动画播完再卸载（§4.6）：open 翻 false 后仍渲染 EXIT_MS 毫秒，
+  // 期间播退场动画；期间重新打开则取消卸载、直接回入场态。
+  // open 变化在渲染期修正（React「prop 变化时调整 state」模式），
+  // effect 里只留异步的卸载定时器——同步 setState-in-effect 会被 Compiler 拒优化。
+  const [mounted, setMounted] = useState(open)
+  const [prevOpen, setPrevOpen] = useState(open)
+  if (prevOpen !== open) {
+    setPrevOpen(open)
+    setMounted(open)
+  }
+  useEffect(() => {
+    if (open) return
+    const timer = setTimeout(() => setMounted(false), EXIT_MS)
+    return () => clearTimeout(timer)
+  }, [open])
+
+  if (!mounted) return null
+  const closing = !open
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 ${
+        closing ? 'animate-fade-out pointer-events-none' : 'animate-fade-in'
+      }`}
       role="dialog"
       aria-modal="true"
       aria-label={title}
+      aria-hidden={closing || undefined}
     >
       <div
-        className={`w-full ${sizes[size]} rounded-card border border-line bg-raised shadow-3`}
+        className={`w-full ${sizes[size]} rounded-card border border-line bg-raised shadow-3 ${
+          closing ? 'animate-pop-out' : 'animate-pop-in'
+        }`}
         onClick={(e) => e.stopPropagation()}
       >
         <header className="border-b border-line px-5 py-4">

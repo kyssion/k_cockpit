@@ -33,7 +33,8 @@ export function TaskTray({ connected }: { connected: boolean }) {
   if (items.length === 0) return null
 
   return (
-    <div className="shrink-0 border-t border-line bg-surface">
+    // 从底部轻轻升起：任务栏的出现本身就是一个「有事发生了」的信号。
+    <div className="shrink-0 animate-fade-rise border-t border-line bg-surface">
       <div className="flex items-center gap-3 px-6 py-2">
         <button
           type="button"

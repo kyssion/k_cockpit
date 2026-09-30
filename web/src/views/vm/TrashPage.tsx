@@ -114,7 +114,7 @@ export function TrashPage() {
             </thead>
             <tbody>
               {items.map((it) => (
-                <tr key={it.id} className="border-t border-line hover:bg-raised">
+                <tr key={it.id} className="border-t border-line hover:bg-sunken">
                   <td className="px-4 py-2.5 text-ink">{it.name}</td>
                   <td className="px-4 py-2.5">
                     <StatusBadge tone={VM_STATUS_TONE[it.status] ?? 'idle'}>

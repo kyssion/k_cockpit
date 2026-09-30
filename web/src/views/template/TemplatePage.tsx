@@ -1143,7 +1143,7 @@ function FamilyNode({
   return (
     <li className="flex flex-col">
       <div
-        className="flex flex-wrap items-center justify-between gap-2 rounded-control px-2 py-1.5 hover:bg-raised"
+        className="flex flex-wrap items-center justify-between gap-2 rounded-control px-2 py-1.5 hover:bg-sunken"
         style={{ marginLeft: depth * 16 }}
       >
         <span className="flex flex-wrap items-center gap-2">

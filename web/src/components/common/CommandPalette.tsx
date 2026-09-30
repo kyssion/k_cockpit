@@ -11,7 +11,7 @@
  *     的话，它就只是另一个搜索框，而不是"命令面板"。
  */
 import { useQuery } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 
 import { searchApi, type SearchMatch } from '@/api/search'
@@ -23,10 +23,28 @@ const KIND_LABEL: Record<string, string> = {
   template: '模板',
 }
 
-export function CommandPalette({ onClose }: { onClose: () => void }) {
+/** 退场动画时长：与 --kc-duration-slow 对齐，播完才卸载（FRONTEND §4.6）。 */
+const EXIT_MS = 240
+
+export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const navigate = useNavigate()
   const [q, setQ] = useState('')
   const [active, setActive] = useState(0)
+
+  // 与 Modal 同一套进出场：open 翻 false 后播完退场动画再卸载。
+  // open 变化在渲染期修正（React「prop 变化时调整 state」模式），
+  // effect 里只留异步的卸载定时器。
+  const [mounted, setMounted] = useState(open)
+  const [prevOpen, setPrevOpen] = useState(open)
+  if (prevOpen !== open) {
+    setPrevOpen(open)
+    setMounted(open)
+  }
+  useEffect(() => {
+    if (open) return
+    const timer = setTimeout(() => setMounted(false), EXIT_MS)
+    return () => clearTimeout(timer)
+  }, [open])
 
   const enabled = q.trim().length >= 2
   const results = useQuery({
@@ -66,13 +84,20 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     }
   }
 
+  if (!mounted) return null
+  const closing = !open
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[10vh]"
+      className={`fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[10vh] ${
+        closing ? 'animate-fade-out pointer-events-none' : 'animate-fade-in'
+      }`}
       onClick={onClose}
     >
       <div
-        className="w-[min(560px,90vw)] overflow-hidden rounded-card border border-line-strong bg-surface shadow-3"
+        className={`w-[min(560px,90vw)] overflow-hidden rounded-card border border-line-strong bg-surface shadow-3 ${
+          closing ? 'animate-pop-out' : 'animate-pop-in'
+        }`}
         onClick={(e) => e.stopPropagation()}
       >
         <input
@@ -113,7 +138,8 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
               onClick={() => go(m)}
               className={cn(
                 'flex w-full items-center gap-3 px-4 py-2.5 text-left',
-                i === cursor ? 'bg-brand/10' : 'hover:bg-raised',
+                'transition-colors duration-(--kc-duration-fast) ease-(--kc-ease)',
+                i === cursor ? 'bg-brand/10' : 'hover:bg-sunken',
               )}
             >
               <span className="w-14 shrink-0 rounded-pill bg-sunken px-1.5 py-0.5 text-center text-xs text-ink-3">

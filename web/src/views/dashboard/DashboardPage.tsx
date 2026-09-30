@@ -191,7 +191,7 @@ export function DashboardPage() {
                   </thead>
                   <tbody>
                     {summary.data.recent_vms.map((vm) => (
-                      <tr key={vm.id} className="border-t border-line hover:bg-raised">
+                      <tr key={vm.id} className="border-t border-line hover:bg-sunken">
                         <td className="px-4 py-2.5">
                           <Link
                             to={`/vm/${vm.id}`}

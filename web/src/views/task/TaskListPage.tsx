@@ -231,7 +231,7 @@ function TaskRow({
   const active = isActive(task.status)
 
   return (
-    <tr className="border-t border-line hover:bg-raised">
+    <tr className="border-t border-line hover:bg-sunken">
       <td className="kc-mono px-4 py-2.5">
         {/* ID 本身是入口：任务号是用户在各处会看到的标识（「任务 #12 正在执行」），
             从这里点进去比在行尾再放一个按钮更自然。 */}

@@ -950,7 +950,7 @@ function RowMenu({
           <MenuItem to={`/vm/${vm.id}/console`}>打开控制台</MenuItem>
         )}
         <button
-          className="rounded-control px-2 py-1.5 text-left text-base text-ink-2 hover:bg-raised"
+          className="rounded-control px-2 py-1.5 text-left text-base text-ink-2 hover:bg-sunken"
           onClick={() => {
             if (vm) onRemark(vm)
             onClose()
@@ -959,7 +959,7 @@ function RowMenu({
           编辑备注
         </button>
         <button
-          className="rounded-control px-2 py-1.5 text-left text-base text-ink-2 hover:bg-raised"
+          className="rounded-control px-2 py-1.5 text-left text-base text-ink-2 hover:bg-sunken"
           onClick={() => {
             if (vm) onTags(vm)
             onClose()
@@ -970,7 +970,7 @@ function RowMenu({
         {/* 解锁需要二次验证：请求层会自动弹验证框并重放（f-10-01），
             这里不需要额外处理。 */}
         <button
-          className="rounded-control px-2 py-1.5 text-left text-base text-ink-2 hover:bg-raised disabled:text-ink-3"
+          className="rounded-control px-2 py-1.5 text-left text-base text-ink-2 hover:bg-sunken disabled:text-ink-3"
           disabled={setLock.isPending}
           onClick={() => setLock.mutate(!vm?.locked)}
         >
@@ -994,7 +994,7 @@ function MenuItem({ to, children }: { to: string; children: string }) {
   return (
     <Link
       to={to}
-      className="rounded-control px-2 py-1.5 text-base text-ink-2 hover:bg-raised hover:text-ink"
+      className="rounded-control px-2 py-1.5 text-base text-ink-2 hover:bg-sunken hover:text-ink"
     >
       {children}
     </Link>

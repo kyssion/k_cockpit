@@ -90,7 +90,8 @@ export function ConsolePage({ standalone = false }: { standalone?: boolean }) {
     }
 
     rfb.scaleViewport = true
-    rfb.background = '#0b0f14'
+    // noVNC 把它写到内联样式上，var() 在内联样式里同样生效，跟随令牌切换。
+    rfb.background = 'var(--kc-bg-console)'
     rfbRef.current = rfb
 
     rfb.addEventListener('connect', () => {
@@ -232,7 +233,7 @@ export function ConsolePage({ standalone = false }: { standalone?: boolean }) {
 
       <div
         ref={containerRef}
-        className="min-h-0 flex-1 overflow-hidden rounded-card border border-line bg-[#0b0f14]"
+        className="min-h-0 flex-1 overflow-hidden rounded-card border border-line bg-console"
       />
 
       {/* 快捷键工具条（G-31）。只在**已连接**时出现：断开状态下按任何键都

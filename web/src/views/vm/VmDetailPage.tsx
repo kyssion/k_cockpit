@@ -951,7 +951,7 @@ function VmHero({ vm }: { vm: VmView }) {
         >
           <Link
             to={`/vm/${vm.id}/console`}
-            className="block overflow-hidden rounded-control border border-line bg-[#1b1e24]"
+            className="block overflow-hidden rounded-control border border-line bg-console"
           >
             <img
               // key 跟着 stamp 变，强制浏览器重新拉图：URL 里已经带了
@@ -3247,7 +3247,7 @@ function DeleteVmModal({
       <fieldset className="flex flex-col gap-3">
         <legend className="mb-1 text-sm font-medium text-ink-2">磁盘处理方式</legend>
 
-        <label className="flex cursor-pointer items-start gap-2.5 rounded-control border border-line-strong px-3 py-2.5 hover:bg-raised">
+        <label className="flex cursor-pointer items-start gap-2.5 rounded-control border border-line-strong px-3 py-2.5 hover:bg-sunken">
           <input
             type="radio"
             name="disk_action"
@@ -3263,7 +3263,7 @@ function DeleteVmModal({
           </span>
         </label>
 
-        <label className="flex cursor-pointer items-start gap-2.5 rounded-control border border-line-strong px-3 py-2.5 hover:bg-raised">
+        <label className="flex cursor-pointer items-start gap-2.5 rounded-control border border-line-strong px-3 py-2.5 hover:bg-sunken">
           <input
             type="radio"
             name="disk_action"
@@ -3279,7 +3279,7 @@ function DeleteVmModal({
           </span>
         </label>
 
-        <label className="flex cursor-pointer items-start gap-2.5 rounded-control border border-line-strong px-3 py-2.5 hover:bg-raised">
+        <label className="flex cursor-pointer items-start gap-2.5 rounded-control border border-line-strong px-3 py-2.5 hover:bg-sunken">
           <input
             type="radio"
             name="disk_action"

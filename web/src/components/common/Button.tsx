@@ -6,10 +6,12 @@ type Variant = 'primary' | 'secondary' | 'danger' | 'ghost'
 type Size = 'sm' | 'md'
 
 const variants: Record<Variant, string> = {
-  primary: 'bg-brand text-white hover:bg-brand-hover active:bg-brand-active',
-  secondary: 'border border-line-strong bg-surface text-ink hover:bg-raised',
-  danger: 'bg-danger text-white hover:opacity-90',
-  ghost: 'text-ink-2 hover:bg-raised hover:text-ink',
+  // 实底上的文字用 on-brand / on-danger：暗色主题下亮底配白字达不到 AA
+  // （见 tokens.css 头注），亮底配深字是暗色主题的现代惯例。
+  primary: 'bg-brand text-on-brand hover:bg-brand-hover active:bg-brand-active',
+  secondary: 'border border-line-strong bg-surface text-ink hover:bg-sunken',
+  danger: 'bg-danger text-on-danger hover:opacity-90',
+  ghost: 'text-ink-2 hover:bg-sunken hover:text-ink',
 }
 
 const sizes: Record<Size, string> = {
@@ -39,8 +41,12 @@ export function Button({
       disabled={disabled || loading}
       aria-busy={loading}
       className={cn(
-        'inline-flex items-center justify-center gap-2 rounded-control font-medium transition-colors',
-        'disabled:cursor-not-allowed disabled:opacity-50',
+        // 按压轻微下潜 + 色彩过渡：手感来自「按下有反应、松手即回弹」，
+        // 位移只有 2%，是反馈而不是动画。
+        'inline-flex items-center justify-center gap-2 rounded-control font-medium',
+        'transition-[color,background-color,border-color,box-shadow,opacity,transform]',
+        'duration-(--kc-duration-fast) ease-(--kc-ease) active:scale-[0.98]',
+        'disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100',
         variants[variant],
         sizes[size],
         className,

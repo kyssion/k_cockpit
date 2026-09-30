@@ -177,7 +177,7 @@ function Filter<T extends string>({
           onClick={() => onChange(o.value)}
           className={
             'px-2.5 py-1 text-sm ' +
-            (value === o.value ? 'bg-brand/10 text-brand' : 'text-ink-2 hover:bg-raised')
+            (value === o.value ? 'bg-brand/10 text-brand' : 'text-ink-2 hover:bg-sunken')
           }
         >
           {o.label}

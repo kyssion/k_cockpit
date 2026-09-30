@@ -26,9 +26,10 @@ export function Segmented<T extends string>({
           aria-pressed={value === o.value}
           className={
             (size === 'md' ? 'px-3 py-1.5 text-base ' : 'px-2.5 py-1 text-sm ') +
+            'transition-colors duration-(--kc-duration-fast) ease-(--kc-ease) ' +
             (value === o.value
               ? 'bg-brand/10 text-brand'
-              : 'text-ink-2 hover:bg-raised hover:text-ink')
+              : 'text-ink-2 hover:bg-sunken hover:text-ink')
           }
         >
           {o.label}

@@ -36,10 +36,10 @@ export interface TimeSeriesChartProps {
 }
 
 const TONE_STROKE: Record<string, string> = {
-  primary: 'var(--color-primary, #3b82f6)',
-  success: 'var(--color-success, #16a34a)',
-  warning: 'var(--color-warning, #d97706)',
-  danger: 'var(--color-danger, #dc2626)',
+  primary: 'var(--color-brand, #4f46e5)',
+  success: 'var(--color-success, #047857)',
+  warning: 'var(--color-warning, #9a4e00)',
+  danger: 'var(--color-danger, #b91c1c)',
 }
 
 /** 缺口判定：超过 2.5 倍采样间隔没有点，就认为中间断了。 */

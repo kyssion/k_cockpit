@@ -96,7 +96,7 @@ export function NodeListPage() {
             </thead>
             <tbody>
               {nodes.data.map((node) => (
-                <tr key={node.id} className="border-t border-line hover:bg-raised">
+                <tr key={node.id} className="border-t border-line hover:bg-sunken">
                   <td className="px-4 py-2.5">
                     <Link
                       to={`/node/${node.id}`}

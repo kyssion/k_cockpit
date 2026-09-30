@@ -264,43 +264,64 @@ export function AppLayout() {
                   <span className="flex-1 text-left">
                     {lang === 'en-US' ? group.en : group.label}
                   </span>
-                  <span className="text-ink-3">{isCollapsed ? '▸' : '▾'}</span>
+                  {/* 折叠箭头用旋转而不是换字符：转起来的箭头才像「被你掰动」 */}
+                  <span
+                    aria-hidden
+                    className={cn(
+                      'text-ink-3 transition-transform duration-(--kc-duration-fast) ease-(--kc-ease)',
+                      isCollapsed && '-rotate-90',
+                    )}
+                  >
+                    ▾
+                  </span>
                 </button>
 
-                {!isCollapsed && (
-                  <div className="flex flex-col gap-0.5">
-                    {items.map((item) => {
-                      const badge = badgeOf(item)
-                      return (
-                        <NavLink
-                          key={item.to}
-                          to={item.to}
-                          end={item.to === '/'}
-                          // 收窄或被截断时，title 是唯一还能认出这一项的东西。
-                          title={lang === 'en-US' ? item.en : item.label}
-                          className={({ isActive }) =>
-                            cn(
-                              'flex items-center gap-2 rounded-control py-2 pl-7 pr-2 text-base transition-colors',
-                              isActive
-                                ? 'bg-brand/12 font-medium text-brand'
-                                : 'text-ink-2 hover:bg-raised hover:text-ink',
-                            )
-                          }
-                        >
-                          <Icon name={item.icon ?? group.icon} className="h-3.5 w-3.5 shrink-0" />
-                          <span className="min-w-0 flex-1 truncate">
-                            {lang === 'en-US' ? item.en : item.label}
-                          </span>
-                          {badge != null && badge > 0 && (
-                            <span className="kc-nums rounded-pill bg-ink-3/20 px-1.5 text-xs text-ink-2">
-                              {badge}
+                {/* grid-rows 0fr→1fr 过渡：高度自适应的展开/收起，
+                    不必测量内容高度，也不产生布局位移。 */}
+                <div
+                  className={cn(
+                    'grid transition-[grid-template-rows] duration-(--kc-duration-base) ease-(--kc-ease)',
+                    isCollapsed ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]',
+                  )}
+                >
+                  <div className="overflow-hidden">
+                    <div className="flex flex-col gap-0.5">
+                      {items.map((item) => {
+                        const badge = badgeOf(item)
+                        return (
+                          <NavLink
+                            key={item.to}
+                            to={item.to}
+                            end={item.to === '/'}
+                            // 收窄或被截断时，title 是唯一还能认出这一项的东西。
+                            title={lang === 'en-US' ? item.en : item.label}
+                            className={({ isActive }) =>
+                              cn(
+                                'flex items-center gap-2 rounded-control py-2 pl-7 pr-2 text-base transition-colors',
+                                isActive
+                                  ? 'bg-brand/12 font-medium text-brand'
+                                  : 'text-ink-2 hover:bg-sunken hover:text-ink',
+                              )
+                            }
+                          >
+                            <Icon
+                              name={item.icon ?? group.icon}
+                              className="h-3.5 w-3.5 shrink-0"
+                            />
+                            <span className="min-w-0 flex-1 truncate">
+                              {lang === 'en-US' ? item.en : item.label}
                             </span>
-                          )}
-                        </NavLink>
-                      )
-                    })}
+                            {badge != null && badge > 0 && (
+                              <span className="kc-nums rounded-pill bg-ink-3/20 px-1.5 text-xs text-ink-2">
+                                {badge}
+                              </span>
+                            )}
+                          </NavLink>
+                        )
+                      })}
+                    </div>
                   </div>
-                )}
+                </div>
               </div>
             )
           })}
@@ -323,7 +344,11 @@ export function AppLayout() {
         </header>
 
         <main className="min-h-0 flex-1 overflow-y-auto bg-base p-6">
-          <Outlet />
+          {/* key 跟着路径换：路由切换时内容整体轻柔上浮入场（§4.6），
+              顺带保证跨页面的滚动位置重置。 */}
+          <div key={location.pathname} className="animate-fade-rise">
+            <Outlet />
+          </div>
         </main>
 
         {/* 常驻任务栏：只在有进行中任务时出现。 */}
@@ -333,9 +358,10 @@ export function AppLayout() {
       {/* 高风险操作的验证弹窗。挂在布局里而非请求层：它需要 Router 上下文
           （未绑定验证方式时给出跳转），而请求层是纯模块。 */}
       <RiskVerificationGate />
-      {/* 条件渲染而不是传 open：卸载即重置面板状态，不必在 effect 里
-          再清一次关键字与选中项。 */}
-      {searchOpen && <CommandPalette onClose={() => setSearchOpen(false)} />}
+      {/* 常驻挂载、传 open：组件内部播完退场动画才卸载（§4.6）。
+          关闭即重置状态由「卸载」保证的历史语义改为：面板自持状态，
+          重开一次还保留上次的关键字——与主流命令面板一致。 */}
+      <CommandPalette open={searchOpen} onClose={() => setSearchOpen(false)} />
     </div>
   )
 }

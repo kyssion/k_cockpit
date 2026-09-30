@@ -38,10 +38,19 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* 焦点可见性：键盘用户必须能看到焦点，鼠标点击不显示（§8 可访问性） */
-:focus-visible {
-  outline: 2px solid var(--kc-brand);
-  outline-offset: 2px;
+/* 选中文字：品牌色的低透明度底，随主题切换 */
+::selection {
+  background-color: color-mix(in oklab, var(--kc-brand) 30%, transparent);
+}
+
+/* 焦点可见性：键盘用户必须能看到焦点，鼠标点击不显示（§8 可访问性）。
+   放进 @layer base：未分层规则永远压过 utilities，Input 组件声明的
+   focus:outline-none 会失效，输入框聚焦时出现「外圈 + 边框」双层。 */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--kc-brand);
+    outline-offset: 2px;
+  }
 }
 
 /**
@@ -57,6 +66,22 @@ body {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* 主题切换的平滑过渡：由 useTheme 在切换瞬间给 <html> 挂上 kc-theme-anim，
+   播完即移除——平时不带 transition，滚动与高频渲染零开销；reduced-motion
+   下由上面的全局覆盖把时长归零。!important 是为了压过元素自身的
+   transition-* 工具类，保证所有表面同步变色而不是各转各的。 */
+html.kc-theme-anim,
+html.kc-theme-anim *,
+html.kc-theme-anim *::before,
+html.kc-theme-anim *::after {
+  transition:
+    background-color var(--kc-duration-base) var(--kc-ease),
+    border-color var(--kc-duration-base) var(--kc-ease),
+    color var(--kc-duration-base) var(--kc-ease),
+    fill var(--kc-duration-base) var(--kc-ease),
+    stroke var(--kc-duration-base) var(--kc-ease) !important;
 }
 
 /* 滚动条：浅/深两套跟随主题，避免在深色页面出现刺眼的白色滚动条 */
