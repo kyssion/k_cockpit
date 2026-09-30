@@ -317,6 +317,17 @@ func (a *app) setupAgent() {
 			a.cfg.Agent.Transport, config.AgentTransportMock)
 	}
 	a.nodeSvc = node.NewService(a.db, a.mockAgent, a.recorder, a.mockAgent)
+
+	// 开发环境预置模拟节点：创建向导的完整步骤、迁移目标清单等能力都以
+	// 「已有在线节点」为前提，每次起服务手工接入太啰嗦。双重闸门（mock
+	// 运输层 + development）保证生产永不进入；预置失败只降级告警，
+	// 不阻断启动（EnsureSimulated 自身幂等，重启不会重复建）。
+	if a.cfg.Env == config.EnvDevelopment && a.cfg.Agent.Transport == config.AgentTransportMock {
+		if err := a.nodeSvc.EnsureSimulated(context.Background(),
+			[]string{"dev-node-1", "dev-node-2", "dev-node-3"}); err != nil {
+			log.Printf("[node] ⚠️ 预置模拟节点失败（不影响启动，可手工接入）: %v", err)
+		}
+	}
 }
 
 // setupTaskQueue 建实时总线与任务队列，注册全部执行器并启动调度循环。
