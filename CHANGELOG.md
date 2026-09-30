@@ -38,6 +38,7 @@
   - **工作台非负载告警（F-8-03）**：状态横幅新增运维自检项——未配置 SMTP（找回密码与邀请邮件发不出）、未配置站点对外地址（邀请链接站外打不开）；仅管理员可见
 
 ### Fixed
+- **弹窗永远打不开的回归**：Modal / CommandPalette 的挂载同步用了「渲染期调整 state」模式，在真实浏览器（React 19 + StrictMode）下 `open` 翻 true 后对话框永不出现、也无任何报错——「创建虚拟机」等所有弹窗入口点了没反应。jsdom 单测从未覆盖「关闭→打开」翻转路径所以全绿漏检（真实用户首发即命中）。改回 effect 驱动的挂载同步（对 oxlint 的 `set-state-in-effect` 优化提示做文件级豁免并注明原因）；补两层守卫防再犯：单测新增「关闭→打开」翻转用例，E2E 冒烟新增「创建虚拟机向导可打开」真实浏览器用例
 - **工作台自检提示从未真正展示（F-8-03）**：`Summary` 先把管理员的非负载自检提示（未配置 SMTP / 站点对外地址）放入 `Alerts`，末尾又被 `out.Alerts = buildAlerts(...)` 整体赋值覆盖——自检横幅一次也没出现过。改为追加（自检提示在前、负载告警在后），租户视角不受影响
 - **请求过滤中间件的链穿透隐患**：Hertz 的 `Next` 是循环实现，middleware 里只 `return` 不阻断后续 handler（会覆盖状态码）——三处拦截分支补 `c.Abort()`（与 auth 中间件同一写法）。此前"扫描器拦截返回 403"其实依赖未命中路由的 404 兜底，命中路由的拦截会被业务 handler 覆盖成 200
 - **模型对齐检查的盲区**：`model_alignment_test` / `index_alignment_test` 各自维护的模型子清单缺了 15 个后来加的模型（Alert、ComputeQuota、UserInvite、VMTag 等），从未被"模型 vs SQL 迁移"核对。清单收敛到 `database.AllModels()` 单一来源后全量核对：列级无漂移；索引级抓到一处真实缺口——**`user_invite` 的令牌唯一索引只在迁移里、模型未声明**，AutoMigrate 建的测试库因此没有这条约束（补 `uniqueIndex` tag 对齐）。另加一道源码扫描测试，断言 model 包每个 `TableName()` 都登记进 `AllModels()`——新模型忘了登记会在 CI 先红，而不是等冒烟栈运行期报 no such table

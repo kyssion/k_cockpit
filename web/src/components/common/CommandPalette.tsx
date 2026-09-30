@@ -14,6 +14,10 @@ import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 
+/* oxlint-disable set-state-in-effect --
+   挂载同步（open→渲染、关闭→延迟卸载）必须在 effect 里调 setState，
+   理由与取舍见 Modal.tsx 头部注释：渲染期调整模式在真实浏览器失效。 */
+
 import { searchApi, type SearchMatch } from '@/api/search'
 import { cn } from '@/utils/cn'
 
@@ -32,16 +36,14 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const [active, setActive] = useState(0)
 
   // 与 Modal 同一套进出场：open 翻 false 后播完退场动画再卸载。
-  // open 变化在渲染期修正（React「prop 变化时调整 state」模式），
-  // effect 里只留异步的卸载定时器。
+  // 挂载同步用 effect 而不是「渲染期调整 state」模式：后者在真实浏览器
+  // 里（React 19 + StrictMode）会让面板永远打不开（详见 Modal 内注）。
   const [mounted, setMounted] = useState(open)
-  const [prevOpen, setPrevOpen] = useState(open)
-  if (prevOpen !== open) {
-    setPrevOpen(open)
-    setMounted(open)
-  }
   useEffect(() => {
-    if (open) return
+    if (open) {
+      setMounted(true)
+      return
+    }
     const timer = setTimeout(() => setMounted(false), EXIT_MS)
     return () => clearTimeout(timer)
   }, [open])

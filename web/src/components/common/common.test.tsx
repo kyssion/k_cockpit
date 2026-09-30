@@ -4,14 +4,14 @@
  */
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import { Button } from '@/components/common/Button'
 import { Modal } from '@/components/common/Modal'
 import { StatusBadge } from '@/components/common/StatusBadge'
 
 describe('Modal', () => {
-  it('open 时渲染标题与内容，onClose 可关闭', () => {
+  it('open 时渲染标题与内容，onClose 可关闭（退场动画播完再卸载）', async () => {
     function Host() {
       const [open, setOpen] = useState(true)
       return (
@@ -24,9 +24,31 @@ describe('Modal', () => {
     expect(screen.getByText('确认删除')).toBeInTheDocument()
     expect(screen.getByText('该操作不可撤销')).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: '关闭' }) ?? screen.getByText('取消'))
-    // 关闭后内容消失
-    expect(screen.queryByText('该操作不可撤销')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }))
+    // 关闭走 240ms 退场动画（§4.6），播完才卸载——立即断言内容还在。
+    await waitFor(() => expect(screen.queryByText('该操作不可撤销')).not.toBeInTheDocument())
+  })
+
+  // 回归用例：从「关闭」翻到「打开」必须真的渲染出对话框。挂载同步曾用
+  // 渲染期 setState 实现，在真实浏览器里永远打不开而 jsdom 全绿；真实
+  // 浏览器侧的守卫在 E2E 冒烟（创建虚拟机向导可打开）。
+  it('从关闭翻到打开会渲染内容（挂载回归）', () => {
+    function Host() {
+      const [open, setOpen] = useState(false)
+      return (
+        <>
+          <button onClick={() => setOpen(true)}>打开</button>
+          <Modal open={open} title="新建虚拟机" onClose={() => setOpen(false)}>
+            <p>向导内容</p>
+          </Modal>
+        </>
+      )
+    }
+    render(<Host />)
+    expect(screen.queryByText('新建虚拟机')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '打开' }))
+    expect(screen.getByText('新建虚拟机')).toBeInTheDocument()
+    expect(screen.getByText('向导内容')).toBeInTheDocument()
   })
 
   it('按 Esc 触发关闭（键盘用户不被弹窗困住）', () => {

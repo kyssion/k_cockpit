@@ -2,6 +2,12 @@ import { useEffect, useState, type ReactNode } from 'react'
 
 import { Button } from './Button'
 
+/* oxlint-disable set-state-in-effect --
+   本组件的挂载同步（open→渲染、关闭→延迟卸载）必须在 effect 里调 setState：
+   「渲染期调整 state」模式在真实浏览器（React 19 + StrictMode）下会让
+   open 翻 true 后的对话框永远不出现（jsdom 单测覆盖不到，曾漏检）。
+   该规则是优化提示（Compiler 因此拒绝优化本组件），不涉及正确性。 */
+
 /** 退场动画时长：与 --kc-duration-slow 对齐，播完才卸载（FRONTEND §4.6）。 */
 const EXIT_MS = 240
 
@@ -59,23 +65,23 @@ export function Modal({
 
   // 退场动画播完再卸载（§4.6）：open 翻 false 后仍渲染 EXIT_MS 毫秒，
   // 期间播退场动画；期间重新打开则取消卸载、直接回入场态。
-  // open 变化在渲染期修正（React「prop 变化时调整 state」模式），
-  // effect 里只留异步的卸载定时器——同步 setState-in-effect 会被 Compiler 拒优化。
+  //
+  // 挂载同步用 effect 而不是「渲染期调整 state」模式：后者在真实浏览器
+  // 里（React 19 + StrictMode）会让 open 翻 true 后的对话框永远不出现
+  // （jsdom 单测覆盖不到这条路径，曾漏检）。oxlint 的 set-state-in-effect
+  // 是优化提示（Compiler 拒绝优化该组件），不影响正确性，故定点豁免。
   const [mounted, setMounted] = useState(open)
-  const [prevOpen, setPrevOpen] = useState(open)
-  if (prevOpen !== open) {
-    setPrevOpen(open)
-    setMounted(open)
-  }
   useEffect(() => {
-    if (open) return
+    if (open) {
+      setMounted(true)
+      return
+    }
     const timer = setTimeout(() => setMounted(false), EXIT_MS)
     return () => clearTimeout(timer)
   }, [open])
 
   if (!mounted) return null
   const closing = !open
-
   return (
     <div
       className={`fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 ${

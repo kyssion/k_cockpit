@@ -60,3 +60,15 @@ test('登录后可导航到虚拟机列表', async ({ page }) => {
   await page.getByRole('link', { name: '虚拟机' }).first().click()
   await expect(page.getByRole('heading', { level: 1, name: '虚拟机' })).toBeVisible()
 })
+
+test('创建虚拟机向导可打开（真实浏览器的挂载守卫）', async ({ page }) => {
+  await loginAsAdmin(page)
+
+  await page.getByRole('link', { name: '虚拟机' }).first().click()
+  await page.getByRole('heading', { level: 1, name: '虚拟机' }).waitFor()
+  // Modal 的挂载同步曾在真实浏览器失效而 jsdom 单测全绿——这条路径由
+  // 真实浏览器守卫：点击后对话框（role=dialog）必须出现。
+  await page.getByRole('button', { name: '创建虚拟机' }).click()
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await expect(page.getByText('选择创建方式')).toBeVisible()
+})
