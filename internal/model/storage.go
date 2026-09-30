@@ -29,9 +29,11 @@ const (
 // 各说各话，而测试库站在模型这一边**。凡是迁移里有的约束，模型都要有。
 type StoragePool struct {
 	ID int64 `gorm:"primaryKey"`
-	// NodeID 参与两个索引，因此两处都要声明；
-	// uniq_storage_pool_node_device 是复合索引，用 priority 指定列序。
-	NodeID int64 `gorm:"not null;index:idx_storage_pool_node_id;uniqueIndex:uniq_storage_pool_node_device,priority:1"`
+	// NodeID 参与三个索引；uniq_storage_pool_default 以 node_id 为索引列
+	// （与迁移 0001 的 `(node_id) WHERE is_default` 对齐）：默认池的唯一性
+	// 是**节点内**的。漏掉 node_id 会退化成全局唯一——AutoMigrate 建的库
+	// （测试 / e2e / 预览）里第二台节点的默认池永远建不出来，曾因此翻车。
+	NodeID int64 `gorm:"not null;index:idx_storage_pool_node_id;uniqueIndex:uniq_storage_pool_node_device,priority:1;uniqueIndex:uniq_storage_pool_default,priority:1,where:is_default"`
 	// DeviceID 是设备的稳定标识；DevicePath 仅用于展示。
 	DeviceID   string  `gorm:"size:128;not null;uniqueIndex:uniq_storage_pool_node_device,priority:2"`
 	DevicePath *string `gorm:"size:255"`
@@ -49,10 +51,11 @@ type StoragePool struct {
 
 	// IsDefault 表示该池是该节点的默认池，每节点至多一个（R-006）。
 	//
-	// where 条件**不能省**：唯一性只针对 is_default = true 的行。少了它，
-	// 唯一约束会落到所有行上，每节点就只能存一个**非默认**池——那显然不对，
-	// 而且会在第二个池创建时以一个看不懂的冲突暴露出来。
-	IsDefault bool `gorm:"not null;default:false;uniqueIndex:uniq_storage_pool_default,where:is_default"`
+	// 注意本列**不进** uniq_storage_pool_default 的索引列：迁移建的是
+	// `(node_id) WHERE is_default`，is_default 只出现在 WHERE 里。若在
+	// 本列标签上引用索引名，它会变成索引列，AutoMigrate 建出的索引与
+	// 迁移不一致（且全局唯一约束的语义也会错）。
+	IsDefault bool `gorm:"not null;default:false"`
 
 	// AutoMount 表示宿主机重启后是否自动挂载这个池。
 	//

@@ -10,6 +10,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -30,14 +31,45 @@ type MockClient struct {
 	// 一秒只会让人不愿跑测试。服务端启动时会设一个非零值，好让演示时能看见
 	// 时间线逐步推进，而不是所有阶段在同一毫秒里一起出现。
 	StageDelay time.Duration
+
+	// powerMu 守护 powerState：电源生命周期的最小状态（虚拟机名 → 状态值，
+	// 语义与 model.VMStatus 一致）。ADR-0011：它让「创建 → 开机 → 关机 →
+	// 再开机」的各次返回值互相自洽——此前 OpVMStatus 恒返 running，刚创建
+	// （投影「已关机」）的虚拟机点开机会被「已是运行中」拒绝，与自己的
+	// 投影直接矛盾。仍然不做的事：耗时、进度、失败注入、离线——这些
+	// 行为模拟才是 ADR-0007 明确排除的范围。
+	powerMu    sync.Mutex
+	powerState map[string]string
 }
 
 // NewMockClient 构造假实现（阶段之间不等待）。
-func NewMockClient() *MockClient { return &MockClient{} }
+func NewMockClient() *MockClient { return &MockClient{powerState: map[string]string{}} }
 
 // WithStageDelay 返回一份带阶段等待的副本。
 func (m *MockClient) WithStageDelay(d time.Duration) *MockClient {
-	return &MockClient{StageDelay: d}
+	return &MockClient{StageDelay: d, powerState: map[string]string{}}
+}
+
+// SetPower 直接写入一台虚拟机的电源状态（导出给装配层：mock 重启后
+// 内存态清零，用数据库投影注水，见 ADR-0011「后果」一节）。
+func (m *MockClient) SetPower(name, status string) { m.setPower(name, status) }
+
+// setPower 记录电源操作之后的静态结果状态。
+func (m *MockClient) setPower(name, status string) {
+	m.powerMu.Lock()
+	defer m.powerMu.Unlock()
+	m.powerState[name] = status
+}
+
+// powerOf 返回电源状态；mock 没见过的虚拟机（测试直接插库等场景）沿用
+// 历史行为视为 running——既有测试与语义因此都不变。
+func (m *MockClient) powerOf(name string) string {
+	m.powerMu.Lock()
+	defer m.powerMu.Unlock()
+	if s, ok := m.powerState[name]; ok {
+		return s
+	}
+	return "running"
 }
 
 // stagePlan 返回某类操作在节点上实际经历的步骤。
@@ -674,8 +706,19 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 	data := map[string]any{}
 
 	switch op.Kind {
+	case OpVMStart:
+		m.setPower(op.Target, "running")
+	case OpVMShutdown, OpVMPoweroff:
+		m.setPower(op.Target, "stopped")
+	case OpVMReboot, OpVMReset:
+		m.setPower(op.Target, "running")
 	case OpVMCreate:
 		data["uuid"] = mockUUID(op.NodeID, op.Target)
+		// 静态结果状态：定义完成、尚未启动，每次创建的答案都一样——这让
+		// 操作结果自描述，控制面据此落「已关机」投影而不是永远的
+		// 「状态未知」（ADR-0011 的最小电源状态，见结构体注释）。
+		m.setPower(op.Target, "stopped")
+		data[StatusDataKey] = "stopped"
 
 	case OpStorageFileRead:
 		// 占位内容而不是伪装成真实文件：与抓包取回、导出取回同一条原则。
@@ -711,6 +754,9 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 
 	case OpVMClone:
 		data["uuid"] = mockUUID(op.NodeID, op.Target)
+		// 同 OpVMCreate：克隆完成的域处于关机态。
+		m.setPower(op.Target, "stopped")
+		data[StatusDataKey] = "stopped"
 		// 只有链式克隆才有 backing_path。完整克隆**刻意不给**：给了会让
 		// 控制面记下一条不存在的依赖，界面上就会显示出一个假的依赖链——
 		// 而依赖链的存在与否，决定了删除模板时该不该拒绝。
@@ -1489,14 +1535,10 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 		data[StatusDataKey] = "ready"
 
 	case OpVMStatus:
-		// 固定返回 running（取值与 model.VMStatusRunning 一致；本包不引用
-		// model —— 协议层与存储层保持解耦，状态的解释由调用方负责）。
-		//
-		// 由此产生的局限需要明确：mock 不维护状态，探测结果不随操作变化，
-		// 因此**只能验证状态机与拒绝路径**（对 running 的虚拟机执行 start
-		// 会被拒绝），**无法验证「先关机再开机」的完整流转**。要打通完整
-		// 流转需要 mock 维护一份状态，那正是 ADR-0007 明确不做的事。
-		data[StatusDataKey] = "running"
+		// 返回电源生命周期的当前值（ADR-0011）；mock 没见过的虚拟机沿用
+		// 历史行为视为 running（本包不引用 model——协议层与存储层保持
+		// 解耦，状态的解释由调用方负责）。
+		data[StatusDataKey] = m.powerOf(op.Target)
 
 	case OpNodeStats:
 		data[NodeStatsDataKey] = mockNodeStats(op.NodeID)

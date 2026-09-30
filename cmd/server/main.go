@@ -25,6 +25,7 @@ import (
 	"k_cockpit/internal/compute/template"
 	"k_cockpit/internal/compute/vm"
 	"k_cockpit/internal/compute/vmtag"
+	"k_cockpit/internal/devdata"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/network/bridge"
 	"k_cockpit/internal/network/capture"
@@ -180,6 +181,8 @@ func main() {
 	a.setupSchedulerRegistry()
 	a.setupServices()
 	a.setupCredentials()
+	a.seedDevData()
+	a.hydrateMockPowerState()
 	a.setupBackground()
 
 	h := a.newHTTPServer()
@@ -299,9 +302,45 @@ func (a *app) setupAuth() {
 	}
 }
 
+// seedDevData 预置开发环境的演示数据（mock 运输层专用，见 internal/devdata）：
+// 模拟节点、存储池、系统网络、演示镜像与模板。双重闸门（development +
+// mock）保证生产永不进入；失败只降级告警不阻断启动（Ensure 自身幂等）。
+func (a *app) seedDevData() {
+	if a.cfg.Env != config.EnvDevelopment || a.cfg.Agent.Transport != config.AgentTransportMock {
+		return
+	}
+	err := devdata.Ensure(context.Background(), devdata.Deps{
+		DB:      a.db,
+		Nodes:   a.nodeSvc,
+		SwitchN: a.networkSvc,
+	})
+	if err != nil {
+		log.Printf("[devdata] ⚠️ 预置演示数据失败（不影响启动，可手工补齐）: %v", err)
+	}
+}
+
+// hydrateMockPowerState 把虚拟机投影的当前状态喂给 mock（ADR-0011）：
+// mock 重启后电源状态清零，不注水的话「已关机的虚拟机点开机」会被
+// 默认值 running 拒绝。仅 mock 运输层需要；未知状态跳过（探测的默认值
+// 会兜底，操作一次后自然收敛）。
+func (a *app) hydrateMockPowerState() {
+	if a.cfg.Agent.Transport != config.AgentTransportMock {
+		return
+	}
+	var vms []model.VM
+	if err := a.db.WithContext(context.Background()).
+		Where("present = ? AND status <> ?", true, model.VMStatusUnknown).
+		Find(&vms).Error; err != nil {
+		log.Printf("[agent] ⚠️ 读取虚拟机投影失败，mock 电源状态未注水: %v", err)
+		return
+	}
+	for _, v := range vms {
+		a.mockAgent.SetPower(v.Name, string(v.Status))
+	}
+}
+
 // setupAgent 装配节点通道与节点服务。
-func (a *app) setupAgent() {
-	// 装配 agent 通道。gRPC 双向流实现尚未开发，本期由 mock 直接
+func (a *app) setupAgent() { // 装配 agent 通道。gRPC 双向流实现尚未开发，本期由 mock 直接
 	// 返回结果——业务代码只依赖内部接口，替换 agent 实现时无需改动（ADR-0007）。
 	switch a.cfg.Agent.Transport {
 	case config.AgentTransportMock:
@@ -317,17 +356,6 @@ func (a *app) setupAgent() {
 			a.cfg.Agent.Transport, config.AgentTransportMock)
 	}
 	a.nodeSvc = node.NewService(a.db, a.mockAgent, a.recorder, a.mockAgent)
-
-	// 开发环境预置模拟节点：创建向导的完整步骤、迁移目标清单等能力都以
-	// 「已有在线节点」为前提，每次起服务手工接入太啰嗦。双重闸门（mock
-	// 运输层 + development）保证生产永不进入；预置失败只降级告警，
-	// 不阻断启动（EnsureSimulated 自身幂等，重启不会重复建）。
-	if a.cfg.Env == config.EnvDevelopment && a.cfg.Agent.Transport == config.AgentTransportMock {
-		if err := a.nodeSvc.EnsureSimulated(context.Background(),
-			[]string{"dev-node-1", "dev-node-2", "dev-node-3"}); err != nil {
-			log.Printf("[node] ⚠️ 预置模拟节点失败（不影响启动，可手工接入）: %v", err)
-		}
-	}
 }
 
 // setupTaskQueue 建实时总线与任务队列，注册全部执行器并启动调度循环。

@@ -303,6 +303,12 @@ func (s *Service) ensureNode(ctx context.Context, nodeID int64) error {
 	return nil
 }
 
+// EnsureSystemNetwork 幂等确保节点的系统基础网络存在（导出包装，供
+// 开发环境演示数据预置等节点外调用方复用同一份幂等逻辑）。
+func (s *Service) EnsureSystemNetwork(ctx context.Context, nodeID int64) error {
+	return s.ensureSystemNetwork(ctx, nodeID)
+}
+
 // ensureSystemNetwork 保证系统基础网络存在。
 //
 // **幂等**（R-008）：重复执行不产生重复记录。用「先查后建」而不是靠唯一

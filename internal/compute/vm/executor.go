@@ -293,19 +293,23 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 	}
 
 	now := time.Now()
+	// 状态以 agent 返回为准；拿不到时记为 unknown 而**不是**猜一个
+	// running——猜错会让界面显示「运行中」，而用户点关机才发现它没起来。
+	// agent 在结果里带回创建后的状态（如 mock 返回 stopped）时直接采用。
+	status := model.VMStatusUnknown
+	if reported, ok := result.Data[agent.StatusDataKey].(string); ok && reported != "" {
+		status = reported
+	}
 	vm := model.VM{
-		NodeID:    p.NodeID,
-		Name:      p.Name,
-		VCPU:      p.VCPU,
-		MemoryMB:  p.MemoryMB,
-		DiskGB:    p.DiskGB,
-		OwnerID:   optID(p.OwnerID),
-		Remark:    optStr(p.Remark),
-		GroupName: optStr(p.GroupName),
-
-		// 状态以 agent 返回为准；拿不到时记为 unknown 而**不是**猜一个
-		// running——猜错会让界面显示「运行中」，而用户点关机才发现它没起来。
-		Status:       model.VMStatusUnknown,
+		NodeID:       p.NodeID,
+		Name:         p.Name,
+		VCPU:         p.VCPU,
+		MemoryMB:     p.MemoryMB,
+		DiskGB:       p.DiskGB,
+		OwnerID:      optID(p.OwnerID),
+		Remark:       optStr(p.Remark),
+		GroupName:    optStr(p.GroupName),
+		Status:       status,
 		Present:      true,
 		LastSyncedAt: &now,
 
