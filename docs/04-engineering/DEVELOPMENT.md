@@ -1,7 +1,7 @@
 # 本地开发指南
 
-> 状态：草稿（技术栈确定后补全）
-> 最后更新：<!-- TODO: YYYY-MM-DD -->
+> 状态：生效
+> 最后更新：2026-09-30
 
 ---
 
@@ -12,8 +12,7 @@
 | Go | 1.27 或更高 | `go version` |
 | PostgreSQL | 14+（**可选**，仅在使用 postgres 驱动时需要） | `psql --version` |
 | C 编译器 | **不需要** | — |
-| Node.js | LTS（仅前端 `web/`，**规划中**） | `node --version` |
-| pnpm | 随 Node（仅前端 `web/`，**规划中**） | `pnpm --version` |
+| Node.js + pnpm | LTS（前端 `web/` 用） | `node --version` / `pnpm --version` |
 
 > 项目使用纯 Go 的 SQLite 驱动，**无需 CGO 与 C 工具链**，`CGO_ENABLED=0` 即可正常构建（见 [ADR-0003](../06-decisions/0003-pure-go-sqlite-driver.md)）。
 > Go 版本在 `go.mod` 中声明，依赖版本在 `go.sum` 中锁定。
@@ -33,9 +32,16 @@ cp .env.example .env
 # 3. 安装依赖
 go mod download
 
-# 4. 启动服务（默认监听 0.0.0.0:8080）
+# 4. 首次建库（**服务启动不做自动建表**；SQLite 的建库入口是 e2e-init，
+#    按模型建出全套表。名字来自冒烟栈，本地开发同样用它——SQL 迁移
+#    cmd/migrate 是 PostgreSQL 专用语法，SQLite 走不了）
+go run ./cmd/e2e-init
+
+# 5. 启动服务（默认监听 0.0.0.0:8080）
 go run ./cmd/server
 ```
+
+**首次启动后的初始化**：服务检测到没有管理员时，会在日志里打印**一次性初始化令牌**（也出现在启动输出的醒目提示里），浏览器打开 `http://localhost:8080`（或前端地址）按提示输入令牌、创建首个管理员即可进入面板。开发环境（默认）会自动预置 3 台模拟节点与配套演示数据（存储池 / 网络 / 镜像 / 模板），创建向导的完整流程开箱可用。
 
 **验证搭建成功**：
 
