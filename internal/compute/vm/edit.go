@@ -496,13 +496,17 @@ var editGroups = []EditGroupInfo{
 	{Key: EditGroupDisk, Label: "磁盘与驱动器"},
 	{Key: EditGroupBoot, Label: "启动与安全"},
 	{
+		// 网口的增删改在「网络管理」标签页（同一批数据的完整编辑入口），
+		// 编辑表单里不再重复一份——两处表单迟早一个改了另一个没改。
 		Key: EditGroupNetwork, Label: "网口", Planned: true,
-		Note: "F-2-05 的网口配置与详情页「网络管理」标签页是同一批数据，" +
-			"编辑能力仍在实现中。当前可在「网络管理」中查看。",
+		Note: "网口的增删改在详情页「网络管理」标签页操作，这里不重复提供表单。",
 	},
 	{
+		// PCI 直通是完整域（F-2-06，host/passthrough + vms/:id/passthrough），
+		// 管理入口在「硬件直通」页面：那里有 IOMMU 分组与设备表，编辑表单
+		// 里放不下也不该再放一份。
 		Key: EditGroupPassthru, Label: "硬件直通", Planned: true,
-		Note: "PCI 直通需要独立的设备表与宿主机的 IOMMU 分组信息（F-2-06），尚未建模。",
+		Note: "PCI 直通在「硬件直通」页面操作（管理员）：绑定设备后挂载到虚拟机，挂载要求关机。",
 	},
 	{Key: EditGroupAdvanced, Label: "高级设置"},
 }

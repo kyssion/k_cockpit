@@ -99,6 +99,23 @@ func (s *Service) Stats(
 func (s *Service) ConsoleFrame(
 	ctx context.Context, id int64, v authz.Viewer,
 ) (*agent.ConsoleFrame, error) {
+	return s.consoleFrame(ctx, id, v, "")
+}
+
+// ConsoleScreenshot 抓取一帧**全幅**控制台画面（用户主动截图）。
+//
+// 与预览帧是同一个节点操作的两档分辨率：预览卡要的是「看得出来在干嘛」，
+// 截图要的是「看得清具体内容」。分开成两个入口而不是加 query 参数，
+// 是因为两者的调用方语义不同（轮询 vs 一次性动作），后者还允许加下载语义。
+func (s *Service) ConsoleScreenshot(
+	ctx context.Context, id int64, v authz.Viewer,
+) (*agent.ConsoleFrame, error) {
+	return s.consoleFrame(ctx, id, v, "screenshot")
+}
+
+func (s *Service) consoleFrame(
+	ctx context.Context, id int64, v authz.Viewer, mode string,
+) (*agent.ConsoleFrame, error) {
 	vm, err := s.load(ctx, id, v)
 	if err != nil {
 		return nil, err
@@ -112,10 +129,15 @@ func (s *Service) ConsoleFrame(
 		return nil, api.ValidationFailed("该虚拟机没有显示设备，未开启控制台")
 	}
 
+	params := map[string]any{}
+	if mode != "" {
+		params["mode"] = mode
+	}
 	result, err := s.agent.Execute(ctx, agent.Operation{
 		Kind:   agent.OpVMConsoleFrame,
 		NodeID: vm.NodeID,
 		Target: vm.Name,
+		Params: params,
 	})
 	if err != nil {
 		return nil, api.Unavailable("节点不可达，无法获取控制台画面")

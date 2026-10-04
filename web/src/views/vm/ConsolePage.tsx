@@ -239,7 +239,7 @@ export function ConsolePage({ standalone = false }: { standalone?: boolean }) {
       {/* 快捷键工具条（G-31）。只在**已连接**时出现：断开状态下按任何键都
           只是空操作，而一个点了没反应的按钮比没有更糟。 */}
       {displayState === 'connected' && (
-        <ConsoleKeyToolbar rfb={rfbRef} />
+        <ConsoleKeyToolbar rfb={rfbRef} vmID={vmID} />
       )}
 
       {displayState === 'connecting' && (
@@ -577,9 +577,14 @@ const XK = {
  * down/up → 修饰键 up。不能只发「主键 down+up」——没有修饰键按下时，
  * 远端收到的就是一次普通的 Esc / Tab。
  */
-function ConsoleKeyToolbar({ rfb }: { rfb: React.RefObject<RFB | null> }) {
+function ConsoleKeyToolbar({ rfb, vmID }: { rfb: React.RefObject<RFB | null>; vmID: number }) {
   const [text, setText] = useState('')
   const [hint, setHint] = useState('')
+
+  const showHint = (msg: string, ms = 2000) => {
+    setHint(msg)
+    setTimeout(() => setHint(''), ms)
+  }
 
   const combo = (mod: { keysym: number; code: string }, key: { keysym: number; code: string }) => {
     const client = rfb.current
@@ -591,49 +596,62 @@ function ConsoleKeyToolbar({ rfb }: { rfb: React.RefObject<RFB | null> }) {
     client.sendKey(mod.keysym, mod.code, false)
   }
 
-  const sendText = () => {
-    const client = rfb.current
-    if (!client || !text) return
-    // 逐字符 down+up。code 用 noVNC 的键位名约定；映射不到的字符传
-    // "Unidentified"——节点不支持 QEMU 扩展键事件时它无影响，支持时
-    // 查不到扫描码也会自动退回纯 keysym 路径（noVNC 内部行为）。
-    for (const ch of text) {
+  /** sendString 把一段文本逐字符发到远端（回车单独映射），粘贴类操作共用。 */
+  const sendString = (client: RFB, value: string) => {
+    for (const ch of value.replace(/\r/g, '')) {
       if (ch === '\n') {
         client.sendKey(XK.enter, 'Enter')
         continue
       }
       client.sendKey(ch.charCodeAt(0), scancodeName(ch))
     }
+  }
+
+  const sendText = () => {
+    const client = rfb.current
+    if (!client || !text) return
+    // code 用 noVNC 的键位名约定；映射不到的字符传 "Unidentified"——节点
+    // 不支持 QEMU 扩展键事件时它无影响，支持时查不到扫描码也会自动退回
+    // 纯 keysym 路径（noVNC 内部行为）。
+    sendString(client, text)
     setText('')
-    setHint('已发送')
-    setTimeout(() => setHint(''), 2000)
+    showHint('已发送')
   }
 
   const pasteClipboard = async () => {
     try {
       const clip = await navigator.clipboard.readText()
       if (!clip) {
-        setHint('剪贴板是空的')
-        setTimeout(() => setHint(''), 2000)
+        showHint('剪贴板是空的')
         return
       }
       const client = rfb.current
       if (!client) return
-      for (const ch of clip.replace(/\r/g, '')) {
-        if (ch === '\n') {
-          client.sendKey(XK.enter, 'Enter')
-          continue
-        }
-        client.sendKey(ch.charCodeAt(0), scancodeName(ch))
-      }
-      setHint('已粘贴')
-      setTimeout(() => setHint(''), 2000)
+      sendString(client, clip)
+      showHint('已粘贴')
     } catch {
       // 剪贴板读取需要授权，失败时提示而不是静默。
-      setHint('无法读取剪贴板（需要浏览器授权），可改用输入框发送')
-      setTimeout(() => setHint(''), 3000)
+      showHint('无法读取剪贴板（需要浏览器授权），可改用输入框发送', 3000)
     }
   }
+
+  // 粘贴登录密码（G-30 联动）：控制台里登录来宾系统时，密码是最麻烦的一段
+  // 输入——从这里取**创建时保存的初始凭据**直接发送。读取在服务端有审计，
+  // 这里不再额外确认：能打开这台控制台的人本来就看得见画面。
+  const pasteCredential = useMutation({
+    mutationFn: () => vmApi.initialCredential(vmID),
+    onSuccess: (data) => {
+      const client = rfb.current
+      if (!data.has || !data.password) {
+        showHint('这台虚拟机没有记录初始密码', 3000)
+        return
+      }
+      if (!client) return
+      sendString(client, data.password)
+      showHint('已发送登录密码')
+    },
+    onError: (err) => showHint(describe(err), 3000),
+  })
 
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-card border border-line bg-surface px-3 py-2">
@@ -691,6 +709,15 @@ function ConsoleKeyToolbar({ rfb }: { rfb: React.RefObject<RFB | null> }) {
       </Button>
       <Button variant="secondary" size="sm" onClick={pasteClipboard}>
         粘贴剪贴板
+      </Button>
+      <Button
+        variant="secondary"
+        size="sm"
+        loading={pasteCredential.isPending}
+        title="发送创建这台虚拟机时保存的初始登录密码（读取会记入审计）"
+        onClick={() => pasteCredential.mutate()}
+      >
+        发送登录密码
       </Button>
       {hint && <span className="text-xs text-ink-3">{hint}</span>}
     </div>

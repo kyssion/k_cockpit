@@ -714,6 +714,10 @@ type deleteParams struct {
 	// Purge 为 true 表示这是回收站里的**彻底删除**：成功后物理删除记录
 	// 而不只是标记 present = false。
 	Purge bool `json:"purge,omitempty"`
+	// Force 为 true 表示走**兜底路径**（僵尸虚拟机）：跳过常规清理，节点
+	// 直接删除域定义并重启 libvirt。与 Purge 正交：强制的是节点侧删法，
+	// 物理删记录与否由调用入口（列表删除 / 回收站清空）决定。
+	Force bool `json:"force,omitempty"`
 }
 
 // DeleteExecutor 执行 vm.delete 任务。
@@ -745,11 +749,15 @@ func (e *DeleteExecutor) Run(ctx context.Context, t *model.Task) error {
 		return api.Internal()
 	}
 
+	params := map[string]any{"disk_action": p.DiskAction}
+	if p.Force {
+		params["force"] = true
+	}
 	result, err := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, agent.Operation{
 		Kind:   agent.OpVMDelete,
 		NodeID: *t.NodeID,
 		Target: p.VMName,
-		Params: map[string]any{"disk_action": p.DiskAction},
+		Params: params,
 	})
 	if err != nil {
 		return api.Unavailable("节点不可达，删除指令未送达")

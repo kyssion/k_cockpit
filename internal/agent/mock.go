@@ -54,6 +54,23 @@ func (m *MockClient) WithStageDelay(d time.Duration) *MockClient {
 // 内存态清零，用数据库投影注水，见 ADR-0011「后果」一节）。
 func (m *MockClient) SetPower(name, status string) { m.setPower(name, status) }
 
+// presetDomains 是节点上「面板之外」的存量域（演示数据）。
+//
+// 名字刻意带明显的前缀：与创建流程生成的名字（随机后缀）撞名的概率为
+// 零，扫出来的「未纳管」列表在任何演示路径下都稳定是这两台。
+func (m *MockClient) presetDomains() []DomainInfo {
+	return []DomainInfo{
+		{
+			Name: "legacy-ubuntu-1804", State: "running",
+			VCPU: 2, MemoryMB: 4096, DiskGB: 60, Autostart: false,
+		},
+		{
+			Name: "bare-win2022", State: "stopped",
+			VCPU: 4, MemoryMB: 8192, DiskGB: 120, Autostart: false,
+		},
+	}
+}
+
 // setPower 记录电源操作之后的静态结果状态。
 func (m *MockClient) setPower(name, status string) {
 	m.powerMu.Lock()
@@ -176,6 +193,17 @@ func stagePlan(op Operation) [][2]string {
 			{"domain_start", "定义并启动"},
 		}
 	case OpVMDelete:
+		// 兜底路径的步骤序列与常规删除**完全不同**：常规是「停机 → 拆盘 →
+		// 删盘 → 清理定义」，兜底是「拆定义 → 清残留 → 重启 libvirt」——
+		// 时间线上能看出走的是哪条路。
+		if boolParam(op.Params, "force") {
+			return [][2]string{
+				{"domain_undefine", "删除域定义"},
+				{"residue_clean", "清理磁盘与运行态残留"},
+				{"libvirt_restart", "重启 libvirt 服务"},
+				{"verify", "复核域已不存在"},
+			}
+		}
 		return [][2]string{
 			{"power_off", "停止虚拟机"},
 			{"disk_detach", "断开磁盘"},
@@ -1100,6 +1128,11 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 				SizeBytes: 22 << 30,
 			}}
 		}
+		if boolParam(op.Params, "force") {
+			// 兜底路径的结果说明：任务详情里能看出节点做了什么，而不是
+			// 一个与常规删除无差别的「成功」。
+			data["message"] = "已强制删除域定义并重启 libvirt（模拟）"
+		}
 
 	case OpVMDiskResize:
 		oldGB, _ := op.Params["old_gb"].(int)
@@ -1549,8 +1582,27 @@ func (m *MockClient) Execute(ctx context.Context, op Operation) (*Result, error)
 		// 像真实负载，而实际上什么都没发生，演示时会误导人。
 		data[StatsDataKey] = mockStats(op.Target)
 
+	case OpNodeDomains:
+		// 预置两台「面板之外」的存量域（ADR-0011 演示数据风格）：纳管流程
+		// 要有东西可扫、可登记，而用真实创建流程造出来的机器已经有投影、
+		// 不会出现在「未纳管」列表里。
+		//
+		// **不过滤已纳管的**：真实节点（virsh list --all）返回全部域，
+		// 「哪些有记录」是控制面按数据库过滤的事。mock 若在这里过滤，
+		// 重复纳管的冲突路径（库唯一索引 → 409）就永远走不到。
+		data[NodeDomainsDataKey] = m.presetDomains()
+
+	case OpVMAdopt:
+		data[VMAdoptDataKey] = VMAdoptInfo{UUID: mockUUID(op.NodeID, op.Target)}
+
 	case OpVMConsoleFrame:
-		data[FrameDataKey] = mockFrame(op.Target, 320, 180)
+		// 预览档是缩略图分辨率；screenshot 档给全幅——两档的区别要在
+		// 尺寸上看得出来，否则「截了一张图」与预览卡毫无差别。
+		if strParam(op.Params, "mode") == "screenshot" {
+			data[FrameDataKey] = mockFrame(op.Target, 1280, 800)
+		} else {
+			data[FrameDataKey] = mockFrame(op.Target, 320, 180)
+		}
 
 	case OpVMSnapshotCreate:
 		// 回显控制面给的标识，让调用方走完整的「写入 domain_name」路径。
@@ -2035,6 +2087,13 @@ func intParam(params map[string]any, key string) int {
 		return int(v)
 	}
 	return 0
+}
+
+// boolParam 读一个布尔参数；缺失时为 false。与 intParam 同一条理由：
+// JSON 反序列化后只有 bool 一种形状，但跨进程直传时可能出现其它类型。
+func boolParam(params map[string]any, key string) bool {
+	b, _ := params[key].(bool)
+	return b
 }
 
 func orString(v, fallback string) string {

@@ -38,8 +38,9 @@ var createGroups = []EditGroupInfo{
 	{Key: EditGroupBoot, Label: "系统配置"},
 	{Key: EditGroupAdvanced, Label: "高级选项"},
 	{
+		// 与编辑页同一条说明：直通的完整管理入口在「硬件直通」页面。
 		Key: EditGroupPassthru, Label: "硬件直通", Planned: true,
-		Note: "PCI 直通需要设备表与宿主机的 IOMMU 分组信息（F-2-06），尚未建模。",
+		Note: "PCI 直通在「硬件直通」页面操作（管理员）：绑定设备后挂载到虚拟机，挂载要求关机。",
 	},
 }
 

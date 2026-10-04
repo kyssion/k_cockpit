@@ -1134,6 +1134,98 @@ func (s *Service) Delete(
 	return t, nil
 }
 
+// ForceDelete 受理一次**强制删除**（僵尸虚拟机的兜底路径）。
+//
+// 与 Delete 的差别只有一处、但正是那一处定义了这个接口：**不探测状态**。
+// 僵尸机的表现就是「状态查不出来」（域定义损坏、libvirt 拒绝应答），把
+// 「先关机再删」套在它身上等于宣布永远删不掉。其余校验（锁、在途任务、
+// 节点可用）全部保留——那些不是「确认机器状态」，而是控制面自己的账。
+//
+// 节点侧会删除域定义并**重启 libvirt**，同节点其它虚拟机经历一次服务
+// 重启，因此接口层要求管理员与二次验证。
+func (s *Service) ForceDelete(
+	ctx context.Context, id int64, req DeleteRequest, v authz.Viewer, operatorName, clientIP string,
+) (*model.Task, error) {
+	switch req.DiskAction {
+	case DiskActionDelete, DiskActionKeep, DiskActionTransfer:
+	default:
+		return nil, api.InvalidParameter(
+			"必须选择磁盘处理方式：delete（连同磁盘删除）、keep（保留磁盘）或 transfer（转移到我的存储）")
+	}
+
+	vm, err := s.load(ctx, id, v)
+	if err != nil {
+		return nil, err
+	}
+	if req.DiskAction == DiskActionTransfer && vm.OwnerID == nil {
+		return nil, api.ValidationFailed("该虚拟机没有归属用户，无法把磁盘转移到「我的存储」，请选择保留或删除")
+	}
+
+	if err := s.ensureNodeUsable(ctx, vm.NodeID); err != nil {
+		return nil, err
+	}
+
+	// 锁仍然拦：锁是「别动这台机器」的明确标记，强制删除解不了它——
+	// 解锁是独立动作（本身需要二次验证），先解锁再强删的路径让两次决定
+	// 各自留痕。
+	if err := s.ensureNotLocked(ctx, vm); err != nil {
+		return nil, err
+	}
+
+	active, err := s.hasActiveTask(ctx, vm.ID)
+	if err != nil {
+		return nil, err
+	}
+	if active {
+		return nil, api.Conflict("该虚拟机有正在执行的任务，请先等待完成或取消")
+	}
+
+	params := deleteParams{
+		VMID:       vm.ID,
+		VMName:     vm.Name,
+		DiskAction: req.DiskAction,
+		Force:      true,
+		// 探测不到状态是使用这条路径的原因，记下来而不是留空——
+		// 事后看任务参数时，「为什么当时走了强制」应当有答案。
+		ObservedStatus: model.VMStatusUnknown,
+	}
+
+	now := time.Now()
+	if err := s.db.WithContext(ctx).Model(&model.VM{}).
+		Where("id = ?", vm.ID).Update("deleted_at", now).Error; err != nil {
+		log.Printf("[vm] 记录删除时刻失败 id=%d: %v", vm.ID, err)
+	}
+
+	t, err := s.queue.Enqueue(ctx, task.Spec{
+		Type:         model.TaskVMDelete,
+		NodeID:       vm.NodeID,
+		ResourceType: "vm",
+		ResourceID:   vm.ID,
+		ResourceName: vm.Name,
+		OwnerID:      ownerOf(vm, v),
+		CreatedBy:    v.UserID,
+		Params:       params,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	s.record(ctx, audit.Entry{
+		OperatorID:   v.UserID,
+		OperatorName: operatorName,
+		NodeID:       vm.NodeID,
+		ResourceType: "vm",
+		ResourceID:   vm.ID,
+		ResourceName: vm.Name,
+		Action:       "vm.force_delete.request",
+		Params:       params,
+		AfterState:   map[string]any{"task_id": t.ID, "disk_action": req.DiskAction},
+		Success:      true,
+		ClientIP:     clientIP,
+	})
+	return t, nil
+}
+
 // probeStatus 向节点**实时探测**虚拟机的真实运行态。
 //
 // 投影不可用于业务判定（R-002），因此每个写操作受理前都要走这一趟。

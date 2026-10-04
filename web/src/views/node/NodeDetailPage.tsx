@@ -15,6 +15,7 @@ import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 
 import { ApiError, NetworkError } from '@/api/client'
+import { useIsAdmin } from '@/stores/session'
 import { networkApi, CAPABILITY_STATE_LABEL, CAPABILITY_STATE_TONE } from '@/api/network'
 import { nodeApi, type NodeView } from '@/api/node'
 import { storageApi, POOL_STATUS_LABEL, POOL_STATUS_TONE } from '@/api/storage'
@@ -552,33 +553,125 @@ function VmsTab({ nodeID }: { nodeID: number }) {
   if (vms.isPending) return <PageLoading />
 
   const items = vms.data?.items ?? []
-  if (items.length === 0) {
-    return <EmptyState title="该节点上还没有虚拟机" description="在虚拟机页新建并选择这个节点。" />
-  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <section className="rounded-card border border-line bg-surface">
+        {items.length === 0 ? (
+          <div className="px-4 py-6">
+            <EmptyState title="该节点上还没有虚拟机" description="在虚拟机页新建并选择这个节点。" />
+          </div>
+        ) : (
+          <ul className="flex flex-col">
+            {items.map((v) => (
+              <li
+                key={v.id}
+                className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5 last:border-b-0"
+              >
+                <Link
+                  to={`/vm/${v.id}`}
+                  className="font-medium text-ink hover:text-brand hover:underline"
+                >
+                  {v.name}
+                </Link>
+                <span className="flex items-center gap-3 text-sm text-ink-3">
+                  <span className="kc-nums">
+                    {v.vcpu} 核 · {formatBytes(v.memory_mb * 1024 * 1024)}
+                  </span>
+                  <span>{v.ip_summary || '—'}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <UnmanagedSection nodeID={nodeID} />
+    </div>
+  )
+}
+
+/**
+ * UnmanagedSection 存量虚拟机纳管（仅管理员）。
+ *
+ * 节点上可能存在面板之外创建的 libvirt 域——它们占用真实资源却没有记录，
+ * 配额与审计都对不上账。这里提供「扫描 → 纳管」：纳管只补记录，不改动
+ * 域本身（不关机、不迁盘），之后与普通虚拟机走完全相同的路径。
+ */
+function UnmanagedSection({ nodeID }: { nodeID: number }) {
+  const queryClient = useQueryClient()
+  const isAdmin = useIsAdmin()
+  const [error, setError] = useState('')
+  const [adopting, setAdopting] = useState<string | null>(null)
+
+  const unmanaged = useQuery({
+    queryKey: ['node', nodeID, 'unmanaged-vms'],
+    queryFn: () => vmApi.unmanagedDomains(nodeID),
+    enabled: isAdmin,
+  })
+
+  const adopt = useMutation({
+    mutationFn: (domain: string) => vmApi.adoptDomain(nodeID, { domain }),
+    onSuccess: () => {
+      setError('')
+      setAdopting(null)
+      void queryClient.invalidateQueries({ queryKey: ['node', nodeID, 'unmanaged-vms'] })
+      void queryClient.invalidateQueries({ queryKey: ['vms'] })
+    },
+    onError: (err) => setError(err instanceof ApiError || err instanceof NetworkError ? err.message : '纳管失败'),
+  })
+
+  // 非管理员不渲染整块：扫不了也管不了，一个永远 403 的入口只有误导。
+  if (!isAdmin) return null
+
+  const items = unmanaged.data?.items ?? []
 
   return (
     <section className="rounded-card border border-line bg-surface">
-      <ul className="flex flex-col">
-        {items.map((v) => (
-          <li
-            key={v.id}
-            className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5 last:border-b-0"
-          >
-            <Link
-              to={`/vm/${v.id}`}
-              className="font-medium text-ink hover:text-brand hover:underline"
+      <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
+        <h2 className="text-sm font-medium text-ink-2">存量虚拟机（未纳管）</h2>
+        {unmanaged.isFetching && <span className="text-xs text-ink-3">扫描中…</span>}
+      </div>
+
+      {items.length === 0 ? (
+        <p className="px-4 py-3 text-sm text-ink-3">
+          节点上没有面板之外的虚拟机。每次进入本页签都会重新扫描。
+        </p>
+      ) : (
+        <ul className="flex flex-col">
+          {items.map((d) => (
+            <li
+              key={d.name}
+              className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5 last:border-b-0"
             >
-              {v.name}
-            </Link>
-            <span className="flex items-center gap-3 text-sm text-ink-3">
-              <span className="kc-nums">
-                {v.vcpu} 核 · {formatBytes(v.memory_mb * 1024 * 1024)}
-              </span>
-              <span>{v.ip_summary || '—'}</span>
-            </span>
-          </li>
-        ))}
-      </ul>
+              <div className="flex flex-col">
+                <span className="font-medium text-ink">{d.name}</span>
+                <span className="text-sm text-ink-3">
+                  {d.state} · {d.vcpu} 核 · {formatBytes(d.memory_mb * 1024 * 1024)} ·{' '}
+                  {d.disk_gb} GB 磁盘
+                </span>
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                loading={adopt.isPending && adopting === d.name}
+                onClick={() => {
+                  setAdopting(d.name)
+                  adopt.mutate(d.name)
+                }}
+              >
+                纳管
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {error && (
+        <p role="alert" className="border-t border-line px-4 py-2 text-sm text-danger">
+          {error}
+        </p>
+      )}
     </section>
   )
 }

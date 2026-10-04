@@ -36,7 +36,13 @@ const (
 	OpVMPoweroff OpKind = "vm.poweroff"
 	OpVMReboot   OpKind = "vm.reboot"
 	// OpVMReset 是硬重置，仅对暂停态可用（f-2-01 R-007）。
-	OpVMReset  OpKind = "vm.reset"
+	OpVMReset OpKind = "vm.reset"
+	// OpVMDelete 删除虚拟机。
+	//
+	// 参数 `force` 为 true 时走**兜底路径**（僵尸虚拟机）：跳过域内数据
+	// 的常规清理，直接删除域定义并重启宿主机上的 libvirt 服务。适用场景是
+	// 域定义已损坏、常规删除失败——那时唯一能做的就是把定义拆掉重来。
+	// 代价是同节点上的其它虚拟机会经历一次 libvirt 重启。
 	OpVMDelete OpKind = "vm.delete"
 
 	// 快照操作（F-2-07）。三个动作**都是耗时操作**：创建与恢复要复制或
@@ -92,6 +98,9 @@ const (
 	//
 	// 与 OpVMStatus 一样是只读的，但它**较慢**（要等 hypervisor 出一帧），
 	// 因此界面按固定间隔（20s）轮询，而不是随页面刷新。
+	//
+	// 参数 `mode` 取 `screenshot` 时返回**全幅截帧**（用户主动截图的场景，
+	// 预览卡的缩略图分辨率不够）；缺省为预览档。
 	OpVMConsoleFrame OpKind = "vm.console.frame"
 )
 

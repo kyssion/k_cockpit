@@ -162,11 +162,25 @@ func (h *Console) ConnectionFile(ctx context.Context, c *app.RequestContext) {
 
 // Screenshot 返回控制台截帧（API-032）。
 //
-// 当前**尚未实现**：截帧需要 agent 侧的图形导出能力，而这一能力还没有
-// 契约。这里返回明确的 503 而不是一张占位图——占位图会让前端以为通路
-// 已经打通，把一个「还没做」误认为「做完了但有 bug」。
-func (h *Console) Screenshot(_ context.Context, c *app.RequestContext) {
-	api.Fail(c, api.Unavailable("节点尚未提供控制台截帧能力"))
+// 与 API-069（预览帧）是同一个节点操作的两档：预览卡轮询缩略图，这里按需
+// 返回全幅画面。响应语义与预览帧一致——直接回 image/png 字节，no-store
+// （画面是「此刻的样子」，缓存住就成了旧照片）。
+func (h *Console) Screenshot(ctx context.Context, c *app.RequestContext) {
+	id, err := api.NamedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	frame, err := h.svc.ConsoleScreenshot(ctx, id, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	c.Header("Cache-Control", "no-store")
+	c.SetContentType(frame.MIME)
+	c.Response.SetBody(frame.Data)
 }
 
 // WS 建立控制台 WebSocket 连接（API-033）。

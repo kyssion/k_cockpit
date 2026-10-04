@@ -95,6 +95,14 @@ const (
 	// 它会让全部节点停止受理创建与电源操作，勾选关机时还会批量关停运行中
 	// 的虚拟机——影响面是整个站点，属于「影响可达性」一类。
 	ActionSiteMaintenanceEnter Action = "site.maintenance.enter"
+
+	// 强制删除僵尸虚拟机（f-2-01 的兜底路径）。
+	//
+	// 它**跳过全部状态校验**（探测不到状态正是使用它的原因），节点侧直接
+	// 删除域定义并重启 libvirt——同节点上其它虚拟机会经历一次 libvirt 重启。
+	// 普通删除被状态卡住时用户应当先解决状态；走这条路意味着接受「校验已经
+	// 无法执行」的事实，必须是一次明确的决定。
+	ActionVMForceDelete Action = "vm.force_delete"
 )
 
 // Entry 是清单中的一条，用于对外下发（API-034）。
@@ -201,6 +209,11 @@ var policy = []Entry{
 		Action: ActionSiteMaintenanceEnter,
 		Label:  "进入站点维护",
 		Reason: "全部节点将停止受理创建与电源操作；勾选关机时会批量关停运行中的虚拟机",
+	},
+	{
+		Action: ActionVMForceDelete,
+		Label:  "强制删除虚拟机",
+		Reason: "跳过状态校验直接删除域定义并重启节点上的 libvirt，同节点其它虚拟机会经历一次服务重启",
 	},
 }
 

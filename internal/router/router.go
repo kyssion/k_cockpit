@@ -386,6 +386,11 @@ func Register(h *server.Hertz, deps Deps) {
 		v1.GET("/nodes/:id/network", requireAuth, adminOnly, networkHandler.Status)
 		v1.GET("/nodes/:id/networks", requireAuth, adminOnly, networkHandler.Networks)
 
+		// 存量虚拟机纳管（节点接入的后续动作）：扫描面板之外的域并把
+		// 选中的登记进来。仅管理员；纳管只补记录、不动域，无需二次验证。
+		v1.GET("/nodes/:id/unmanaged-vms", requireAuth, adminOnly, vmHandler.UnmanagedDomains)
+		v1.POST("/nodes/:id/adopt-vm", requireAuth, adminOnly, vmHandler.AdoptDomain)
+
 		// 虚拟交换机（F-4-02）。写操作走任务队列——建网桥是宿主机上的实际
 		// 操作，接口不同步等待；记录由执行器在节点成功后写入。
 		//
@@ -635,7 +640,11 @@ func Register(h *server.Hertz, deps Deps) {
 		// 自检与探测的区别：探测回答「有没有装」，自检回答「我们配的东西
 		// 现在还在不在」——**面板显示「已启用」而节点上早就没了**，那种
 		// 状态不会以任何形式报警，自检正是去找它。
-		v1.GET("/network/client-ip", requireAuth, adminOnly, platformCheckHandler.ClientIP)
+		//
+		// client-ip 不设 adminOnly：它返回的是**请求者自己的地址**，与任何
+		// 外部「查本机 IP」服务等价；端口转发的来源白名单（用户功能）需要
+		// 它做快速填充，限成管理员等于让普通用户手抄地址。
+		v1.GET("/network/client-ip", requireAuth, platformCheckHandler.ClientIP)
 		v1.GET("/ovs/status", requireAuth, adminOnly, platformCheckHandler.OVSStatus)
 		v1.GET("/ovs/ports", requireAuth, adminOnly, platformCheckHandler.OVSPorts)
 		v1.GET("/ovs/leases", requireAuth, adminOnly, platformCheckHandler.Leases)
@@ -971,6 +980,10 @@ func Register(h *server.Hertz, deps Deps) {
 		// 任务队列按资源锁串行（f-2-01 R-005）。
 		v1.POST("/vms/:id/power-actions", requireAuth, vmHandler.Power)
 		v1.DELETE("/vms/:id", requireAuth, vmHandler.Delete)
+		// 强制删除（僵尸机兜底）：不探测状态、节点侧删域定义并重启
+		// libvirt。管理员 + 二次验证（handler 内）双守卫——影响面不止
+		// 这一台机器。
+		v1.POST("/vms/:id/force-delete", requireAuth, adminOnly, vmHandler.ForceDelete)
 		// 分配归属（F-1-07）：把已有虚拟机指派给某个用户。仅管理员。
 		v1.PUT("/vms/:id/owner", requireAuth, vmHandler.AssignOwner)
 

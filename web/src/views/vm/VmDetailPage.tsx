@@ -16,6 +16,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 
+import { useIsAdmin } from '@/stores/session'
 import { useTabStore } from '@/stores/tabs'
 import { TagEditor } from './TagEditor'
 
@@ -56,6 +57,7 @@ import {
   type VMSchedule,
 } from '@/api/schedule'
 import { isActive, taskApi, type TaskView } from '@/api/task'
+import { platformCheckApi } from '@/api/platformcheck'
 import {
   NIC_MODEL_OPTIONS,
   netApi,
@@ -1958,13 +1960,21 @@ function PortForwardModal({
           onChange={(e) => setTargetPort(e.target.value)}
         />
 
-        <Input
-          label="允许的来源（可选）"
-          value={allowed}
-          placeholder="留空表示不限制"
-          onChange={(e) => setAllowed(e.target.value)}
-          hint="留空意味着任何地址都能访问这个端口，请确认这是预期的。"
-        />
+        <div className="flex flex-col gap-1">
+          <span className="text-base text-ink">允许的来源（可选）</span>
+          <div className="flex gap-2">
+            <input
+              value={allowed}
+              placeholder="留空表示不限制"
+              onChange={(e) => setAllowed(e.target.value)}
+              className="h-9 flex-1 rounded-control border border-line-strong bg-sunken px-2.5 text-base text-ink placeholder:text-ink-3 focus:outline-none focus-visible:border-brand"
+            />
+            <FillMyIP onFill={(ip) => setAllowed((cur) => (cur.trim() === '' ? ip : cur + ',' + ip))} />
+          </div>
+          <span className="text-sm text-ink-3">
+            留空意味着任何地址都能访问这个端口，请确认这是预期的。多个来源用逗号分隔。
+          </span>
+        </div>
 
         {error && (
           <p role="alert" className="rounded-control bg-danger/10 px-3 py-2 text-sm text-danger">
@@ -1973,6 +1983,47 @@ function PortForwardModal({
         )}
       </div>
     </Modal>
+  )
+}
+
+/**
+ * FillMyIP 把「面板看到的我的地址」填进来源白名单。
+ *
+ * 为什么不直接读 X-Forwarded-For 或让用户自己查：白名单比对的口径是
+ * **面板看到的地址**，自己查到的出口地址很可能不一样（差一层 NAT 就是
+ * 两个世界）。接口返回的 note 里若提示了反向代理，会一并展示——那种
+ * 情况下两个地址都该让用户看见再选。
+ */
+function FillMyIP({ onFill }: { onFill: (ip: string) => void }) {
+  const [note, setNote] = useState('')
+  const [error, setError] = useState('')
+
+  const fetchIP = useMutation({
+    mutationFn: () => platformCheckApi.clientIP(),
+    onSuccess: (data) => {
+      setError('')
+      onFill(data.client_ip)
+      setNote(data.note ?? '')
+    },
+    onError: (err) => {
+      setNote('')
+      setError(err instanceof ApiError || err instanceof NetworkError ? err.message : '获取地址失败')
+    },
+  })
+
+  return (
+    <div className="flex flex-col gap-1">
+      <Button
+        variant="secondary"
+        size="sm"
+        loading={fetchIP.isPending}
+        onClick={() => fetchIP.mutate()}
+      >
+        填入我的 IP
+      </Button>
+      {note && <span className="max-w-72 text-xs text-warning">{note}</span>}
+      {error && <span className="max-w-72 text-xs text-danger">{error}</span>}
+    </div>
   )
 }
 
@@ -1996,6 +2047,11 @@ function AppliedBadge({ applied, at }: { applied: boolean; at?: string }) {
 
 /** ConsoleTab 提供控制台入口与状态说明。 */
 function ConsoleTab({ vmID }: { vmID: number }) {
+  // 截图（API-032）：手动抓一张全幅画面。stamp 用于强制 <img> 重取——
+  // 服务端 no-store，但同 URL 的 img 元素不会自动重新请求。
+  const [shotOpen, setShotOpen] = useState(false)
+  const [stamp, setStamp] = useState(0)
+
   return (
     <section className="rounded-card border border-line">
       <h2 className="border-b border-line px-4 py-2.5 text-sm font-medium text-ink-2">
@@ -2005,16 +2061,53 @@ function ConsoleTab({ vmID }: { vmID: number }) {
         <p className="text-base text-ink-2">
           控制台流量经面板代理，不直连宿主机端口。
         </p>
-        <div>
+        <div className="flex gap-2">
           <Link to={`/vm/${vmID}/console`}>
             <Button size="sm">打开控制台</Button>
           </Link>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              setStamp(Date.now())
+              setShotOpen(true)
+            }}
+          >
+            截取画面
+          </Button>
         </div>
         <p className="text-sm text-ink-3">
           控制台的开关、密码与「对外暴露」在控制台页面的「控制台设置」中配置；
           这里提供进入控制台的入口。
         </p>
       </div>
+
+      <Modal
+        open={shotOpen}
+        title="控制台截图"
+        description="截图是抓取那一刻的画面；要持续操作请打开控制台。"
+        onClose={() => setShotOpen(false)}
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setStamp(Date.now())}
+            >
+              重新截取
+            </Button>
+            <Button size="sm" onClick={() => setShotOpen(false)}>
+              关闭
+            </Button>
+          </>
+        }
+      >
+        <img
+          src={`/api/v1/vms/${vmID}/console/screenshot?t=${stamp}`}
+          alt="控制台画面截图"
+          className="w-full rounded-control border border-line bg-console"
+        />
+      </Modal>
     </section>
   )
 }
@@ -3204,11 +3297,20 @@ function DeleteVmModal({
 }) {
   const [diskAction, setDiskAction] = useState<DiskAction | ''>('')
   const [error, setError] = useState('')
+  // 强制删除（兜底）：勾上之后提交走 force-delete。只有管理员能勾——
+  // 后端同样只放管理员，这里先藏掉是为了一般用户不必看到一个永远用不上
+  // 的危险选项。
+  const [force, setForce] = useState(false)
+  const isAdmin = useIsAdmin()
 
   const remove = useMutation({
-    mutationFn: () => vmApi.remove(vmID, diskAction as DiskAction),
+    mutationFn: () =>
+      force
+        ? vmApi.forceRemove(vmID, diskAction as DiskAction)
+        : vmApi.remove(vmID, diskAction as DiskAction),
     onSuccess: () => {
       setDiskAction('')
+      setForce(false)
       setError('')
       onDeleted()
     },
@@ -3217,6 +3319,7 @@ function DeleteVmModal({
 
   function handleClose() {
     setDiskAction('')
+    setForce(false)
     setError('')
     onClose()
   }
@@ -3297,6 +3400,25 @@ function DeleteVmModal({
             </span>
           </span>
         </label>
+
+        {isAdmin && (
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-control border border-warning/40 bg-warning/5 px-3 py-2.5">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={force}
+              onChange={(e) => setForce(e.target.checked)}
+            />
+            <span>
+              <span className="block text-base text-warning">强制删除（兜底）</span>
+              <span className="block text-sm text-ink-3">
+                状态探测不出、常规删除失败的机器才需要勾选：节点会跳过常规清理，
+                直接删除域定义并重启 libvirt——同节点上其它虚拟机会经历一次服务重启。
+                需要二次验证。
+              </span>
+            </span>
+          </label>
+        )}
 
         {error && (
           <p role="alert" className="rounded-control bg-danger/10 px-3 py-2 text-sm text-danger">

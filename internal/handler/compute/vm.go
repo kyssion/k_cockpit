@@ -68,6 +68,61 @@ func (h *VM) Get(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, view)
 }
 
+// UnmanagedDomains 列出节点上尚未纳管的存量域。
+//
+// 仅管理员（路由层）：这份列表的语义是「节点上还有什么是我不知道的」，
+// 对普通用户没有意义——他既扫不了也管不了别的机器。
+func (h *VM) UnmanagedDomains(ctx context.Context, c *app.RequestContext) {
+	nodeID, err := api.NamedPathID(c, "id", "节点 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	items, err := h.svc.UnmanagedDomains(ctx, nodeID, authz.ViewerOf(c))
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, map[string]any{"items": items})
+}
+
+// AdoptDomain 纳管节点上的一个存量域（补记录，不改动域本身）。
+//
+// 仅管理员。纳管不改变虚拟化层的任何东西，因此不设二次验证——它不像
+// 删除或重装那样有不可逆后果，出错的补救就是把记录删掉重来。
+func (h *VM) AdoptDomain(ctx context.Context, c *app.RequestContext) {
+	nodeID, err := api.NamedPathID(c, "id", "节点 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	var req struct {
+		Domain  string  `json:"domain"`
+		OwnerID *int64  `json:"owner_id"`
+		Remark  *string `json:"remark"`
+	}
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	view, err := h.svc.AdoptDomain(ctx, nodeID, vm.AdoptRequest{
+		Domain:  req.Domain,
+		OwnerID: req.OwnerID,
+		Remark:  req.Remark,
+	}, authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+	api.OK(c, view)
+}
+
 // InitialCredential 返回虚拟机的登录凭据（G-30）。
 //
 // 有归属权限即可读取（详见 service 层的三道边界说明）；响应里的
@@ -437,6 +492,44 @@ func (h *VM) Delete(ctx context.Context, c *app.RequestContext) {
 	info := auth.ClientInfoOf(c)
 
 	t, err := h.svc.Delete(ctx, id, vm.DeleteRequest{DiskAction: req.DiskAction},
+		authz.ViewerOf(c), user.Username, info.IP)
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	api.OK(c, map[string]any{
+		"task_id": t.ID,
+		"status":  t.Status,
+	})
+}
+
+// ForceDelete 强制删除虚拟机（僵尸机的兜底路径）。
+//
+// 与 Delete 的差别是不探测状态：域定义损坏、libvirt 拒绝应答的机器只有
+// 这条路可走。代价由两层守卫兜住——仅管理员可调（路由层），且必须完成
+// 二次验证：节点会重启 libvirt，同节点其它虚拟机随之受影响。
+func (h *VM) ForceDelete(ctx context.Context, c *app.RequestContext) {
+	if !h.risk.Require(c, risk.ActionVMForceDelete) {
+		return
+	}
+
+	id, err := api.NamedPathID(c, "id", "虚拟机 ID")
+	if err != nil {
+		api.Fail(c, err)
+		return
+	}
+
+	var req deleteVMRequest
+	if err := c.Bind(&req); err != nil {
+		api.Fail(c, api.InvalidParameter("请求参数不合法"))
+		return
+	}
+
+	user := auth.CurrentUser(c)
+	info := auth.ClientInfoOf(c)
+
+	t, err := h.svc.ForceDelete(ctx, id, vm.DeleteRequest{DiskAction: req.DiskAction},
 		authz.ViewerOf(c), user.Username, info.IP)
 	if err != nil {
 		api.Fail(c, err)

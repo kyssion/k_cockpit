@@ -12,6 +12,16 @@ import type { TaskStatus } from './task'
 
 export type VmStatus = 'running' | 'stopped' | 'paused' | 'suspended' | 'error' | 'unknown'
 
+/** 节点上发现、面板尚无记录的存量域（纳管入口用）。 */
+export interface UnmanagedDomain {
+  name: string
+  state: VmStatus
+  vcpu: number
+  memory_mb: number
+  disk_gb: number
+  autostart: boolean
+}
+
 export interface VmView {
   id: number
   node_id: number
@@ -531,6 +541,23 @@ export const vmApi = {
   // 走 query 更稳妥（服务端两种都接受）。
   remove: (id: number, diskAction: DiskAction) =>
     del<TaskRef>(`/api/v1/vms/${id}?disk_action=${diskAction}`),
+
+  /**
+   * 强制删除（僵尸机兜底）：跳过状态探测，节点直接删域定义并重启 libvirt。
+   * 仅管理员；需要二次验证（428 由请求层统一处理）。
+   */
+  forceRemove: (id: number, diskAction: DiskAction) =>
+    post<TaskRef>(`/api/v1/vms/${id}/force-delete`, { disk_action: diskAction }),
+
+  /**
+   * 存量虚拟机纳管：扫描节点上面板之外的 libvirt 域（仅管理员）。
+   */
+  unmanagedDomains: (nodeID: number) =>
+    get<{ items: UnmanagedDomain[] }>(`/api/v1/nodes/${nodeID}/unmanaged-vms`),
+
+  /** 纳管一个存量域：只补记录，不改动域本身（仅管理员）。 */
+  adoptDomain: (nodeID: number, input: { domain: string; owner_id?: number; remark?: string }) =>
+    post<VmView>(`/api/v1/nodes/${nodeID}/adopt-vm`, input),
 
   /**
    * 批量操作（F-2-01）：电源与删除。
