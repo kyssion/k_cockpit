@@ -9,6 +9,28 @@ import (
 	"testing"
 )
 
+// routerSources 拼接 internal/router 下全部非测试 Go 文件。
+//
+// 路由按域拆在 routes_*.go 里之后，对账必须覆盖整个包：只读 router.go
+// 会把域文件里的 handler 构造与路由引用全部漏掉，满屏假阳性。
+func routerSources(t *testing.T) string {
+	t.Helper()
+	root := repoRoot(t)
+	files, err := filepath.Glob(filepath.Join(root, "internal/router/*.go"))
+	if err != nil {
+		t.Fatalf("列 router 文件失败: %v", err)
+	}
+	var sb strings.Builder
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		sb.WriteString(readFile(t, f))
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
 // TestEveryHandlerMethodIsRouted 断言**每个 handler 的公开方法都有一条路由**。
 //
 // 这道检查来自一个真实的疏漏：`52e6592`（publicip 与端口转发的批量操作）
@@ -19,11 +41,10 @@ import (
 // 测试也过了（它们直接调服务层，不经过路由），唯一的缺口在两处之间。而
 // 编译不会报错——Go 里一个没被引用的方法完全合法。
 //
-// 因此这里做一次静态比对：从 router.go 里取出所有「已注册的 handler」，
+// 因此这里做一次静态比对：从 router 包里取出所有「已注册的 handler」，
 // 再从 handler 包里取出它们的公开方法，逐一对账。
 func TestEveryHandlerMethodIsRouted(t *testing.T) {
-	root := repoRoot(t)
-	routerSrc := readFile(t, filepath.Join(root, "internal/router/router.go"))
+	routerSrc := routerSources(t)
 
 	// 1) 已注册的 handler：变量名 → 类型名。
 	//    `publicIPHandler := handler.NewPublicIP(deps.PublicIP)` → publicIPHandler / PublicIP
@@ -33,7 +54,9 @@ func TestEveryHandlerMethodIsRouted(t *testing.T) {
 	// 于是每一个方法都会被报成「没有路由」。这个错误的表现是**满屏假阳性**，
 	// 而假阳性会让人把整道检查当成没用，然后把它关掉。
 	// handler 按域拆包（ADR-0010）后，构造器前缀是各域包名
-	//（platform / compute / network / storage / ops / nodehandler）。
+	//（platform / compute / network / storage / ops / nodehandler）；
+	// 路由按域拆文件（routes_*.go）后，构造散布在多个文件里，因此扫描
+	// 整个 router 包。
 	regRe := regexp.MustCompile(`(\w+Handler)\s*:=\s*\w+\.New(\w+)\(`)
 	registered := map[string]string{} // 变量名 → 类型名
 	for _, m := range regRe.FindAllStringSubmatch(routerSrc, -1) {
@@ -56,7 +79,7 @@ func TestEveryHandlerMethodIsRouted(t *testing.T) {
 	// 3) handler 包里的公开方法：类型名 → 方法集合。
 	methodRe := regexp.MustCompile(`func \(\w+ \*(\w+)\) ([A-Z]\w*)\(`)
 	methods := map[string]map[string]bool{}
-	handlerFiles, err := filepath.Glob(filepath.Join(root, "internal/handler/*/*.go"))
+	handlerFiles, err := filepath.Glob(filepath.Join(repoRoot(t), "internal/handler/*/*.go"))
 	if err != nil {
 		t.Fatalf("列 handler 文件失败: %v", err)
 	}
@@ -116,8 +139,7 @@ func TestEveryHandlerMethodIsRouted(t *testing.T) {
 // 与上一个测试互补：那个查「方法没接到路由」，这个查「handler 整个没被用」
 // ——比如声明了 `xxxHandler := handler.NewXxx(...)` 却一个路由都没挂。
 func TestRegisteredHandlersAreWired(t *testing.T) {
-	root := repoRoot(t)
-	src := readFile(t, filepath.Join(root, "internal/router/router.go"))
+	src := routerSources(t)
 
 	regRe := regexp.MustCompile(`(\w+Handler)\s*:=\s*\w+\.New(\w+)\(`)
 	useRe := regexp.MustCompile(`(\w+Handler)\.`)
