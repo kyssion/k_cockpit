@@ -13,6 +13,7 @@ import (
 	"k_cockpit/internal/devdata"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/config"
+	noderepo "k_cockpit/internal/repository/node"
 	"k_cockpit/internal/service/node"
 )
 
@@ -37,7 +38,7 @@ func (a *app) setupAgent() { // 装配 agent 通道。gRPC 双向流实现尚未
 		log.Fatalf("AGENT_TRANSPORT=%s 尚未实现（当前仅支持 %s）",
 			a.cfg.Agent.Transport, config.AgentTransportMock)
 	}
-	a.node.nodeSvc = node.NewService(a.db, a.mockAgent, a.recorder, a.mockAgent)
+	a.node.nodeSvc = node.NewService(noderepo.NewRepo(a.db), a.mockAgent, a.recorder, a.mockAgent)
 }
 
 // seedDevData 预置开发环境的演示数据（mock 运输层专用，见 internal/devdata）：

@@ -7,6 +7,7 @@ import (
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/audit"
+	noderepo "k_cockpit/internal/repository/node"
 	"k_cockpit/internal/service/node"
 )
 
@@ -37,7 +38,7 @@ func TestStatsRejectsMissingNode(t *testing.T) {
 func TestStatsWithoutClientSaysUnsupported(t *testing.T) {
 	db := newStatsDB(t)
 	// 不传 agent 客户端。
-	svc := node.NewService(db, &fakeRuntime{}, audit.NewRecorder(db), nil)
+	svc := node.NewService(noderepo.NewRepo(db), &fakeRuntime{}, audit.NewRecorder(db), nil)
 	ctx := context.Background()
 
 	row := model.Node{Name: "node-e", EnrollState: model.NodeEnrollEnrolled}
@@ -51,7 +52,7 @@ func TestStatsWithoutClientSaysUnsupported(t *testing.T) {
 
 func TestStatsCountsVMsFromControlPlane(t *testing.T) {
 	db := newStatsDB(t)
-	svc := node.NewService(db, &fakeRuntime{}, audit.NewRecorder(db), agent.NewMockClient())
+	svc := node.NewService(noderepo.NewRepo(db), &fakeRuntime{}, audit.NewRecorder(db), agent.NewMockClient())
 	ctx := context.Background()
 
 	nodeRow := model.Node{Name: "node-s", EnrollState: model.NodeEnrollEnrolled}

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"k_cockpit/internal/agent"
-	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 )
 
@@ -50,8 +49,7 @@ type StatsView struct {
 // 存下来只会在下一次读取时给出一个过期的答案——真正需要历史的场景
 // （容量趋势、告警）应当由独立采集任务按固定间隔落库。
 func (s *Service) Stats(ctx context.Context, id int64) (*StatsView, error) {
-	var node model.Node
-	err := s.db.WithContext(ctx).Where("id = ?", id).First(&node).Error
+	node, err := s.repo.GetNode(ctx, id)
 	if err != nil {
 		return nil, api.NotFound("节点不存在")
 	}
@@ -64,16 +62,9 @@ func (s *Service) Stats(ctx context.Context, id int64) (*StatsView, error) {
 	// 控制面持有虚拟机投影，一次 count 就能给出；让节点报会引入一个新问题：
 	// 节点看到的是宿主机上真实存在的域（可能包含面板外手工建的），而面板上
 	// 显示的数字必须与列表页一致——两处不一致比数字本身不准更让人困惑。
-	var total, running int64
-	if err := s.db.WithContext(ctx).Model(&model.VM{}).
-		Where("node_id = ? AND present = ?", id, true).Count(&total).Error; err != nil {
+	total, running, err := s.repo.CountNodeVMs(ctx, id)
+	if err != nil {
 		log.Printf("[node] 统计节点虚拟机数量失败: %v", err)
-		return nil, api.Internal()
-	}
-	if err := s.db.WithContext(ctx).Model(&model.VM{}).
-		Where("node_id = ? AND present = ? AND status = ?", id, true, model.VMStatusRunning).
-		Count(&running).Error; err != nil {
-		log.Printf("[node] 统计节点运行中虚拟机数量失败: %v", err)
 		return nil, api.Internal()
 	}
 

@@ -17,6 +17,7 @@ import (
 	"k_cockpit/internal/platform/audit"
 	"k_cockpit/internal/platform/config"
 	"k_cockpit/internal/platform/database"
+	noderepo "k_cockpit/internal/repository/node"
 	"k_cockpit/internal/service/node"
 )
 
@@ -66,7 +67,7 @@ func newTestService(t *testing.T, runtime agent.SnapshotProvider) (*node.Service
 	if err := db.AutoMigrate(&model.Node{}, &model.AuditLog{}); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
-	return node.NewService(db, runtime, audit.NewRecorder(db), nil), db
+	return node.NewService(noderepo.NewRepo(db), runtime, audit.NewRecorder(db), nil), db
 }
 
 func assertAPIError(t *testing.T, err error, status int) {

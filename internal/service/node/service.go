@@ -25,6 +25,7 @@ import (
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
+	noderepo "k_cockpit/internal/repository/node"
 )
 
 // OfflineThreshold 是离线判定阈值（f-6-01 R-005）。
@@ -41,7 +42,10 @@ var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
 
 // Service 提供节点领域操作。
 type Service struct {
-	db      *gorm.DB
+	// repo 是数据访问层（ADR-0012 分层）：本包不再持有 *gorm.DB、不执行
+	// 任何查询，数据访问全部经它进行。gorm 包仍被引用，但只用于哨兵错误
+	// 的翻译（ErrRecordNotFound 等）——那是错误分类，不是数据访问。
+	repo    *noderepo.Repo
 	runtime agent.SnapshotProvider
 	audit   *audit.Recorder
 	// client 用于**实时探测**宿主机指标（f-6-03）。
@@ -57,9 +61,9 @@ type Service struct {
 
 // NewService 构造节点服务。stats 为 nil 时指标接口返回「不支持」。
 func NewService(
-	db *gorm.DB, runtime agent.SnapshotProvider, recorder *audit.Recorder, stats agent.Client,
+	repo *noderepo.Repo, runtime agent.SnapshotProvider, recorder *audit.Recorder, stats agent.Client,
 ) *Service {
-	return &Service{db: db, runtime: runtime, audit: recorder, client: stats}
+	return &Service{repo: repo, runtime: runtime, audit: recorder, client: stats}
 }
 
 // View 是节点的对外视图：元数据 + 运行态。
@@ -105,8 +109,8 @@ type EnrollToken struct {
 
 // List 返回全部已接入的节点（含运行态）。
 func (s *Service) List(ctx context.Context) ([]View, error) {
-	var nodes []model.Node
-	if err := s.db.WithContext(ctx).Order("id").Find(&nodes).Error; err != nil {
+	nodes, err := s.repo.ListNodes(ctx)
+	if err != nil {
 		log.Printf("[node] 查询节点列表失败: %v", err)
 		return nil, api.Internal()
 	}
@@ -120,17 +124,16 @@ func (s *Service) List(ctx context.Context) ([]View, error) {
 
 // Get 返回单个节点。
 func (s *Service) Get(ctx context.Context, id int64) (*View, error) {
-	var node model.Node
-	err := s.db.WithContext(ctx).Where("id = ?", id).First(&node).Error
-	switch {
-	case errors.Is(err, gorm.ErrRecordNotFound):
-		return nil, api.NotFound("节点不存在")
-	case err != nil:
+	node, err := s.repo.GetNode(ctx, id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, api.NotFound("节点不存在")
+		}
 		log.Printf("[node] 查询节点失败: %v", err)
 		return nil, api.Internal()
 	}
 
-	view := s.toView(ctx, &node)
+	view := s.toView(ctx, node)
 	return &view, nil
 }
 
@@ -165,7 +168,7 @@ func (s *Service) CreateEnrollToken(
 		EnrollTokenHash: &hash,
 		EnrollExpiresAt: &expiresAt,
 	}
-	if err := s.db.WithContext(ctx).Create(&node).Error; err != nil {
+	if err := s.repo.CreateNode(ctx, &node); err != nil {
 		// 节点名唯一索引冲突是最常见的失败：给出可操作的原因，
 		// 而不是笼统的「服务内部错误」。
 		if isDuplicateKey(err) {
@@ -208,17 +211,13 @@ func (s *Service) Register(ctx context.Context, token, agentID, agentVersion str
 		return nil, api.InvalidParameter("agent 标识不能为空")
 	}
 
-	hash := hashToken(token)
-	var node model.Node
-	err := s.db.WithContext(ctx).
-		Where("enroll_token_hash = ? AND enroll_state = ?", hash, model.NodeEnrollPending).
-		First(&node).Error
-	switch {
-	case errors.Is(err, gorm.ErrRecordNotFound):
-		// 不区分「令牌不存在」与「已被使用」：两者对外都是「无效令牌」，
-		// 区分它们只会帮助攻击者判断令牌是否曾经有效。
-		return nil, api.PermissionDenied("注册令牌无效或已被使用")
-	case err != nil:
+	node, err := s.repo.FindByEnrollToken(ctx, hashToken(token))
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// 不区分「令牌不存在」与「已被使用」：两者对外都是「无效令牌」，
+			// 区分它们只会帮助攻击者判断令牌是否曾经有效。
+			return nil, api.PermissionDenied("注册令牌无效或已被使用")
+		}
 		log.Printf("[node] 查询注册令牌失败: %v", err)
 		return nil, api.Internal()
 	}
@@ -238,8 +237,7 @@ func (s *Service) Register(ctx context.Context, token, agentID, agentVersion str
 		"last_seen_at":      now,
 		"status":            model.NodeStatusOnline,
 	}
-	if err := s.db.WithContext(ctx).Model(&model.Node{}).
-		Where("id = ?", node.ID).Updates(updates).Error; err != nil {
+	if err := s.repo.UpdateNode(ctx, node.ID, updates); err != nil {
 		log.Printf("[node] 更新节点注册状态失败: %v", err)
 		return nil, api.Internal()
 	}
@@ -255,7 +253,7 @@ func (s *Service) Register(ctx context.Context, token, agentID, agentVersion str
 
 	node.EnrollState = model.NodeEnrollEnrolled
 	node.AgentID = &agentID
-	view := s.toView(ctx, &node)
+	view := s.toView(ctx, node)
 	return &view, nil
 }
 
@@ -263,23 +261,21 @@ func (s *Service) Register(ctx context.Context, token, agentID, agentVersion str
 //
 // 软删除而非物理删除：审计与历史任务仍需能引用该节点。
 func (s *Service) Remove(ctx context.Context, id int64, operatorID int64, operatorName, clientIP string) error {
-	var node model.Node
-	err := s.db.WithContext(ctx).Where("id = ?", id).First(&node).Error
-	switch {
-	case errors.Is(err, gorm.ErrRecordNotFound):
-		return api.NotFound("节点不存在")
-	case err != nil:
+	node, err := s.repo.GetNode(ctx, id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return api.NotFound("节点不存在")
+		}
 		log.Printf("[node] 查询节点失败: %v", err)
 		return api.Internal()
 	}
 
-	if err := s.db.WithContext(ctx).Model(&model.Node{}).Where("id = ?", id).
-		Updates(map[string]any{
-			"deleted_at":        time.Now(),
-			"enabled":           false,
-			"enroll_token_hash": nil,
-			"enroll_expires_at": nil,
-		}).Error; err != nil {
+	if err := s.repo.UpdateNode(ctx, id, map[string]any{
+		"deleted_at":        time.Now(),
+		"enabled":           false,
+		"enroll_token_hash": nil,
+		"enroll_expires_at": nil,
+	}); err != nil {
 		log.Printf("[node] 移除节点失败: %v", err)
 		return api.Internal()
 	}
@@ -317,12 +313,11 @@ func (s *Service) SetMaintenance(
 	ctx context.Context, id int64, enabled bool, reason string,
 	operatorID int64, operatorName, clientIP string,
 ) (*View, error) {
-	var node model.Node
-	err := s.db.WithContext(ctx).Where("id = ?", id).First(&node).Error
-	switch {
-	case errors.Is(err, gorm.ErrRecordNotFound):
-		return nil, api.NotFound("节点不存在")
-	case err != nil:
+	node, err := s.repo.GetNode(ctx, id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, api.NotFound("节点不存在")
+		}
 		log.Printf("[node] 查询节点失败: %v", err)
 		return nil, api.Internal()
 	}
@@ -361,8 +356,7 @@ func (s *Service) SetMaintenance(
 		}
 		updates["maintenance_at"] = time.Now()
 	}
-	if err := s.db.WithContext(ctx).Model(&model.Node{}).
-		Where("id = ?", id).Updates(updates).Error; err != nil {
+	if err := s.repo.UpdateNode(ctx, id, updates); err != nil {
 		log.Printf("[node] 更新维护模式失败: %v", err)
 		return nil, api.Internal()
 	}
@@ -403,12 +397,11 @@ func (s *Service) SetConsoleHost(
 		return nil, api.InvalidParameter("控制台地址需为主机名或 IP（可带端口），例如 kvm-node-1.example.com:5901")
 	}
 
-	var node model.Node
-	err := s.db.WithContext(ctx).Where("id = ?", id).First(&node).Error
-	switch {
-	case errors.Is(err, gorm.ErrRecordNotFound):
-		return nil, api.NotFound("节点不存在")
-	case err != nil:
+	node, err := s.repo.GetNode(ctx, id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, api.NotFound("节点不存在")
+		}
 		log.Printf("[node] 查询节点失败: %v", err)
 		return nil, api.Internal()
 	}
@@ -417,8 +410,7 @@ func (s *Service) SetConsoleHost(
 	if host != "" {
 		updates["console_host"] = host
 	}
-	if err := s.db.WithContext(ctx).Model(&model.Node{}).
-		Where("id = ?", id).Updates(updates).Error; err != nil {
+	if err := s.repo.UpdateNode(ctx, id, updates); err != nil {
 		log.Printf("[node] 更新控制台地址失败: %v", err)
 		return nil, api.Internal()
 	}

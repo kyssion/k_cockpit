@@ -258,3 +258,31 @@ if (valid) {
 - **AI 有过度设计倾向**：默认会生成「更通用、更灵活」的结构。因此 AI 生成的设计必须**主动对照第 2、3 节自检**，剥离无人使用的抽象、参数与扩展点后再提交。
 - **AI 有忽视性能的倾向**：需主动检查是否存在循环内 I/O、全量加载、无界缓存等问题。
 - 使用 AI 生成的代码，责任归属于**提交者本人**。
+
+---
+
+## 13. 分层与 repository（ADR-0012）
+
+顶级目录名即层名，一眼可辨（完整依据见 [ADR-0012](../06-decisions/0012-layered-internal-structure.md)）：
+
+| 目录 | 层 | 职责 |
+|---|---|---|
+| `internal/router` | 路由层 | 路由注册与角色声明（`routes_<域>.go` 与 handler 域子包同名对应） |
+| `internal/handler` | 接口层 | HTTP 参数解析、鉴权调用、响应构造；**不含业务判断与 SQL** |
+| `internal/service` | 服务层 | 业务逻辑、校验规则、审计语义、任务编排；二级目录 = 业务域 |
+| `internal/repository` | 数据库访问层 | SQL/GORM 查询与写入的**唯一居所**；二级目录与 service 域同名 |
+| `internal/model` + `internal/platform/database` | 数据库层 | 表模型（跨域共享）+ 连接与 SQL 迁移 |
+| `internal/platform` | 基础设施 | api 响应/中间件、config、logging、cryptoutil、audit 写侧、authz、version |
+| `internal/agent` | agent 契约 | 控制面 ↔ 节点的操作契约与 mock（未来 agent 二进制的边界） |
+
+**repository 规范**（范式样本：`internal/repository/node`）：
+
+- Repo 是具体类型（不预抽接口）：持 `*gorm.DB`，方法按业务动词命名（`GetNode` / `CountNodeVMs`），承载「服务需要的查询与写入」，原样下沉、不改语义。
+- Repo **返回原始数据与错误**（如 `gorm.ErrRecordNotFound`），不翻译成 `api.Error`——「节点不存在」的对外文案属于服务层；唯一索引冲突原样返回，由服务层判定语义。
+- Repo **不含业务判断**：不过滤软删除、不推导状态、不组装视图。
+- service 层**不执行任何 GORM 查询**；引用 gorm 的哨兵错误做翻译（`errors.Is(err, gorm.ErrRecordNotFound)`）是错误分类，允许。
+- service 与 repo 的域目录**同名对应**（`service/<域>` ↔ `repository/<域>`），import 冲突时 repo 侧用 `<域>repo` 别名。
+
+**存量豁免与迁移路线**：repository 层随 ADR-0012 设立，各域**分批迁入**（每域一个 commit、测试护航，compute 最大放最后）。未迁入的域维持「service 直接查库」的现状——**新代码**一律走 repo，不往存量 service 里新增直接查询。
+
+**agent 契约边界**：service 下发节点操作只经 `internal/agent` 的 `Client` 接口，不感知运输层实现（ADR-0007）；handler 与 repository 不得 import agent。

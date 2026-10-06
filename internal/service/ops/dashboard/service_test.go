@@ -13,6 +13,7 @@ import (
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/platform/config"
 	"k_cockpit/internal/platform/database"
+	noderepo "k_cockpit/internal/repository/node"
 	"k_cockpit/internal/service/node"
 	"k_cockpit/internal/service/ops/dashboard"
 )
@@ -53,7 +54,7 @@ func newEnv(t *testing.T, rt fakeRuntime) (*gorm.DB, *dashboard.Service) {
 	); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
-	return db, dashboard.NewService(db, node.NewService(db, rt, nil, nil))
+	return db, dashboard.NewService(db, node.NewService(noderepo.NewRepo(db), rt, nil, nil))
 }
 
 func admin() authz.Viewer { return authz.Viewer{UserID: 9, IsAdmin: true} }

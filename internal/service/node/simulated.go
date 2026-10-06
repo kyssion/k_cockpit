@@ -10,8 +10,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-
-	"k_cockpit/internal/model"
 )
 
 // EnsureSimulated 预置名字不在库中的模拟节点，已存在的原样跳过——
@@ -21,13 +19,13 @@ import (
 // 真实 agent 共用同一段注册逻辑（ADR-0007 的原则），预置出来的节点
 // 与手工接入的没有任何差别。
 func (s *Service) EnsureSimulated(ctx context.Context, names []string) error {
-	var rows []model.Node
-	if err := s.db.WithContext(ctx).Select("name").Find(&rows).Error; err != nil {
+	names, err := s.repo.NodeNames(ctx)
+	if err != nil {
 		return fmt.Errorf("查询现有节点: %w", err)
 	}
-	existing := make(map[string]struct{}, len(rows))
-	for _, n := range rows {
-		existing[n.Name] = struct{}{}
+	existing := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		existing[n] = struct{}{}
 	}
 
 	for _, name := range names {

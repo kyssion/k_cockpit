@@ -13,6 +13,7 @@ import (
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/platform/config"
 	"k_cockpit/internal/platform/database"
+	noderepo "k_cockpit/internal/repository/node"
 	"k_cockpit/internal/service/node"
 	"k_cockpit/internal/service/ops/maintenance"
 )
@@ -37,7 +38,7 @@ func newTestService(t *testing.T) (*maintenance.Service, *gorm.DB) {
 	if err := db.AutoMigrate(&model.Node{}, &model.SiteMaintenance{}, &model.AuditLog{}); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
-	nodes := node.NewService(db, mockSnapshot{}, audit.NewRecorder(db), nil)
+	nodes := node.NewService(noderepo.NewRepo(db), mockSnapshot{}, audit.NewRecorder(db), nil)
 	return maintenance.NewService(db, nodes, audit.NewRecorder(db)), db
 }
 
