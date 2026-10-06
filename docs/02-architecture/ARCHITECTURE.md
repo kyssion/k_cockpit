@@ -100,19 +100,17 @@ flowchart TB
 
 ## 3. 模块划分
 
-**控制面模块**（目录按域分组，见 [ADR-0010](../06-decisions/0010-group-internal-by-domain.md)）
+**控制面模块**（顶级目录 = 层、二级目录 = 业务域，见 [ADR-0012](../06-decisions/0012-layered-internal-structure.md)；域划分承自 [ADR-0010](../06-decisions/0010-group-internal-by-domain.md)）
 
-| 模块（internal/ 目录） | 职责 | 关联能力 |
-|---|---|---|
-| `platform/` 身份与权限 | 账号、会话、RBAC、配额、资源归属、审计、设置与全部基础设施（api / config / database…） | F-1-*、F-9-*、F-10-* |
-| `node/` 节点管理 | 节点注册与撤销、能力缓存、心跳状态、维护模式 | F-6-* |
-| `compute/` 虚拟机与模板 | 生命周期、配置、快照、磁盘、控制台、迁移、来宾自动化、模板、导入 | F-2-*、F-3-* |
-| `network/` 网络 | 交换机（vswitch）、网桥、安全组、ACL、端口转发、公网 IP、防火墙、端口安全与镜像 | F-4-* |
-| `storage/` 存储 | 存储池（pool）、卷、用户存储、上传会话、共享挂载、存储配额 | F-5-* |
-| `ops/` 任务与观测 | 任务队列、定时任务（cron）、调度器注册表（scheduler）、监控、告警、工作台、诊断、站点维护 | F-7-*、F-8-* |
-| `agent/` 契约 | 领域操作契约 + mock（真实实现随 M5 落地） | — |
-| `model/` | 跨域共享的表结构模型（刻意不按域拆，防 import 环） | — |
-| `handler/` + `router/` | 接口层：handler 按上述业务域分同名子包，路由与角色声明集中在 router | — |
+| 层（internal/ 目录） | 职责 |
+|---|---|
+| `router/` 路由层 | 路由注册与角色声明，按域拆 `routes_<域>.go` |
+| `handler/` 接口层 | HTTP 参数解析与响应，按业务域分同名子包 |
+| `service/` 服务层 | 业务逻辑；二级目录：`platform`（身份与权限：账号/会话/RBAC/配额/审计/设置，F-1-*、F-9-*、F-10-*）、`node`（注册与撤销/能力缓存/心跳/维护模式，F-6-*）、`compute`（生命周期/快照/控制台/迁移/模板/导入，F-2-*、F-3-*）、`network`（交换机/网桥/安全组/ACL/公网 IP/防火墙/端口安全与镜像，F-4-*）、`storage`（池/卷/用户存储/共享挂载/存储配额，F-5-*）、`ops`（任务队列/定时任务/调度器/监控/告警/工作台/诊断/站点维护，F-7-*、F-8-*） |
+| `repository/` 数据库访问层 | SQL/GORM 查询与写入的唯一居所，与 service 域同名对应（分批迁入中，见 ADR-0012） |
+| `model/` 数据库层 | 跨域共享的表结构模型（刻意不按域拆，防 import 环） |
+| `platform/` 基础设施 | api 响应与中间件、config、database、logging、cryptoutil、audit 写侧、authz、version |
+| `agent/` 契约 | 领域操作契约 + mock（真实实现随 M5 落地） |
 
 **agent 模块**
 

@@ -131,24 +131,28 @@ cd web && pnpm build
 
 ```
 k_cockpit/
-├── cmd/server/            # 程序入口（main 包）
-├── internal/              # 私有代码，外部模块不可导入（按域分组，见 ADR-0010）
-│   ├── platform/          # 身份与权限 + 基础设施：api/auth/authz/risk/audit/
-│   │                      # auditlog/apikey/authkey/invite/useradmin/settings/
-│   │                      # passaudit/accesscontrol/reqlog/config/cryptoutil/
-│   │                      # database（SQL 迁移 migrations/）/logging/mailer/version
-│   ├── compute/           # 计算域：vm/vmtag/template/importer/passthrough/computequota
-│   ├── network/           # 网络域：vswitch/bridge/firewall/hostfirewall/
-│   │                      # securitygroup/vpcacl/publicip/portsecurity/portmirror/capture
-│   ├── storage/           # 存储域：pool/userstorage/quota
-│   ├── ops/               # 运行与观测：task/realtime/cron/scheduler/alert/monitor/
-│   │                      # dashboard/search/diagnostics/platformcheck/hosttuning/
-│   │                      # maintenance/emergency/quotaenforce
-│   ├── node/              # 节点接入与投影（F-6-01 / F-6-02）
+├── cmd/server/            # 程序入口（main 包；装配按域拆在 wire_*.go）
+├── internal/              # 私有代码，外部模块不可导入（顶级目录 = 层，见 ADR-0012）
+│   ├── router/            # 路由层：路由注册与角色声明（routes_<域>.go 与 handler 域子包对应）
+│   ├── handler/           # 接口层：HTTP 参数解析与响应（按同名业务域分子包，测试同目录）
+│   ├── service/           # 服务层：业务逻辑（二级目录 = 业务域）
+│   │   ├── compute/       #   计算域：vm/vmtag/template/importer/passthrough/computequota
+│   │   ├── network/       #   网络域：vswitch/bridge/firewall/hostfirewall/securitygroup/
+│   │   │                  #   vpcacl/publicip/portsecurity/portmirror/capture
+│   │   ├── storage/       #   存储域：pool/userstorage/quota
+│   │   ├── ops/           #   运行与观测：task/realtime/cron/scheduler/alert/monitor/
+│   │   │                  #   dashboard/search/diagnostics/platformcheck/hosttuning/
+│   │   │                  #   maintenance/emergency/quotaenforce
+│   │   ├── node/          #   节点接入与投影（F-6-01 / F-6-02）
+│   │   └── platform/      #   身份与权限域：auth/risk/settings/invite/useradmin/apikey/
+│   │                      #   auditlog/reqlog/passaudit/authkey/accesscontrol/mailer
+│   ├── repository/        # 数据库访问层：SQL/GORM 查询与写入的唯一居所（与 service
+│   │                      # 域同名对应；分批迁入中，见 ADR-0012，范式：repository/node）
+│   ├── model/             # 数据库层：表模型（表结构以 DATA_MODEL.md 为准；跨域共享，不按域拆）
+│   ├── platform/          # 基础设施：api/audit(写侧)/authz/config/cryptoutil/
+│   │                      # database（SQL 迁移 migrations/）/logging/version
 │   ├── agent/             # 节点 agent 交互契约（开发期为 mock，见 ADR-0007）
-│   ├── model/             # 数据库模型（表结构以 DATA_MODEL.md 为准；跨域共享，不按域拆）
-│   ├── handler/           # HTTP 接口实现（按同名业务域分子包，测试同目录）
-│   └── router/            # 路由注册（角色要求在此声明）
+│   └── devdata/           # 开发环境演示数据预置（mock + development 双重闸门）
 ├── web/                   # 前端工程（纯 SPA，结构与约定见 docs/02-architecture/FRONTEND.md §2.2）
 ├── reference/             # 只读的外部参考项目（git 子模块，见 docs/08-reference/README.md）
 ├── docs/                  # 所有项目文档（见 docs/README.md）

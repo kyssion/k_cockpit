@@ -18,6 +18,12 @@
 ## [Unreleased]
 
 ### Changed
+- **internal 按层重组（[ADR-0012](docs/06-decisions/0012-layered-internal-structure.md)，取代 ADR-0010 的顶级组织方式）**：顶级目录 = 层（`router` 路由层 / `handler` 接口层 / `service` 服务层 / `repository` 数据库访问层 / `model` 数据库层 / `platform` 基础设施 / `agent` 契约），业务域沉为 service 与 repository 的二级目录。纯机械迁移（git mv + 全仓 import 重写，约 320 文件，零逻辑改动）：五个域目录与 platform 的 12 个业务服务包迁入 `service/`，platform 瘦身为纯基础设施（api / audit 写侧 / authz / config / cryptoutil / database / logging / version）
+  - **路由层按域拆分**：router.go（1112 行）拆为入口 + `routes_{platform,node,compute,network,storage,ops}.go`，342 条路由逐条迁移；coverage 对账测试改为扫描整个 router 包
+  - **设立 repository 数据库访问层**：`repository/node` 为范式样本（服务不再执行任何 GORM 查询，gorm 仅用于哨兵错误翻译），其余域按 CODING_STANDARDS 第 13 节规范分批迁入；**新代码一律走 repo**
+  - **cmd/server 装配按域拆分**：app struct 按域分组（platform / node / storage / network / compute / ops / bg），装配代码拆到 `wire_*.go`，main.go 只剩生命周期与 routerDeps 纯映射
+- **修复 `/api-endpoints` 空清单的存量回归**：`NewAPIDocs` 构造时快照 `h.Routes()`，而它一直被构造于 v1 路由注册之前——接口文档页只能看到 `/health`。现移到全部注册完成之后构造
+- **修复 DEPLOYMENT.md 的 ldflags 老路径**：`internal/version.*`（ADR-0010 之前的位置）修正为 `internal/platform/version.*`，照旧文档构建会得到无版本号的二进制
 - **界面视觉升级：全新配色与主题风格**（设计令牌全表见 [`FRONTEND.md`](docs/02-architecture/FRONTEND.md) §4.2）：
   - **品牌色换为靛蓝一族**（浅 `#4F46E5` / 深 `#8B93FA`），语义色整体换到对应现代色阶；暗色主题底色更深一层、描边改用白色低透明度（随下层表面自适应）；圆角控件 6→8 / 卡片与弹层 10→12；阴影改为双层柔和结构
   - **新增令牌**：`--kc-on-brand` / `--kc-on-danger`（实底按钮上的文字色）——暗色主题下亮色实底配白字达不到 AA（旧版品牌色 `#3B9EFF` + 白字仅 2.6:1），亮底深字是现代面板的通行做法；`--kc-bg-console`（VNC/SPICE 视口恒暗，不随主题切换），消掉控制台页面残留的硬编码色值

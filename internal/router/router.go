@@ -95,7 +95,7 @@ type Deps struct {
 	// Invite 提供邀请注册（F-1-10）。为 nil 时接口不可用。
 	Invite *invite.Service
 	// Risk 强制高风险操作的二次验证（f-10-01）。受保护的操作在 handler
-	// 入口调用它，清单本身集中在 internal/risk。
+	// 入口调用它，清单本身集中在 service/platform/risk。
 	Risk *risk.Guard
 	// Schedule 提供虚拟机的定时任务（F-7-05）。
 	Schedule *cron.Service

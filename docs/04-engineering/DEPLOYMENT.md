@@ -23,8 +23,8 @@
 
 ```bash
 # 后端（版本号注入「关于」页；不注入则如实显示 dev）
-go build -ldflags "-X k_cockpit/internal/version.panelVersion=0.1.0 \
-  -X k_cockpit/internal/version.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+go build -ldflags "-X k_cockpit/internal/platform/version.panelVersion=0.1.0 \
+  -X k_cockpit/internal/platform/version.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   -o dist/server ./cmd/server
 
 # 前端

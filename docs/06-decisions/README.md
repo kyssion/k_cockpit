@@ -98,8 +98,9 @@ NNNN-动词短语.md
 | [0007](0007-mock-agent-first.md) | 远程操作先以 Mock Agent 落地，业务逻辑保持真实 | Accepted | 2026-09-15 |
 | [0008](0008-first-admin-bootstrap.md) | 首个管理员通过控制台一次性令牌创建 | Accepted | 2026-09-15 |
 | [0009](0009-defer-external-identity.md) | 暂不纳入外部身份源（F-1-13） | Accepted | 2026-09-28 |
-| [0010](0010-group-internal-by-domain.md) | internal 按业务域分组（platform/compute/network/storage/ops） | Accepted | 2026-09-28 |
+| [0010](0010-group-internal-by-domain.md) | internal 按业务域分组（platform/compute/network/storage/ops） | Superseded by [0012](0012-layered-internal-structure.md) | 2026-09-28 |
 | [0011](0011-mock-power-state.md) | mock 增加电源生命周期的最小状态（修订 0007 的实现口径） | Accepted | 2026-09-30 |
+| [0012](0012-layered-internal-structure.md) | internal 按层组织（router/handler/service/repository/model），取代 0010 的顶级组织方式 | Accepted | 2026-10-06 |
 
 > **新增 ADR 后必须在此表登记。**
 

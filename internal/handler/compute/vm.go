@@ -812,7 +812,7 @@ func (h *VM) CreateSnapshot(ctx context.Context, c *app.RequestContext) {
 // RestoreSnapshot 恢复快照（API-054）。
 //
 // 恢复会**丢弃快照之后的所有磁盘改动**，属于不可逆操作，因此走二次验证
-// （f-10-02 的清单集中在 internal/risk，此处只声明，不自行判断）。
+// （f-10-02 的清单集中在 service/platform/risk，此处只声明，不自行判断）。
 //
 // 注意它与「删除快照」的区别：删除快照只是失去一个还原点，虚拟机当前的数据
 // 不受影响，因此**不**需要验证；而恢复是一次真实的回滚。两者在界面上相邻，
