@@ -1,5 +1,5 @@
-// wire_task_queue 装配任务队列（internal/ops/task）与实时总线
-// （internal/ops/realtime），并注册全部领域执行器。
+// wire_task_queue 装配任务队列（internal/service/ops/task）与实时总线
+// （internal/service/ops/realtime），并注册全部领域执行器。
 //
 // 执行器注册的顺序无语义（队列按任务类型查表派发），但按「域内聚」排布，
 // 与 internal/ 各域的阅读顺序一致。createExec / guestExec 单独留在
@@ -10,23 +10,23 @@ package main
 import (
 	"context"
 
-	"k_cockpit/internal/compute/importer"
-	"k_cockpit/internal/compute/passthrough"
-	"k_cockpit/internal/compute/template"
-	"k_cockpit/internal/compute/vm"
-	"k_cockpit/internal/network/capture"
-	"k_cockpit/internal/network/hostfirewall"
-	"k_cockpit/internal/network/portsecurity"
-	"k_cockpit/internal/network/publicip"
-	"k_cockpit/internal/network/securitygroup"
-	"k_cockpit/internal/network/vpcacl"
-	"k_cockpit/internal/network/vswitch"
-	"k_cockpit/internal/ops/hosttuning"
-	"k_cockpit/internal/ops/platformcheck"
-	"k_cockpit/internal/ops/quotaenforce"
-	"k_cockpit/internal/ops/realtime"
-	"k_cockpit/internal/ops/task"
-	"k_cockpit/internal/storage/pool"
+	"k_cockpit/internal/service/compute/importer"
+	"k_cockpit/internal/service/compute/passthrough"
+	"k_cockpit/internal/service/compute/template"
+	"k_cockpit/internal/service/compute/vm"
+	"k_cockpit/internal/service/network/capture"
+	"k_cockpit/internal/service/network/hostfirewall"
+	"k_cockpit/internal/service/network/portsecurity"
+	"k_cockpit/internal/service/network/publicip"
+	"k_cockpit/internal/service/network/securitygroup"
+	"k_cockpit/internal/service/network/vpcacl"
+	"k_cockpit/internal/service/network/vswitch"
+	"k_cockpit/internal/service/ops/hosttuning"
+	"k_cockpit/internal/service/ops/platformcheck"
+	"k_cockpit/internal/service/ops/quotaenforce"
+	"k_cockpit/internal/service/ops/realtime"
+	"k_cockpit/internal/service/ops/task"
+	"k_cockpit/internal/service/storage/pool"
 )
 
 // setupTaskQueue 建实时总线与任务队列，注册全部执行器并启动调度循环。

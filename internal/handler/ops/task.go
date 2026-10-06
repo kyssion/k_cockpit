@@ -8,11 +8,11 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 
 	"k_cockpit/internal/model"
-	"k_cockpit/internal/ops/realtime"
-	"k_cockpit/internal/ops/task"
 	"k_cockpit/internal/platform/api"
-	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"
+	"k_cockpit/internal/service/ops/realtime"
+	"k_cockpit/internal/service/ops/task"
+	"k_cockpit/internal/service/platform/auth"
 )
 
 // Task 提供任务接口（F-7-02）。

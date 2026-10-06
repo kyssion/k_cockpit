@@ -6,9 +6,9 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 
 	"k_cockpit/internal/platform/api"
-	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"
-	"k_cockpit/internal/storage/quota"
+	"k_cockpit/internal/service/platform/auth"
+	"k_cockpit/internal/service/storage/quota"
 )
 
 // Quota 提供存储配额接口（F-9-02）。

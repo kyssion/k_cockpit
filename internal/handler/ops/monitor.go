@@ -6,9 +6,9 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/ops/monitor"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/authz"
+	"k_cockpit/internal/service/ops/monitor"
 )
 
 // Monitor 提供指标历史查询（F-8-01 / F-8-02）。

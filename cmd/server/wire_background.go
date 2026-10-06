@@ -1,4 +1,4 @@
-// wire_background 装配后台周期组件与调度器注册表（internal/ops/scheduler）。
+// wire_background 装配后台周期组件与调度器注册表（internal/service/ops/scheduler）。
 //
 // 周期组件天然跨域（配额循环在 ops 但要调 compute 的关机、介质弹出循环
 // 属于 compute、TRIM 属于 storage），因此不按域拆，而按**生命周期**归组：
@@ -9,18 +9,18 @@ import (
 	"context"
 	"time"
 
-	"k_cockpit/internal/compute/vm"
-	"k_cockpit/internal/ops/alert"
-	"k_cockpit/internal/ops/monitor"
-	"k_cockpit/internal/ops/quotaenforce"
-	cron "k_cockpit/internal/ops/schedule"
-	"k_cockpit/internal/ops/scheduler"
-	sched "k_cockpit/internal/ops/scheduler"
-	"k_cockpit/internal/ops/task"
-	"k_cockpit/internal/platform/authkey"
-	"k_cockpit/internal/platform/passaudit"
-	"k_cockpit/internal/platform/settings"
-	"k_cockpit/internal/storage/pool"
+	"k_cockpit/internal/service/compute/vm"
+	"k_cockpit/internal/service/ops/alert"
+	"k_cockpit/internal/service/ops/monitor"
+	"k_cockpit/internal/service/ops/quotaenforce"
+	cron "k_cockpit/internal/service/ops/schedule"
+	"k_cockpit/internal/service/ops/scheduler"
+	sched "k_cockpit/internal/service/ops/scheduler"
+	"k_cockpit/internal/service/ops/task"
+	"k_cockpit/internal/service/platform/authkey"
+	"k_cockpit/internal/service/platform/passaudit"
+	"k_cockpit/internal/service/platform/settings"
+	"k_cockpit/internal/service/storage/pool"
 )
 
 // backgroundLoops 承载全部后台周期组件（跨域，统一生命周期管理）。

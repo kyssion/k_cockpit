@@ -1,4 +1,4 @@
-// wire_node 装配 internal/node 域与 agent 通道（internal/agent）。
+// wire_node 装配 internal/service/node 域与 agent 通道（internal/agent）。
 //
 // agent 通道实例挂在 app 根上（a.mockAgent）：全部业务域都要向节点下发
 // 操作，它和 db 一样是跨域基座；这里只装配节点服务本身。
@@ -12,11 +12,11 @@ import (
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/devdata"
 	"k_cockpit/internal/model"
-	"k_cockpit/internal/node"
 	"k_cockpit/internal/platform/config"
+	"k_cockpit/internal/service/node"
 )
 
-// nodeServices 承载 internal/node 域的服务实例。
+// nodeServices 承载 internal/service/node 域的服务实例。
 type nodeServices struct {
 	nodeSvc *node.Service
 }

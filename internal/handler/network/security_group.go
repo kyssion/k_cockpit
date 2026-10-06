@@ -5,10 +5,10 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/network/securitygroup"
 	"k_cockpit/internal/platform/api"
-	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"
+	"k_cockpit/internal/service/network/securitygroup"
+	"k_cockpit/internal/service/platform/auth"
 )
 
 // SecurityGroup 提供安全组接口（F-4-03 / F-4-04）。

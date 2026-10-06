@@ -1,4 +1,4 @@
-// wire_ops 装配 internal/ops 域：监控、工作台、调度视图、告警、定时任务、
+// wire_ops 装配 internal/service/ops 域：监控、工作台、调度视图、告警、定时任务、
 // 站点维护、诊断、配额处置、平台自检与全局搜索。
 //
 // 依赖最广的一个域：工作台要聚合 node / 调优状态，维护要复用 vm 的关机
@@ -6,22 +6,22 @@
 package main
 
 import (
-	"k_cockpit/internal/ops/alert"
-	"k_cockpit/internal/ops/dashboard"
-	"k_cockpit/internal/ops/diagnostics"
-	"k_cockpit/internal/ops/hosttuning"
-	"k_cockpit/internal/ops/maintenance"
-	"k_cockpit/internal/ops/monitor"
-	"k_cockpit/internal/ops/platformcheck"
-	"k_cockpit/internal/ops/quotaenforce"
-	cron "k_cockpit/internal/ops/schedule"
-	sched "k_cockpit/internal/ops/scheduler"
-	"k_cockpit/internal/ops/search"
-	"k_cockpit/internal/platform/settings"
 	"k_cockpit/internal/platform/version"
+	"k_cockpit/internal/service/ops/alert"
+	"k_cockpit/internal/service/ops/dashboard"
+	"k_cockpit/internal/service/ops/diagnostics"
+	"k_cockpit/internal/service/ops/hosttuning"
+	"k_cockpit/internal/service/ops/maintenance"
+	"k_cockpit/internal/service/ops/monitor"
+	"k_cockpit/internal/service/ops/platformcheck"
+	"k_cockpit/internal/service/ops/quotaenforce"
+	cron "k_cockpit/internal/service/ops/schedule"
+	sched "k_cockpit/internal/service/ops/scheduler"
+	"k_cockpit/internal/service/ops/search"
+	"k_cockpit/internal/service/platform/settings"
 )
 
-// opsServices 承载 internal/ops 域的服务实例（周期组件见 backgroundLoops）。
+// opsServices 承载 internal/service/ops 域的服务实例（周期组件见 backgroundLoops）。
 type opsServices struct {
 	monitor    *monitor.Service
 	hostTuning *hosttuning.Service

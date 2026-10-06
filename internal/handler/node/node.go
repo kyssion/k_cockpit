@@ -7,10 +7,10 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/node"
 	"k_cockpit/internal/platform/api"
-	"k_cockpit/internal/platform/auth"
-	"k_cockpit/internal/platform/risk"
+	"k_cockpit/internal/service/node"
+	"k_cockpit/internal/service/platform/auth"
+	"k_cockpit/internal/service/platform/risk"
 )
 
 // Node 提供节点管理接口（F-6-01 / F-6-02）。

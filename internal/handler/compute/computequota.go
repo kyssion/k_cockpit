@@ -5,9 +5,9 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/compute/computequota"
 	"k_cockpit/internal/platform/api"
-	"k_cockpit/internal/platform/auth"
+	"k_cockpit/internal/service/compute/computequota"
+	"k_cockpit/internal/service/platform/auth"
 )
 
 // ComputeQuota 提供计算资源配额的设置与查看（vCPU / 内存 / 实例数）。

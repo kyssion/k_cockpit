@@ -5,10 +5,10 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/network/vswitch"
 	"k_cockpit/internal/platform/api"
-	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"
+	"k_cockpit/internal/service/network/vswitch"
+	"k_cockpit/internal/service/platform/auth"
 )
 
 // --- 交换机迁移与重配置 ---

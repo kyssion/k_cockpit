@@ -1,4 +1,4 @@
-// wire_compute 装配 internal/compute 域：虚拟机、计算配额、标签、模板、
+// wire_compute 装配 internal/service/compute 域：虚拟机、计算配额、标签、模板、
 // 镜像导入与 PCIe 直通。
 //
 // 依赖 storage 域（模板与镜像导入的存储配额判定）。createExec / guestExec
@@ -7,16 +7,16 @@
 package main
 
 import (
-	"k_cockpit/internal/compute/computequota"
-	"k_cockpit/internal/compute/importer"
-	"k_cockpit/internal/compute/passthrough"
-	"k_cockpit/internal/compute/template"
-	"k_cockpit/internal/compute/vm"
-	"k_cockpit/internal/compute/vmtag"
 	"k_cockpit/internal/platform/cryptoutil"
+	"k_cockpit/internal/service/compute/computequota"
+	"k_cockpit/internal/service/compute/importer"
+	"k_cockpit/internal/service/compute/passthrough"
+	"k_cockpit/internal/service/compute/template"
+	"k_cockpit/internal/service/compute/vm"
+	"k_cockpit/internal/service/compute/vmtag"
 )
 
-// computeServices 承载 internal/compute 域的服务实例。
+// computeServices 承载 internal/service/compute 域的服务实例。
 type computeServices struct {
 	vmSvc *vm.Service
 	// createExec / guestExec 单独留字段：它们要在 setupCredentials 里补注入

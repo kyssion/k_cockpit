@@ -5,10 +5,10 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/platform/accesscontrol"
 	"k_cockpit/internal/platform/api"
-	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"
+	"k_cockpit/internal/service/platform/accesscontrol"
+	"k_cockpit/internal/service/platform/auth"
 )
 
 // AccessControl 提供公网访问与开发模式开关（F-10-06）。归管理员。

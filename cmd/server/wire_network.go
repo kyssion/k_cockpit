@@ -1,21 +1,21 @@
-// wire_network 装配 internal/network 域：虚拟交换机、网桥、双层防火墙、
+// wire_network 装配 internal/service/network 域：虚拟交换机、网桥、双层防火墙、
 // 公网 IP、安全组、端口安全、端口镜像与抓包。
 package main
 
 import (
-	"k_cockpit/internal/network/bridge"
-	"k_cockpit/internal/network/capture"
-	"k_cockpit/internal/network/firewall"
-	"k_cockpit/internal/network/hostfirewall"
-	"k_cockpit/internal/network/portmirror"
-	"k_cockpit/internal/network/portsecurity"
-	"k_cockpit/internal/network/publicip"
-	"k_cockpit/internal/network/securitygroup"
-	"k_cockpit/internal/network/vpcacl"
-	"k_cockpit/internal/network/vswitch"
+	"k_cockpit/internal/service/network/bridge"
+	"k_cockpit/internal/service/network/capture"
+	"k_cockpit/internal/service/network/firewall"
+	"k_cockpit/internal/service/network/hostfirewall"
+	"k_cockpit/internal/service/network/portmirror"
+	"k_cockpit/internal/service/network/portsecurity"
+	"k_cockpit/internal/service/network/publicip"
+	"k_cockpit/internal/service/network/securitygroup"
+	"k_cockpit/internal/service/network/vpcacl"
+	"k_cockpit/internal/service/network/vswitch"
 )
 
-// networkServices 承载 internal/network 域的服务实例。
+// networkServices 承载 internal/service/network 域的服务实例。
 type networkServices struct {
 	// networkSvc 是虚拟交换机（VPC）服务；netSvc 是宿主机网桥服务。
 	networkSvc *vswitch.Service

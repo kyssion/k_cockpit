@@ -7,9 +7,9 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 
 	"k_cockpit/internal/platform/api"
-	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"
-	"k_cockpit/internal/storage/userstorage"
+	"k_cockpit/internal/service/platform/auth"
+	"k_cockpit/internal/service/storage/userstorage"
 )
 
 // UserStorage 提供用户存储空间、文件管理与分片上传（F-5-03/04/05）。

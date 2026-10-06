@@ -7,8 +7,8 @@ import (
 
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
-	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/logging"
+	"k_cockpit/internal/service/platform/auth"
 )
 
 // Logging 提供日志管理（F-9-02）。归管理员。

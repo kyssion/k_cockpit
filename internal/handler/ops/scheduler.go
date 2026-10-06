@@ -5,8 +5,8 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/ops/scheduler"
 	"k_cockpit/internal/platform/api"
+	"k_cockpit/internal/service/ops/scheduler"
 )
 
 // Scheduler 提供调度器与调度事件查询（F-7-04）。整体归管理员。

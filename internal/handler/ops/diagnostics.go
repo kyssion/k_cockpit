@@ -6,9 +6,9 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/ops/diagnostics"
 	"k_cockpit/internal/platform/api"
-	"k_cockpit/internal/platform/auth"
+	"k_cockpit/internal/service/ops/diagnostics"
+	"k_cockpit/internal/service/platform/auth"
 )
 
 // Diagnostics 提供诊断导出（F-9-03）。归管理员。

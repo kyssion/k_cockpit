@@ -6,7 +6,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 
 	"k_cockpit/internal/platform/api"
-	"k_cockpit/internal/platform/passaudit"
+	"k_cockpit/internal/service/platform/passaudit"
 )
 
 // PassAudit 提供口令检查接口（F-10-06）。

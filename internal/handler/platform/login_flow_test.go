@@ -9,7 +9,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 
 	"k_cockpit/internal/model"
-	"k_cockpit/internal/platform/auth"
+	"k_cockpit/internal/service/platform/auth"
 )
 
 // TestBootstrapStageEndToEnd 走一遍「管理员登录 → 停在引导 → 跳过 → 进入系统」。

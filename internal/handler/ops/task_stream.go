@@ -8,9 +8,9 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/ops/realtime"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/authz"
+	"k_cockpit/internal/service/ops/realtime"
 )
 
 // 心跳间隔。与日志流共用同一个常量：两条 SSE 面对的是同一批代理与浏览器，

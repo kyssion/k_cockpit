@@ -8,8 +8,8 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 
 	"k_cockpit/internal/platform/api"
-	"k_cockpit/internal/platform/auth"
-	"k_cockpit/internal/platform/reqlog"
+	"k_cockpit/internal/service/platform/auth"
+	"k_cockpit/internal/service/platform/reqlog"
 )
 
 // ReqLog 提供请求日志的查询与清理。

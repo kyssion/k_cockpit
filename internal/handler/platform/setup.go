@@ -7,7 +7,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 
 	"k_cockpit/internal/platform/api"
-	"k_cockpit/internal/platform/auth"
+	"k_cockpit/internal/service/platform/auth"
 )
 
 // Setup 提供首次初始化接口。

@@ -5,10 +5,10 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/network/bridge"
 	"k_cockpit/internal/platform/api"
-	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"
+	"k_cockpit/internal/service/network/bridge"
+	"k_cockpit/internal/service/platform/auth"
 )
 
 // NetworkBridge 提供网络底座接口（F-4-01 / F-4-13）。

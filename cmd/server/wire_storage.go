@@ -1,4 +1,4 @@
-// wire_storage 装配 internal/storage 域：存储池、用户存储与存储配额。
+// wire_storage 装配 internal/service/storage 域：存储池、用户存储与存储配额。
 //
 // quota 排在域内第一个：compute（模板、镜像导入）、platform（userAdmin 的
 // 配额初始化）都依赖它，因此整个 storage 域先于那两个域装配。
@@ -8,12 +8,12 @@ import (
 	"log"
 	"path/filepath"
 
-	"k_cockpit/internal/storage/pool"
-	"k_cockpit/internal/storage/quota"
-	"k_cockpit/internal/storage/userstorage"
+	"k_cockpit/internal/service/storage/pool"
+	"k_cockpit/internal/service/storage/quota"
+	"k_cockpit/internal/service/storage/userstorage"
 )
 
-// storageServices 承载 internal/storage 域的服务实例。
+// storageServices 承载 internal/service/storage 域的服务实例。
 type storageServices struct {
 	quota *quota.Service
 	// userStorage 的分片暂存区在构造时落盘（见 setupStorageServices）。

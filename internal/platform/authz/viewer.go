@@ -3,7 +3,7 @@ package authz
 import (
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/platform/auth"
+	"k_cockpit/internal/service/platform/auth"
 )
 
 // Viewer 是数据访问的视角，用于归属过滤（f-1-06 R-004）。

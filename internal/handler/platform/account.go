@@ -9,8 +9,8 @@ import (
 
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
-	"k_cockpit/internal/platform/auth"
-	"k_cockpit/internal/platform/risk"
+	"k_cockpit/internal/service/platform/auth"
+	"k_cockpit/internal/service/platform/risk"
 )
 
 // Account 提供账号自管理：改密码、改用户名、重新生成恢复码（F-1-03 / F-10-01）。

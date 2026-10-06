@@ -5,10 +5,10 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/network/portsecurity"
 	"k_cockpit/internal/platform/api"
-	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"
+	"k_cockpit/internal/service/network/portsecurity"
+	"k_cockpit/internal/service/platform/auth"
 )
 
 // PortSecurity 提供端口安全接口（F-4-08）。归管理员。

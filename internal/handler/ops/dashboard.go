@@ -5,9 +5,9 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/ops/dashboard"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/authz"
+	"k_cockpit/internal/service/ops/dashboard"
 )
 
 // Dashboard 提供工作台概览（F-8-03 / F-8-04）。

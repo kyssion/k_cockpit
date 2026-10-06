@@ -21,8 +21,8 @@ import (
 	"gorm.io/gorm"
 
 	"k_cockpit/internal/model"
-	"k_cockpit/internal/network/vswitch"
-	"k_cockpit/internal/node"
+	"k_cockpit/internal/service/network/vswitch"
+	"k_cockpit/internal/service/node"
 )
 
 // NodeNames 是预置的模拟节点名，与 node.EnsureSimulated 的调用方约定一致。

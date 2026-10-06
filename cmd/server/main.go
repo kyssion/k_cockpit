@@ -22,16 +22,16 @@ import (
 
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
-	"k_cockpit/internal/ops/realtime"
-	sched "k_cockpit/internal/ops/scheduler"
-	"k_cockpit/internal/ops/task"
 	"k_cockpit/internal/platform/audit"
 	"k_cockpit/internal/platform/config"
 	"k_cockpit/internal/platform/database"
 	"k_cockpit/internal/platform/logging"
-	"k_cockpit/internal/platform/useradmin"
 	"k_cockpit/internal/router"
-	"k_cockpit/internal/storage/quota"
+	"k_cockpit/internal/service/ops/realtime"
+	sched "k_cockpit/internal/service/ops/scheduler"
+	"k_cockpit/internal/service/ops/task"
+	"k_cockpit/internal/service/platform/useradmin"
+	"k_cockpit/internal/service/storage/quota"
 )
 
 // app 汇集启动期装配好的全部依赖。
@@ -65,23 +65,23 @@ type app struct {
 	mockAgent *agent.MockClient
 	// recorder 是审计记录器（internal/platform/audit），全部写操作共用。
 	recorder *audit.Recorder
-	// bus / queue 是实时事件总线与任务队列（internal/ops/realtime、task），
+	// bus / queue 是实时事件总线与任务队列（internal/service/ops/realtime、task），
 	// 全部领域执行器的载体。
 	bus   *realtime.Bus
 	queue *task.Queue
 	// schedRegistry / schedRecorder 是调度器注册表与记录器
-	// （internal/ops/scheduler），必须先于所有周期组件与调度视图构造。
+	// （internal/service/ops/scheduler），必须先于所有周期组件与调度视图构造。
 	schedRegistry *sched.Registry
 	schedRecorder *sched.Recorder
 
 	// --- 领域（对应 internal/ 同名目录，装配代码在 wire_<域>.go）---
 
 	platform platformServices // internal/platform：认证、设置、用户与邀请
-	node     nodeServices     // internal/node：节点接入与投影
-	storage  storageServices  // internal/storage：池、用户存储、存储配额
-	network  networkServices  // internal/network：交换机、防火墙、公网 IP 等
-	compute  computeServices  // internal/compute：虚拟机、模板、导入、直通
-	ops      opsServices      // internal/ops：监控、工作台、告警、维护等
+	node     nodeServices     // internal/service/node：节点接入与投影
+	storage  storageServices  // internal/service/storage：池、用户存储、存储配额
+	network  networkServices  // internal/service/network：交换机、防火墙、公网 IP 等
+	compute  computeServices  // internal/service/compute：虚拟机、模板、导入、直通
+	ops      opsServices      // internal/service/ops：监控、工作台、告警、维护等
 
 	// bg 是后台周期组件：跨域，按生命周期归组（wire_background.go）。
 	bg backgroundLoops

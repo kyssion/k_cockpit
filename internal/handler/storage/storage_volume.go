@@ -6,9 +6,9 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 
 	"k_cockpit/internal/platform/api"
-	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"
-	"k_cockpit/internal/storage/pool"
+	"k_cockpit/internal/service/platform/auth"
+	"k_cockpit/internal/service/storage/pool"
 )
 
 // StorageVolume 提供存储卷接口（F-5-02）。整体归管理员。

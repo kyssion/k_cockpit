@@ -5,10 +5,10 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"k_cockpit/internal/compute/passthrough"
 	"k_cockpit/internal/platform/api"
-	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/authz"
+	"k_cockpit/internal/service/compute/passthrough"
+	"k_cockpit/internal/service/platform/auth"
 )
 
 // Passthrough 提供 PCIe 直通接口。归管理员。

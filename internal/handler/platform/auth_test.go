@@ -19,11 +19,11 @@ import (
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
-	"k_cockpit/internal/platform/auth"
 	"k_cockpit/internal/platform/config"
 	"k_cockpit/internal/platform/database"
-	"k_cockpit/internal/platform/risk"
 	"k_cockpit/internal/router"
+	"k_cockpit/internal/service/platform/auth"
+	"k_cockpit/internal/service/platform/risk"
 )
 
 const testPassword = "correct horse battery staple"
