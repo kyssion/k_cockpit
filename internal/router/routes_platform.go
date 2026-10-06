@@ -31,8 +31,8 @@ func registerPlatformRoutes(v1 *route.RouterGroup, deps Deps, g guards) {
 	{
 		// 公开接口：系统尚无管理员时不可能要求认证（自举问题，见 ADR-0008）。
 		// 安全性由「一次性令牌只能从服务端日志获取」保证。
-		v1.GET("/setup/status", g.requireAuth, setupHandler.Status)
-		v1.POST("/setup/admin", g.requireAuth, setupHandler.CreateAdmin)
+		v1.GET("/setup/status", setupHandler.Status)
+		v1.POST("/setup/admin", setupHandler.CreateAdmin)
 
 		// 公开接口：获取凭据的入口，必须在 API.md 中显式标记为公开。
 		v1.POST("/auth/login", authHandler.Login)
