@@ -3,77 +3,35 @@
 // 启动流程：加载配置 -> 连接数据库 -> 装配依赖 -> 注册路由 -> 启动服务。
 // 表结构由 internal/platform/database/migrations/ 下的 SQL 迁移管理（见
 // docs/02-architecture/DATA_MODEL.md 第 6 节），启动流程不做自动迁移。
+//
+// 装配代码按 internal/ 的域拆在 wire_*.go 里（platform / node / task_queue /
+// storage / network / compute / ops / background）；本文件只剩生命周期骨架：
+// app 结构、装配顺序总控（setupServices）与 HTTP / 路由映射。
 package main
 
 import (
 	"context"
 	"fmt"
 	"log"
-	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/joho/godotenv"
 	"gorm.io/gorm"
 
 	"k_cockpit/internal/agent"
-	"k_cockpit/internal/compute/computequota"
-	"k_cockpit/internal/compute/importer"
-	"k_cockpit/internal/compute/passthrough"
-	"k_cockpit/internal/compute/template"
-	"k_cockpit/internal/compute/vm"
-	"k_cockpit/internal/compute/vmtag"
-	"k_cockpit/internal/devdata"
 	"k_cockpit/internal/model"
-	"k_cockpit/internal/network/bridge"
-	"k_cockpit/internal/network/capture"
-	"k_cockpit/internal/network/firewall"
-	"k_cockpit/internal/network/hostfirewall"
-	"k_cockpit/internal/network/portmirror"
-	"k_cockpit/internal/network/portsecurity"
-	"k_cockpit/internal/network/publicip"
-	"k_cockpit/internal/network/securitygroup"
-	"k_cockpit/internal/network/vpcacl"
-	"k_cockpit/internal/network/vswitch"
-	"k_cockpit/internal/node"
-	"k_cockpit/internal/ops/alert"
-	"k_cockpit/internal/ops/dashboard"
-	"k_cockpit/internal/ops/diagnostics"
-	"k_cockpit/internal/ops/hosttuning"
-	"k_cockpit/internal/ops/maintenance"
-	"k_cockpit/internal/ops/monitor"
-	"k_cockpit/internal/ops/platformcheck"
-	"k_cockpit/internal/ops/quotaenforce"
 	"k_cockpit/internal/ops/realtime"
-	"k_cockpit/internal/ops/schedule"
-	"k_cockpit/internal/ops/scheduler"
 	sched "k_cockpit/internal/ops/scheduler"
-	"k_cockpit/internal/ops/search"
 	"k_cockpit/internal/ops/task"
-	"k_cockpit/internal/platform/accesscontrol"
-	"k_cockpit/internal/platform/apikey"
 	"k_cockpit/internal/platform/audit"
-	"k_cockpit/internal/platform/auditlog"
-	"k_cockpit/internal/platform/auth"
-	"k_cockpit/internal/platform/authkey"
 	"k_cockpit/internal/platform/config"
-	"k_cockpit/internal/platform/cryptoutil"
 	"k_cockpit/internal/platform/database"
-	"k_cockpit/internal/platform/invite"
 	"k_cockpit/internal/platform/logging"
-	"k_cockpit/internal/platform/mailer"
-	"k_cockpit/internal/platform/passaudit"
-	"k_cockpit/internal/platform/reqlog"
-	"k_cockpit/internal/platform/risk"
-	"k_cockpit/internal/platform/settings"
 	"k_cockpit/internal/platform/useradmin"
-	"k_cockpit/internal/platform/version"
 	"k_cockpit/internal/router"
-	"k_cockpit/internal/storage/pool"
 	"k_cockpit/internal/storage/quota"
-	"k_cockpit/internal/storage/userstorage"
 )
 
 // app 汇集启动期装配好的全部依赖。
@@ -83,85 +41,50 @@ import (
 // 之后，main 只剩「按序装配 -> 启动 -> 注册路由」的骨架，各模块内部的接线细节
 // 收敛到对应方法里。
 //
+// 字段按两层组织，与 internal/ 的目录结构对应：
+//
+//   - **基座**：被全部域共享的实例（数据库、agent 通道、任务队列、审计记录器），
+//     挂在 app 根上——塞进任何子结构都会让接线写成 a.xxx.queue 这样更长的路径；
+//   - **领域**：与 internal/ 同名的六个子结构（platform / node / compute /
+//     network / storage / ops），各自的装配代码在 wire_<域>.go；周期组件天然
+//     跨域，按生命周期单独归入 bg。
+//
 // 方法之间的**调用顺序就是装配顺序**，其中若干处有硬约束（日志最先、总线先于
 // 队列、调度记录器先于所有周期组件、加密密钥在受理任何任务前注入）。这些约束
 // 原本靠"变量在文件里的先后位置"隐式表达，现在集中在 main 的调用序列里，一眼
 // 可见；跨方法的依赖通过结构体字段传递，因此每个 setup* 只依赖在它之前调用过
 // 的方法已经填好的字段。
 type app struct {
-	cfg    config.Config
-	logger *logging.Logger
-	db     *gorm.DB
+	// --- 基座（跨域共享；括号内为对应的 internal 包）---
 
-	// 认证与安全
-	issuer     *auth.TokenIssuer
-	recorder   *audit.Recorder
-	authKeySvc *authkey.Service
-	authSvc    *auth.Service
-	riskGuard  *risk.Guard
-	bootstrap  *auth.Bootstrap
-
-	// 节点通道
+	cfg    config.Config   // internal/platform/config
+	logger *logging.Logger // internal/platform/logging
+	db     *gorm.DB        // internal/platform/database
+	// mockAgent 是节点通道（internal/agent）的当前唯一实现，全部域共用；
+	// 真实 agent 落地后换类型，装配代码不感知（ADR-0007）。
 	mockAgent *agent.MockClient
-	nodeSvc   *node.Service
-
-	// 任务队列。createExec / guestExec 单独留字段：它们要在 setupCredentials
-	// 里补注入加密密钥，而那发生在队列注册之后。
-	bus        *realtime.Bus
-	queue      *task.Queue
-	createExec *vm.CreateExecutor
-	guestExec  *vm.GuestExecutor
-
-	// 业务服务
-	settingsSvc     *settings.Service
-	reqLogSvc       *reqlog.Service
-	passAuditSvc    *passaudit.Service
-	mailSvc         *mailer.Service
-	quotaSvc        *quota.Service
-	importerSvc     *importer.Service
-	publicIPSvc     *publicip.Service
-	sgSvc           *securitygroup.Service
-	userStorageSvc  *userstorage.Service
-	firewallSvc     *firewall.Service
-	apiKeySvc       *apikey.Service
-	mirrorSvc       *portmirror.Service
-	netSvc          *bridge.Service
-	auditLogSvc     *auditlog.Service
-	userAdminSvc    *useradmin.Service
-	inviteSvc       *invite.Service
-	tagSvc          *vmtag.Service
-	monitorSvc      *monitor.Service
-	hostTuningSvc   *hosttuning.Service
-	dashboardSvc    *dashboard.Service
-	schedulerSvc    *sched.Service
-	portSecuritySvc *portsecurity.Service
-	captureSvc      *capture.Service
-	quotaEnforceSvc *quotaenforce.Service
-	hostFirewallSvc *hostfirewall.Service
-	diagnosticsSvc  *diagnostics.Service
-	networkSvc      *vswitch.Service
-	vmSvc           *vm.Service
-	computeQuotaSvc *computequota.Service
-	alertSvc        *alert.Service
-	maintenanceSvc  *maintenance.Service
-	storageSvc      *pool.Service
-	scheduleSvc     *cron.Service
-	templateSvc     *template.Service
-
-	// 调度器注册表与记录器：周期组件共用，必须先于它们构造。
+	// recorder 是审计记录器（internal/platform/audit），全部写操作共用。
+	recorder *audit.Recorder
+	// bus / queue 是实时事件总线与任务队列（internal/ops/realtime、task），
+	// 全部领域执行器的载体。
+	bus   *realtime.Bus
+	queue *task.Queue
+	// schedRegistry / schedRecorder 是调度器注册表与记录器
+	// （internal/ops/scheduler），必须先于所有周期组件与调度视图构造。
 	schedRegistry *sched.Registry
 	schedRecorder *sched.Recorder
 
-	// 后台周期组件
-	scheduler      *cron.Scheduler
-	quotaLoop      *quotaenforce.Loop
-	alertLoop      *alert.Loop
-	schedRetention *scheduler.RetentionLoop
-	trimLoop       *pool.TrimLoop
-	mediaEjectLoop *vm.MediaEjectLoop
-	passAuditLoop  *passaudit.Loop
-	authKeyLoop    *authkey.Loop
-	collector      *monitor.Collector
+	// --- 领域（对应 internal/ 同名目录，装配代码在 wire_<域>.go）---
+
+	platform platformServices // internal/platform：认证、设置、用户与邀请
+	node     nodeServices     // internal/node：节点接入与投影
+	storage  storageServices  // internal/storage：池、用户存储、存储配额
+	network  networkServices  // internal/network：交换机、防火墙、公网 IP 等
+	compute  computeServices  // internal/compute：虚拟机、模板、导入、直通
+	ops      opsServices      // internal/ops：监控、工作台、告警、维护等
+
+	// bg 是后台周期组件：跨域，按生命周期归组（wire_background.go）。
+	bg backgroundLoops
 }
 
 func main() {
@@ -245,516 +168,24 @@ func (a *app) openDB() {
 	a.db = db
 }
 
-// setupAuth 装配认证、审计记录器、会话密钥轮换、高风险守卫与初始化引导。
-func (a *app) setupAuth() {
-	// 装配认证。签名密钥强度不足时直接失败启动——带着弱密钥继续运行，
-	// 等于把所有会话置于可伪造的风险之下。
-	issuer, err := auth.NewTokenIssuer(a.cfg.Session.Secret)
-	if err != nil {
-		log.Fatalf("初始化令牌签发器失败: %v", err)
-	}
-	a.issuer = issuer
-	a.recorder = audit.NewRecorder(a.db)
-
-	// 会话签名密钥（F-1-09）：库里没有时用配置里的初始密钥建一条，之后轮换
-	// 直接换库里的记录——换一次环境变量再重启的做法，在"怀疑泄漏"的场景下
-	// 没有可用的时间窗。
-	a.authKeySvc = authkey.NewService(a.db, cryptoutil.DeriveKey(
-		[]byte(a.cfg.Session.Secret), "k_cockpit/auth_key/v1"), a.cfg.Session.Secret, a.recorder)
-	issuer.SetKeyProvider(func() (string, []byte, error) {
-		return a.authKeySvc.Load(context.Background())
-	})
-
-	a.authSvc = auth.NewService(a.db, issuer, a.recorder, auth.Config{
-		IdleTimeout:     a.cfg.Session.IdleTimeout,
-		AbsoluteTimeout: a.cfg.Session.AbsoluteTimeout,
-	})
-
-	// 高风险二次验证的守卫。根密钥复用会话密钥但在内部按用途派生：
-	// 单一密钥配置避免部署时多一个必填项，而用途隔离保证签名与加密
-	// 不会互相影响。
-	a.riskGuard = risk.NewGuard(a.db, []byte(a.cfg.Session.Secret), a.recorder, a.cfg.Security.DevBypassCode)
-	if a.riskGuard.DevBypassEnabled() {
-		// 醒目地打印：一个只在环境变量里的开关很容易被遗忘，而界面上仍
-		// 显示「已绑定验证器」会让所有人以为防护是完整的。
-		log.Printf("[risk] ⚠️  开发期万能验证码已启用（SECURITY_DEV_BYPASS_CODE）：" +
-			"二次验证可被该固定值直接绕过。**部署到生产前必须清除该配置**" +
-			"（生产环境配置它会导致启动失败）。")
-	}
-
-	// 系统尚无管理员时生成一次性初始化令牌。**它只打印到日志**：
-	// 能读到日志即等价于拥有服务器访问权，这是「谁有权初始化」的判据。
-	// 不采用默认账号密码——那是全网皆知的凭据，存在被抢先登录的窗口。
-	bootstrap, token, err := auth.NewBootstrap(a.db, a.recorder)
-	if err != nil {
-		log.Fatalf("检查初始化状态失败: %v", err)
-	}
-	a.bootstrap = bootstrap
-	if token != "" {
-		log.Printf("\n"+
-			"============================================================\n"+
-			"  系统尚未初始化，请访问面板创建首个管理员。\n"+
-			"  一次性初始化令牌（仅本次运行有效，创建后立即失效）：\n\n"+
-			"    %s\n\n"+
-			"  提示：该令牌等同于初始化权限，请勿写入公开渠道；\n"+
-			"  日志文件的访问权限即初始化权限，请妥善控制。\n"+
-			"============================================================", token)
-	}
-}
-
-// seedDevData 预置开发环境的演示数据（mock 运输层专用，见 internal/devdata）：
-// 模拟节点、存储池、系统网络、演示镜像与模板。双重闸门（development +
-// mock）保证生产永不进入；失败只降级告警不阻断启动（Ensure 自身幂等）。
-func (a *app) seedDevData() {
-	if a.cfg.Env != config.EnvDevelopment || a.cfg.Agent.Transport != config.AgentTransportMock {
-		return
-	}
-	err := devdata.Ensure(context.Background(), devdata.Deps{
-		DB:      a.db,
-		Nodes:   a.nodeSvc,
-		SwitchN: a.networkSvc,
-	})
-	if err != nil {
-		log.Printf("[devdata] ⚠️ 预置演示数据失败（不影响启动，可手工补齐）: %v", err)
-	}
-}
-
-// hydrateMockPowerState 把虚拟机投影的当前状态喂给 mock（ADR-0011）：
-// mock 重启后电源状态清零，不注水的话「已关机的虚拟机点开机」会被
-// 默认值 running 拒绝。仅 mock 运输层需要；未知状态跳过（探测的默认值
-// 会兜底，操作一次后自然收敛）。
-func (a *app) hydrateMockPowerState() {
-	if a.cfg.Agent.Transport != config.AgentTransportMock {
-		return
-	}
-	var vms []model.VM
-	if err := a.db.WithContext(context.Background()).
-		Where("present = ? AND status <> ?", true, model.VMStatusUnknown).
-		Find(&vms).Error; err != nil {
-		log.Printf("[agent] ⚠️ 读取虚拟机投影失败，mock 电源状态未注水: %v", err)
-		return
-	}
-	for _, v := range vms {
-		a.mockAgent.SetPower(v.Name, string(v.Status))
-	}
-}
-
-// setupAgent 装配节点通道与节点服务。
-func (a *app) setupAgent() { // 装配 agent 通道。gRPC 双向流实现尚未开发，本期由 mock 直接
-	// 返回结果——业务代码只依赖内部接口，替换 agent 实现时无需改动（ADR-0007）。
-	switch a.cfg.Agent.Transport {
-	case config.AgentTransportMock:
-		// 阶段之间留一点间隔，好让任务时间线能看出推进过程。
-		//
-		// 测试里用的是零间隔（NewMockClient）：**测试需要确定性，不需要
-		// 真实感**——每个用例多等一秒只会让人不愿跑测试。而演示时所有阶段
-		// 落在同一毫秒里，时间线虽然是对的，却看不出它是一条时间线。
-		a.mockAgent = agent.NewMockClient().WithStageDelay(220 * time.Millisecond)
-		log.Printf("[agent] 通道 = mock：节点运行态与领域操作由 mock 提供，不与节点通信")
-	default:
-		log.Fatalf("AGENT_TRANSPORT=%s 尚未实现（当前仅支持 %s）",
-			a.cfg.Agent.Transport, config.AgentTransportMock)
-	}
-	a.nodeSvc = node.NewService(a.db, a.mockAgent, a.recorder, a.mockAgent)
-}
-
-// setupTaskQueue 建实时总线与任务队列，注册全部执行器并启动调度循环。
-func (a *app) setupTaskQueue() {
-	db, mockAgent := a.db, a.mockAgent
-
-	// 实时事件总线：任务状态变化由队列在关键节点广播，SSE 端点订阅它。
-	//
-	// 先建总线再建队列，是因为队列要在入队、派发与落定三处发布事件——
-	// 顺序反了就只能事后补一次装配，而那种"可选装配"最容易被忘记。
-	a.bus = realtime.NewBus()
-	// 任务队列：所有异步操作的载体。注册各能力的 Executor，队列本身
-	// 不关心任务具体做什么——新增能力时只需在这里多注册一个。
-	a.queue = task.NewQueue(db, a.recorder, task.Options{}).WithBus(a.bus)
-	a.createExec = vm.NewCreateExecutor(db, mockAgent)
-	a.queue.Register(a.createExec)
-	a.queue.Register(vm.NewPowerExecutor(db, mockAgent))
-	a.queue.Register(vm.NewDeleteExecutor(db, mockAgent))
-	// 快照（F-2-07）。三个执行器共用资源锁键 vm:<id>，因此与电源操作天然
-	// 互斥——恢复快照时不会有并发的开机请求插进来。
-	a.queue.Register(vm.NewSnapshotCreateExecutor(db, mockAgent))
-	a.queue.Register(vm.NewSnapshotRestoreExecutor(db, mockAgent))
-	a.queue.Register(vm.NewSnapshotDeleteExecutor(db, mockAgent))
-	// 批量删除快照与 UEFI 启动项修复（F-2-07 / F-2-11）。
-	a.queue.Register(vm.NewSnapshotDeleteAllExecutor(db, mockAgent))
-	a.queue.Register(vm.NewNVRAMRepairExecutor(mockAgent))
-	// ACL 应用（F-4-05）。
-	a.queue.Register(vpcacl.NewExecutor(mockAgent))
-	a.queue.Register(vm.NewConfigUpdateExecutor(db, mockAgent))
-	a.queue.Register(vm.NewEnterRescueExecutor(db, mockAgent))
-	a.queue.Register(vm.NewExitRescueExecutor(db, mockAgent))
-	// 模板制备要复制整块系统盘，因此与其它磁盘操作一样走队列。
-	a.queue.Register(template.NewPrepareExecutor(db, mockAgent))
-	a.queue.Register(template.NewDeleteExecutor(db, mockAgent))
-	// 模板导出与导入（F-3-05）：打包与解包都要读写整块镜像。
-	a.queue.Register(template.NewExportExecutor(db, mockAgent))
-	a.queue.Register(template.NewExportDeleteExecutor(db, mockAgent))
-	a.queue.Register(template.NewImportExecutor(db, mockAgent))
-	// 派生链维护（rebase / 拉平 / 提升 / 热提升删除）。
-	a.queue.Register(template.NewMaintainExecutor(db, mockAgent))
-	// 离线预处理（F-3-06）。
-	a.queue.Register(template.NewPreprocessExecutor(db, mockAgent))
-	// 重装要备份并重建系统盘，同样是磁盘操作。
-	a.queue.Register(vm.NewReinstallExecutor(db, mockAgent))
-	a.queue.Register(vm.NewPurgeExecutor(db, mockAgent))
-	// 导出要打包整块磁盘，可能跑到几十分钟。
-	a.queue.Register(vm.NewExportExecutor(db, mockAgent))
-	a.queue.Register(vm.NewExportDeleteExecutor(db, mockAgent))
-	// 来宾自动化要进系统内部执行，同样是异步的。
-	// （改密成功后要同步凭据记录，需要加密密钥——在 setupCredentials 处注入。）
-	a.guestExec = vm.NewGuestExecutor(db, mockAgent)
-	a.queue.Register(a.guestExec)
-	// 镜像导入要转换格式，可能处理几十 GB 的文件。
-	a.queue.Register(importer.NewImportExecutor(db, mockAgent))
-	// 迁移要搬运整块磁盘，是最耗时的操作之一。
-	a.queue.Register(vm.NewMigrateExecutor(db, mockAgent))
-	// 公网地址变更要动宿主机的 iptables 与路由。
-	a.queue.Register(publicip.NewChangeExecutor(db, mockAgent))
-	// 安全组规则要写进宿主机运行域的规则链。
-	a.queue.Register(securitygroup.NewApplyExecutor(db, mockAgent))
-	// 目录共享要往虚拟机的域配置里加一块 virtio-9p 设备。
-	a.queue.Register(pool.NewShareExecutor(db, mockAgent))
-	// 存储卷要跑 pvcreate/vgcreate/lvcreate，删卷还要逆序释放设备。
-	a.queue.Register(pool.NewVolumeExecutor(db, mockAgent))
-	// 端口安全要往节点流表里写规则。
-	a.queue.Register(portsecurity.NewExecutor(db, mockAgent))
-	// 抓包：一次限时的抓包，以及删除节点上的抓包文件。
-	a.queue.Register(capture.NewExecutor(db, mockAgent))
-	a.queue.Register(capture.NewDeleteExecutor(db, mockAgent))
-	// 配额处置：对某用户的网络施加或撤销限速 / 断网。
-	a.queue.Register(quotaenforce.NewExecutor(db, mockAgent))
-	// 宿主机防火墙：应用与紧急回滚。
-	a.queue.Register(hostfirewall.NewExecutor(db, mockAgent))
-	// PCIe 直通设备的挂载与卸载。
-	a.queue.Register(passthrough.NewExecutor(db, mockAgent))
-	// 宿主机性能调优。
-	a.queue.Register(hosttuning.NewExecutor(db, mockAgent))
-	// 平台自检后的重新下发。
-	a.queue.Register(platformcheck.NewExecutor(db, mockAgent))
-	// 关机状态下的磁盘扩容。
-	a.queue.Register(vm.NewDiskResizeExecutor(db, mockAgent))
-	// 磁盘的挂载 / 卸载 / 换总线（F-2-06）。
-	a.queue.Register(vm.NewDiskChangeExecutor(db, mockAgent))
-	// 链接克隆的磁盘合并为独立镜像。
-	a.queue.Register(vm.NewIndependentExecutor(db, mockAgent))
-	// 光驱（挂载 / 弹出 / 换盘 / 摘除 / 换总线）。
-	a.queue.Register(vm.NewCDROMExecutor(db, mockAgent))
-	// 网络变更（F-2-03）：三种资源各一个执行器，共用 vm:<id> 资源锁。
-	a.queue.Register(vm.NewInterfaceChangeExecutor(db, mockAgent))
-	a.queue.Register(vm.NewStaticIPChangeExecutor(db, mockAgent))
-	a.queue.Register(vm.NewPortForwardChangeExecutor(db, mockAgent))
-	a.queue.Register(pool.NewCreateExecutor(db, mockAgent))
-	a.queue.Register(pool.NewDeleteExecutor(db, mockAgent))
-	// 分区、池配置与卸载（F-5-01 后续迭代）。
-	a.queue.Register(pool.NewPartitionExecutor(mockAgent))
-	a.queue.Register(pool.NewPartitionDeleteExecutor(mockAgent))
-	a.queue.Register(pool.NewPoolConfigExecutor(db, mockAgent))
-	a.queue.Register(pool.NewPoolUnmountExecutor(db, mockAgent))
-	// 交换机变更要建网桥，因此与存储池一样走队列。
-	a.queue.Register(vswitch.NewSwitchChangeExecutor(db, mockAgent))
-	a.queue.Start(context.Background())
-}
-
-// setupSchedulerRegistry 登记调度器身份并建记录器。
-//
-// 必须先于所有周期组件（setupBackground）调用：它们都要 Observe 这个记录器。
-func (a *app) setupSchedulerRegistry() {
-	// 调度器注册表（F-7-04）：先登记身份与说明，再把记录器交给各组件。
-	//
-	// **登记发生在启动之前**：界面上的「有哪些调度器在跑」来自这张表，
-	// 而不是来自事件表。只靠事件的话，一个正常但最近无事可做的调度器
-	// 会从列表里消失——而那与「它坏了」是两回事。
-	a.schedRegistry = sched.NewRegistry()
-	sched.RegisterBuiltins(a.schedRegistry, sched.BuiltinOptions{
-		MetricsInterval:        monitor.DefaultOptions().Interval,
-		MetricsCleanupInterval: monitor.DefaultOptions().CleanupInterval,
-		ScheduleInterval:       cron.DefaultOptions().Interval,
-		QueuePollInterval:      task.DefaultOptions().PollInterval,
-		QuotaEvalInterval:      quotaenforce.DefaultOptions().Interval,
-		PasswordAuditInterval:  24 * time.Hour,
-		RetentionInterval:      time.Hour,
-		TrimInterval:           24 * time.Hour,
-		MediaEjectInterval:     time.Minute,
-	})
-	// 记录器在这里建好（在**所有**周期组件之前）：定时任务扫描器与采集器
-	// 构造之后马上就要接上它。
-	a.schedRecorder = sched.NewRecorder(a.db, a.schedRegistry)
-}
-
 // setupServices 按域装配全部业务服务并完成它们之间的接线。
+//
+// 调用顺序是依赖序，不是任意的排列：
+//
+//	platform（设置）→ storage（配额）→ network → compute → platform（用户簇）
+//	→ ops（聚合一切）→ 跨域接线
+//
+// 其中两处顺序值得说明：storage 的配额被 compute（模板/导入）与 platform
+// （用户管理的配额初始化）依赖，因此靠前；platform 拆成两步是因为用户管理
+// 要接 storage 的配额写入，认证簇却必须在一切之前（setupAuth）。
 func (a *app) setupServices() {
-	a.setupSettingsServices()
-	a.setupResourceServices()
-	a.setupObservabilityServices()
+	a.setupPlatformServices()
+	a.setupStorageServices()
+	a.setupNetworkServices()
 	a.setupComputeServices()
-}
-
-// setupSettingsServices 装配设置、请求日志、口令检查与邮件。
-func (a *app) setupSettingsServices() {
-	db, mockAgent := a.db, a.mockAgent
-
-	a.settingsSvc = settings.NewService(db, a.recorder)
-	// 请求日志的开关来自设置项：每次写入前读取，因此改了设置立即生效，
-	// 不需要重启（重启才能生效会让人以为开关坏了）。
-	a.reqLogSvc = reqlog.NewService(db, func(ctx context.Context) bool {
-		return a.settingsSvc.Bool("security.request_log_enabled", false)
-	})
-
-	// 口令检查：判定在节点侧，这里只做开关、定时与结果落地。
-	a.passAuditSvc = passaudit.NewService(db, mockAgent, func() bool {
-		return a.settingsSvc.Bool("security.password_breach_check", false)
-	}, a.recorder)
-	// 邮件（F-1-08）：配置来自系统设置，因此管理员保存 SMTP 后**立即**生效，
-	// 无需重启——"测试邮件"按钮是验证配置是否正确的唯一手段，重启才能生效
-	// 会让那个按钮看起来一直是坏的。
-	a.mailSvc = mailer.New(a.settingsSvc.MailConfig)
-	// 日志归档保留数来自设置项：启动时取一次，之后每次修改立即应用
-	// （applier 里改的是同一个 Logger 的选项，写路径不受影响）。
-	a.logger.SetKeepFiles(a.settingsSvc.Int(settings.KeyLogKeepFiles, 5))
-	a.settingsSvc.RegisterApplier(settings.KeyLogKeepFiles, intApplier{fn: a.logger.SetKeepFiles})
-	// 登录阶段的二次验证复用 risk 的校验逻辑（恢复码一次性、TOTP 容差），
-	// 接线在 router.Register 内完成——漏接的表现是"登录时永远提示服务
-	// 不可用"，而编译期看不出来。
-	a.authSvc.SetMailer(a.mailSvc)
-}
-
-// setupResourceServices 装配配额、导入、公网、安全组、用户存储、用户与邀请等资源类服务。
-func (a *app) setupResourceServices() {
-	db, queue, mockAgent := a.db, a.queue, a.mockAgent
-
-	// 存储配额（f-9-02）：按用户按节点。
-	a.quotaSvc = quota.NewService(db, a.recorder)
-	a.importerSvc = importer.NewService(db, queue, mockAgent, a.recorder, a.quotaSvc)
-	a.publicIPSvc = publicip.NewService(db, queue, mockAgent, a.recorder)
-	a.sgSvc = securitygroup.NewService(db, queue, mockAgent, a.recorder)
-	// 分片暂存区放在数据库同级的 data 目录下——控制面持久化的东西都在那里。
-	chunkStore, err := userstorage.NewChunkStore(filepath.Join(filepath.Dir(a.cfg.DB.Path), "uploads"))
-	if err != nil {
-		log.Fatalf("[server] 初始化上传暂存区失败: %v", err)
-	}
-	a.userStorageSvc = userstorage.NewService(db, a.recorder, a.quotaSvc).
-		WithChunks(chunkStore).WithAgent(mockAgent)
-	a.firewallSvc = firewall.NewService(db, mockAgent, a.recorder)
-	a.apiKeySvc = apikey.NewService(db, a.recorder)
-	a.mirrorSvc = portmirror.NewService(db, mockAgent, a.recorder)
-	a.netSvc = bridge.NewService(db, mockAgent, a.recorder)
-	a.auditLogSvc = auditlog.NewService(db)
-	a.userAdminSvc = useradmin.NewService(db, a.recorder, quotaAdapter{svc: a.quotaSvc})
-	// 邀请注册（F-1-10）。账号创建复用 useradmin（密码由受邀人自设），链接里的站点地址取自设置项——没有配置时给出相对链接，由管理员自己补域名。
-	a.inviteSvc = invite.NewService(db, a.recorder)
-	a.inviteSvc.SetUserCreator(a.userAdminSvc.CreateFromInvite)
-	a.inviteSvc.SetMailer(func(ctx context.Context, to, link, role string) error {
-		// role 直接进正文：受邀人需要知道自己被邀请成什么角色。
-		return a.mailSvc.Send(ctx, to, "邀请你加入 K Cockpit",
-			"你被邀请加入 K Cockpit，角色："+role+"\n\n"+
-				"请打开下面的链接完成注册（链接三天内有效）：\n"+link+"\n\n"+
-				"如果你并不认识邀请你的人，请忽略这封邮件。\n")
-	})
-	// 链接里的站点地址取自设置项（环境变量 > 面板设置 > 默认值），读取发生在
-	// 每次拼链接时，因此改设置立即生效。没有配置时返回空串、链接退化为相对
-	// 路径——界面会提示管理员补上；猜一个错误域名发给收件人比相对路径更糟。
-	a.inviteSvc.SetSiteURL(func(ctx context.Context) string {
-		return a.settingsSvc.String(settings.KeySiteURL, "")
-	})
-	// SSH 访问要下发到宿主机，因此接上 agent（不接时只改控制面记录）。
-	a.userAdminSvc.SetAgent(mockAgent)
-	a.tagSvc = vmtag.NewService(db, a.recorder)
-}
-
-// setupObservabilityServices 装配监控、工作台、调度器视图、网络与诊断等只读聚合类服务。
-func (a *app) setupObservabilityServices() {
-	db, queue, mockAgent := a.db, a.queue, a.mockAgent
-
-	a.monitorSvc = monitor.NewService(db)
-	// 宿主机调优（KSM / zRAM / 嵌套虚拟化）。工作台要复用它读一次状态，
-	// 因此先建出来而不是塞进 Deps 里现造——两个实例意味着两份缓存口径。
-	a.hostTuningSvc = hosttuning.NewService(db, queue, mockAgent, a.recorder)
-
-	// 工作台概览（F-8-03 / F-8-04）：只读聚合，节点运行态复用节点服务。
-	a.dashboardSvc = dashboard.NewService(db, a.nodeSvc)
-	// 工作台上的 KSM / zRAM 直接读调优服务（同一份口径），硬件与网络统计
-	// 走 agent 的两个按需操作。
-	a.dashboardSvc.SetTuning(a.hostTuningSvc)
-	a.dashboardSvc.SetAgent(mockAgent)
-	a.schedulerSvc = sched.NewService(db, a.schedRegistry)
-	a.portSecuritySvc = portsecurity.NewService(db, mockAgent, a.recorder, queue)
-	a.captureSvc = capture.NewService(db, mockAgent, a.recorder, queue)
-	a.quotaEnforceSvc = quotaenforce.NewService(db, queue, mockAgent, a.recorder)
-	// 面板与 SSH 端口作为**合成的保护规则**传给服务——它们跟着配置走，
-	// 不存进表：端口改了而表里那条还在，它会保护一个不再监听的端口。
-	a.hostFirewallSvc = hostfirewall.NewService(
-		db, queue, mockAgent, a.recorder, a.cfg.HTTP.Port, nil)
-	a.diagnosticsSvc = diagnostics.NewService(db, a.settingsSvc, a.schedRegistry, a.recorder)
-	// 版本摘要进诊断包：排障时第一个要问的就是「跑的是哪个版本」，
-	// 而它应当随包一起走，不必再让人回头去问。
-	a.diagnosticsSvc.Version = version.Summary()
-	a.networkSvc = vswitch.NewService(db, mockAgent, queue, a.recorder)
-	// 全局带宽总限（G-44）从设置读取：下发时现取值，改设置不需要重启。
-	a.networkSvc.SetSettingsProvider(a.settingsSvc)
-}
-
-// setupComputeServices 装配虚拟机、计算配额、存储、模板与定时任务等计算类服务。
-func (a *app) setupComputeServices() {
-	db, queue, mockAgent := a.db, a.queue, a.mockAgent
-
-	// vm 与 storage 都要读设置里的陈旧阈值：把 settingsSvc 作为 Provider
-	// 注入，让「面板上改的阈值」真的影响业务行为——否则那两个设置项就是
-	// 摆设，而「改了不生效」正是 f-9-01 R-002 要消灭的现象。
-	a.vmSvc = vm.NewService(db, queue, a.recorder, mockAgent, a.settingsSvc, a.quotaSvc)
-	// 计算资源配额（vCPU / 内存 / 实例数）：创建虚拟机时校验，超限即拒绝新建。
-	a.computeQuotaSvc = computequota.NewService(db, a.recorder)
-	// 工作台「我的配额」（G-32）：三类配额的读数都从各自的判定服务取，
-	// 保证用户看到的数字与判定时用的是同一份。
-	a.dashboardSvc.SetQuotaReaders(a.computeQuotaSvc, a.quotaSvc, a.quotaEnforceSvc)
-	// 非负载类自检提示（F-8-03）：每次取摘要时现读设置——改完配置刷新
-	// 即消失，不等下一次评估周期。
-	a.dashboardSvc.SetNotices(func() []dashboard.Alert {
-		var out []dashboard.Alert
-		if a.settingsSvc.String("notification.smtp_host", "") == "" {
-			out = append(out, dashboard.Alert{
-				Level: "warning",
-				Text:  "未配置邮件发信（SMTP）：找回密码与邀请注册的邮件发不出去",
-				Link:  "/settings",
-			})
-		}
-		if a.settingsSvc.String(settings.KeySiteURL, "") == "" {
-			out = append(out, dashboard.Alert{
-				Level: "warning",
-				Text:  "未配置站点对外地址：邀请链接是站外打不开的相对路径",
-				Link:  "/settings",
-			})
-		}
-		return out
-	})
-	// 告警中心（F-8-07）。
-	a.alertSvc = alert.NewService(db)
-	a.vmSvc.SetComputeQuota(a.computeQuotaSvc)
-	// 列表要带标签与最近占用，两者都是**一次批量查询**；不装配则列表不带这两列。
-	a.vmSvc.SetTagProvider(a.tagSvc)
-	// 公网地址与端口转发的数量同样受计算配额约束：它们都是稀缺资源，
-	// 而"先到先得"通常不是管理员想要的分配策略。
-	a.publicIPSvc.SetComputeQuota(a.computeQuotaSvc)
-	a.storageSvc = pool.NewService(db, queue, a.recorder, mockAgent, a.settingsSvc)
-
-	// 定时任务（F-7-05）：调度器到点把**已有的任务类型**入队，自己不做任何
-	// 节点操作，因此不需要新的执行器——这也是它能在 mock 之上完整跑通的原因。
-	a.scheduleSvc = cron.NewService(db)
-	a.templateSvc = template.NewService(db, queue, a.recorder, mockAgent, a.quotaSvc)
-	// 站点维护（G-46）：逐节点接管节点维护模式，批量关机复用 vm 的入队逻辑。
-	// 放在 vmSvc 之后装配——它要把 ShutdownAllOnNode 注入进去。
-	a.maintenanceSvc = maintenance.NewService(db, a.nodeSvc, a.recorder)
-	a.maintenanceSvc.SetVMShutdown(a.vmSvc.ShutdownAllOnNode)
-}
-
-// setupCredentials 给需要可逆凭据的服务注入加密密钥。
-//
-// 必须在受理任何任务之前完成：创建与来宾改密都要用它加密初始凭据。
-func (a *app) setupCredentials() {
-	// 控制台密码需要可逆加密（f-2-08 R-005）：它要交给 agent 参与 VNC 认证，
-	// 因此不能用单向哈希。用途标签与会话签名分开派生。
-	// 控制台密码与初始登录密码共用同一把派生密钥：它们都是"交给节点或展示
-	// 给用户的可逆凭据"，分开派生只会让"忘了配哪一个"的排查面翻倍。
-	credKey := cryptoutil.DeriveKey(
-		[]byte(a.cfg.Session.Secret), "k_cockpit/vm/credential/v1")
-	a.vmSvc.SetEncryptionKey(credKey)
-	a.createExec.SetEncryptionKey(credKey)
-	a.guestExec.SetEncryptionKey(credKey)
-}
-
-// setupBackground 构造全部后台周期组件并接上调度记录器。
-//
-// 只构造与 Observe，不 Start——启动集中在 startBackground，以便与优雅退出
-// （stopBackground）成对出现。观测必须在启动之前接上，否则启动后到接上之间
-// 那一轮的动作不会被记录。
-func (a *app) setupBackground() {
-	// 定时任务扫描器。定时快照复用 vm 服务的创建快照入口：那条路要先建记录
-	// 拿 ID、过配额、探测运行态。在调度器里重抄一遍等于把规则放两份。
-	a.scheduler = cron.New(a.db, a.queue, cron.Options{})
-	a.scheduler.SetSnapshotCreator(a.vmSvc)
-	a.scheduler.Observe(a.schedRecorder)
-
-	// 配额评估循环：配额以月计，5 分钟一轮足够，而它要扫两张按天累计的表。
-	a.quotaLoop = quotaenforce.NewLoop(a.quotaEnforceSvc, quotaenforce.DefaultOptions())
-	// "关机"处置与用户通知（F-8-06）：关机复用 vm 的入队逻辑，通知只在
-	// 已验证邮箱 + SMTP 可用时发出。
-	a.quotaEnforceSvc.SetVMShutdown(a.vmSvc.ShutdownUserVMsOnNode)
-	a.quotaEnforceSvc.SetNotifier(a.notifyUserEmail)
-	a.quotaLoop.Observe(a.schedRecorder)
-
-	// 告警评估循环（F-8-07）：只读库表，不探测节点——评估每五分钟跑一次，
-	// 在里面探测会让告警系统自己成为负载。
-	a.alertLoop = alert.NewLoop(a.alertSvc, alert.DefaultOptions())
-	a.alertLoop.Observe(a.schedRecorder)
-
-	// 口令安全检查循环（F-10-06）：一天一次，判定在节点侧完成。
-	a.passAuditLoop = passaudit.NewLoop(a.passAuditSvc, passaudit.DefaultOptions())
-	// 命中通知（F-10-05）：发给命中者本人。
-	a.passAuditSvc.SetNotifier(a.notifyUserEmail)
-	a.passAuditLoop.Observe(a.schedRecorder)
-
-	// 会话密钥自动轮换（F-1-09）：间隔为 0 时这个循环什么都不做。
-	a.authKeyLoop = authkey.NewLoop(a.authKeySvc, func() int {
-		return a.settingsSvc.Int("security.auth_key_rotate_days", 0)
-	}, authkey.DefaultOptions())
-	a.authKeyLoop.Observe(a.schedRecorder)
-
-	// 指标采集器：按固定间隔落库。
-	//
-	// **它必须独立于页面访问**——「用户看页面时顺便采一次」得到的是密度由
-	// 点击行为决定的伪历史：有人看的时候一秒一条，没人看的时候一条都没有。
-	// 用它算出来的任何趋势都与真实情况无关，而它看起来像一份正常的图表。
-	//
-	// 采集有它自己的节奏，与谁在看无关。
-	a.collector = monitor.NewCollector(a.db, a.mockAgent, monitor.DefaultOptions())
-	a.collector.Observe(a.schedRecorder)
-
-	// 调度事件保留清理（G-48）：保留期从设置读取，每次清理前现取值。
-	a.schedRetention = scheduler.NewRetentionLoop(a.db, a.schedRecorder, scheduler.RetentionOptions{
-		KeepHours: func() int {
-			return a.settingsSvc.Int(settings.KeySchedulerEventKeepHours, 168)
-		},
-	})
-
-	// 存储空间自动回收（G-52）：开关从设置读取，执行结果记入调度事件。
-	a.trimLoop = pool.NewTrimLoop(a.db, a.mockAgent, a.schedRecorder, pool.TrimOptions{
-		Enabled: func() bool {
-			return a.settingsSvc.Bool(settings.KeyStorageAutoTrim, false)
-		},
-	})
-
-	// 安装介质自动弹出（F-2-17）：Windows 初始化就绪后弹出安装 ISO。
-	a.mediaEjectLoop = vm.NewMediaEjectLoop(a.vmSvc, a.db, a.mockAgent, a.schedRecorder, vm.MediaEjectOptions{})
-}
-
-// startBackground 启动全部后台周期组件。
-func (a *app) startBackground() {
-	ctx := context.Background()
-	a.scheduler.Start(ctx)
-	a.quotaLoop.Start(ctx)
-	a.alertLoop.Start(ctx)
-	go a.passAuditLoop.Start(ctx)
-	go a.authKeyLoop.Start(ctx)
-	a.collector.Start(ctx)
-	go a.schedRetention.Start(ctx)
-	go a.trimLoop.Start(ctx)
-	go a.mediaEjectLoop.Start(ctx)
-}
-
-// stopBackground 停止需要优雅收尾的周期组件。
-//
-// 只停这三个：与拆分前 main 里的三个 defer 一一对应。passAuditLoop /
-// authKeyLoop / scheduler 原本就没有 Stop（进程退出即止），这里不新增。
-func (a *app) stopBackground() {
-	a.collector.Stop()
-	a.alertLoop.Stop()
-	a.quotaLoop.Stop()
-	a.schedRetention.Stop()
-	a.trimLoop.Stop()
-	a.mediaEjectLoop.Stop()
+	a.setupPlatformAdminServices()
+	a.setupOpsServices()
+	a.setupCrossWiring()
 }
 
 // newHTTPServer 创建 Hertz 服务实例。
@@ -776,62 +207,65 @@ func (a *app) registerRoutes(h *server.Hertz) {
 }
 
 // routerDeps 汇集路由注册所需的全部依赖。
+//
+// 只做「字段到字段」的映射：所有服务在各域的 wire 文件里构造完毕，
+// 这里不再出现 New*。
 func (a *app) routerDeps() router.Deps {
 	return router.Deps{
 		DB:            a.db,
-		Auth:          a.authSvc,
-		Bootstrap:     a.bootstrap,
-		Node:          a.nodeSvc,
-		VM:            a.vmSvc,
+		Auth:          a.platform.authSvc,
+		Bootstrap:     a.platform.bootstrap,
+		Node:          a.node.nodeSvc,
+		VM:            a.compute.vmSvc,
 		Task:          a.queue,
-		Risk:          a.riskGuard,
-		Schedule:      a.scheduleSvc,
-		Template:      a.templateSvc,
-		Quota:         a.quotaSvc,
-		Importer:      a.importerSvc,
-		PublicIP:      a.publicIPSvc,
-		SecurityGroup: a.sgSvc,
-		UserStorage:   a.userStorageSvc,
-		Scheduler:     a.schedulerSvc,
-		PortSecurity:  a.portSecuritySvc,
-		Capture:       a.captureSvc,
-		QuotaEnforce:  a.quotaEnforceSvc,
-		HostFirewall:  a.hostFirewallSvc,
-		Passthrough:   passthrough.NewService(a.db, a.queue, a.mockAgent, a.recorder),
-		HostTuning:    a.hostTuningSvc,
-		PlatformCheck: platformcheck.NewService(a.db, a.queue, a.mockAgent, a.recorder),
-		AccessControl: accesscontrol.NewService(a.db, a.recorder, accesscontrol.Options{}),
-		Diagnostics:   a.diagnosticsSvc,
-		Firewall:      a.firewallSvc,
-		APIKey:        a.apiKeySvc,
-		PortMirror:    a.mirrorSvc,
-		NetworkBridge: a.netSvc,
-		AuditLog:      a.auditLogSvc,
+		Risk:          a.platform.riskGuard,
+		Schedule:      a.ops.scheduleSvc,
+		Template:      a.compute.template,
+		Quota:         a.storage.quota,
+		Importer:      a.compute.importer,
+		PublicIP:      a.network.publicIP,
+		SecurityGroup: a.network.sg,
+		UserStorage:   a.storage.userStorage,
+		Scheduler:     a.ops.schedulerSvc,
+		PortSecurity:  a.network.portSecurity,
+		Capture:       a.network.capture,
+		QuotaEnforce:  a.ops.quotaEnforce,
+		HostFirewall:  a.network.hostFirewall,
+		Passthrough:   a.compute.passthrough,
+		HostTuning:    a.ops.hostTuning,
+		PlatformCheck: a.ops.platformChk,
+		AccessControl: a.platform.accessControl,
+		Diagnostics:   a.ops.diagnostics,
+		Firewall:      a.network.firewall,
+		APIKey:        a.platform.apiKey,
+		PortMirror:    a.network.mirror,
+		NetworkBridge: a.network.netSvc,
+		AuditLog:      a.platform.auditLog,
 		AuditRecorder: a.recorder,
 		Logging:       a.logger,
-		ReqLog:        a.reqLogSvc,
-		PassAudit:     a.passAuditSvc,
-		AuthKey:       a.authKeySvc,
-		Invite:        a.inviteSvc,
-		UserAdmin:     a.userAdminSvc,
-		VMTag:         a.tagSvc,
-		Monitor:       a.monitorSvc,
-		Dashboard:     a.dashboardSvc,
-		ComputeQuota:  a.computeQuotaSvc,
-		Search:        search.NewService(a.db),
-		Alert:         a.alertSvc,
-		Maintenance:   a.maintenanceSvc,
-		Storage:       a.storageSvc,
-		Network:       a.networkSvc,
-		Settings:      a.settingsSvc,
-		Mailer:        a.mailSvc,
+		ReqLog:        a.platform.reqLog,
+		PassAudit:     a.platform.passAudit,
+		AuthKey:       a.platform.authKey,
+		Invite:        a.platform.invite,
+		UserAdmin:     a.platform.userAdmin,
+		VMTag:         a.compute.tag,
+		Monitor:       a.ops.monitor,
+		Dashboard:     a.ops.dashboard,
+		ComputeQuota:  a.compute.computeQuota,
+		Search:        a.ops.search,
+		Alert:         a.ops.alert,
+		Maintenance:   a.ops.maintenance,
+		Storage:       a.storage.storageSvc,
+		Network:       a.network.networkSvc,
+		Settings:      a.platform.settings,
+		Mailer:        a.platform.mailer,
 		Bus:           a.bus,
-		VpcACL:        vpcacl.NewService(a.db, a.mockAgent, a.queue, a.recorder),
+		VpcACL:        a.network.vpcACL,
 		SecureCookie:  a.cfg.Session.SecureCookie,
 		SimulateAgent: a.cfg.Agent.Transport == config.AgentTransportMock,
 		// 请求过滤开关每次请求现读设置：改设置立即生效，不需要重启。
 		InputFilterEnabled: func() bool {
-			return a.settingsSvc.Bool("security.request_filter_enabled", true)
+			return a.platform.settings.Bool("security.request_filter_enabled", true)
 		},
 	}
 }
@@ -847,11 +281,11 @@ func (a *app) notifyUserEmail(ctx context.Context, userID int64, subject, body s
 		First(&user, userID).Error; err != nil || user.Email == nil || user.EmailVerifiedAt == nil {
 		return
 	}
-	if a.settingsSvc.String("notification.smtp_host", "") == "" {
+	if a.platform.settings.String("notification.smtp_host", "") == "" {
 		log.Printf("[notify] 用户 %d 有已验证邮箱但 SMTP 未配置，通知未发出", userID)
 		return
 	}
-	if err := a.mailSvc.Send(ctx, *user.Email, subject, body); err != nil {
+	if err := a.platform.mailer.Send(ctx, *user.Email, subject, body); err != nil {
 		log.Printf("[notify] 通知邮件发送失败 user=%d: %v", userID, err)
 	}
 }
