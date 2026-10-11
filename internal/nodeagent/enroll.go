@@ -82,9 +82,9 @@ func Enroll(ctx context.Context, in EnrollInput) (*EnrollResult, error) {
 
 // NewRegistry 返回本构建的执行器注册表。
 //
-// 注册即能力（Capabilities 由注册表生成）。P1 覆盖全部只读探测；
-// 生命周期/网络/存储类操作随 P2~P4 逐个注册——未注册的操作返回明确的
-// 「未实现」结果，能力清单永远与实际可执行的操作一致。
+// 注册即能力（Capabilities 由注册表生成）。P1 覆盖全部只读探测，P2 覆盖
+// vm 生命周期与控制台；网络/存储/模板类操作随 P3~P4 逐个注册——未注册的
+// 操作返回明确的「未实现」结果，能力清单永远与实际可执行的操作一致。
 func NewRegistry() Registry {
 	return Registry{
 		// node 域
@@ -114,6 +114,23 @@ func NewRegistry() Registry {
 		agent.OpDHCPLeases:    dhcpLeases,
 		agent.OpPlatformCheck: platformCheck,
 		agent.OpMigrateAssess: migrateAssess,
+		// vm 写路径与控制台（P2）
+		agent.OpVMCreate:          vmCreate,
+		agent.OpVMClone:           vmCreate,
+		agent.OpVMStart:           powerOp("start", "start"),
+		agent.OpVMShutdown:        powerOp("shutdown", "shutdown"),
+		agent.OpVMPoweroff:        powerOp("poweroff", "destroy"),
+		agent.OpVMReboot:          powerOp("reboot", "reboot"),
+		agent.OpVMReset:           powerOp("reset", "reset"),
+		agent.OpVMDelete:          vmDelete,
+		agent.OpVMSnapshotCreate:  vmSnapshotCreate,
+		agent.OpVMSnapshotRestore: vmSnapshotRestore,
+		agent.OpVMSnapshotDelete:  vmSnapshotDelete,
+		agent.OpVMConfigUpdate:    vmConfigUpdate,
+		agent.OpVMCDROMApply:      vmCDROMApply,
+		agent.OpVMFloppyApply:     vmFloppyApply,
+		agent.OpVMNVRAMRepair:     vmNVRAMRepair,
+		agent.OpVMConsoleFrame:    vmConsoleFrame,
 	}
 }
 

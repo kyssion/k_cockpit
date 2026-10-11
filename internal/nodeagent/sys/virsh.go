@@ -146,9 +146,13 @@ type DomStats struct {
 }
 
 // DomainStats 采样一个域的累计计数。
+//
+// 必须带 --vcpu：vcpu.current（vCPU 数）只在 vcpu 段里，--cpu-total 会把
+// 整段替换成 cpu.time——丢掉它之后 Running 判定与 CPU 归一全部失效
+// （真机上表现为指标全 0）。
 func DomainStats(ctx context.Context, name string) (*DomStats, error) {
 	out, err := virsh(ctx, "domstats", name,
-		"--cpu-total", "--balloon", "--interface", "--block", "--dirtyrate")
+		"--vcpu", "--cpu-total", "--balloon", "--interface", "--block", "--dirtyrate")
 	if err != nil {
 		return nil, err
 	}

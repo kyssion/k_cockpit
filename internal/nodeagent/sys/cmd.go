@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -26,12 +27,21 @@ import (
 // 把 agent 卡住。
 const cmdTimeout = 10 * time.Second
 
-// Run 执行一条探测命令并返回标准输出。
+// Run 执行一条探测命令并返回标准输出。失败时把 stderr 附进错误——
+// virsh/define 这类命令的失败原因只在 stderr 里（"unsupported configuration
+// ..."），不带上的话节点侧只剩一个空泛的 exit status。
 func Run(ctx context.Context, name string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, cmdTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, name, args...).Output()
+	cmd := exec.CommandContext(ctx, name, args...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			return "", fmt.Errorf("%s: %s", name, msg)
+		}
 		return "", fmt.Errorf("%s %v: %w", name, args, err)
 	}
 	return string(out), nil

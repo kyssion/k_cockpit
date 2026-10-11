@@ -45,7 +45,7 @@ func (r Registry) Capabilities() []string {
 // 「未实现」是 Success=false 的正常结果而不是 error：对控制面来说这是一次
 // 送达且被拒绝的执行，任务时间线上应当看到它失败的原因，而不是「节点
 // 不可达」。
-func (r Registry) dispatch(ctx context.Context, op agent.Operation, report Reporter) *Outcome {
+func (r Registry) dispatch(ctx context.Context, op agent.Operation, report Reporter) (out *Outcome) {
 	h, ok := r[op.Kind]
 	if !ok {
 		return &Outcome{
@@ -53,6 +53,13 @@ func (r Registry) dispatch(ctx context.Context, op agent.Operation, report Repor
 			Message: fmt.Sprintf("操作 %s 尚未在 agent 侧实现（分期接入中，当前能力见节点能力清单）", op.Kind),
 		}
 	}
+	// 执行器的 panic 在这里拦住：一次操作的崩溃不能带走整个 agent——
+	// 带走的表现是所有其它操作全部「与节点的连接已断开」。
+	defer func() {
+		if rec := recover(); rec != nil {
+			out = &Outcome{Success: false, Message: fmt.Sprintf("执行器 panic: %v", rec)}
+		}
+	}()
 	out, err := h(ctx, op, report)
 	if err != nil {
 		return &Outcome{Success: false, Message: "执行器异常: " + err.Error()}

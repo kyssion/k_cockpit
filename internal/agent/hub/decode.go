@@ -43,6 +43,14 @@ var typedDecoders = map[agent.OpKind]map[string]decodeFunc{
 	agent.OpVMXML:       {agent.VMXMLKey: into(agent.VMXMLInfo{})},
 	agent.OpVMPcieInfo:  {agent.PCIeDataKey: into(agent.PCIeInfo{})},
 	agent.OpVMNeighbors: {agent.NeighborDataKey: into([]agent.NeighborEntry{})},
+	// 控制台帧（P2）
+	agent.OpVMConsoleFrame: {agent.FrameDataKey: into(agent.ConsoleFrame{})},
+	// vm 写路径（P2）
+	agent.OpVMClone:          {agent.CloneDataKey: into(agent.CloneInfo{})},
+	agent.OpVMDelete:         {agent.VMDiskTransferDataKey: into([]agent.TransferredDisk{})},
+	agent.OpVMSnapshotCreate: {"domain_name": passthroughString, "size_bytes": passthroughNumber},
+	agent.OpVMNVRAMRepair:    {agent.NVRAMDataKey: into(agent.NVRAMRepairInfo{})},
+	agent.OpVMCDROMApply:     {agent.CDROMDataKey: into(agent.CDROMInfo{})},
 	// 网络探测（P1）
 	agent.OpNetworkProbe:  {agent.NetworkCapabilityKey: into(agent.NetworkCapability{})},
 	agent.OpOVSStatus:     {agent.OVSStatusKey: into(agent.OVSStatus{})},
@@ -62,6 +70,24 @@ func into(sample any) decodeFunc {
 		// *T → T（切片/结构体都解引用为服务层断言期望的形状）。
 		return reflect.ValueOf(v).Elem().Interface(), nil
 	}
+}
+
+// passthroughString / passthroughNumber 是标量键的显式解码器（string 与
+// float64 与通用解码一致，登记出来是为了表达「这个键存在且是标量」）。
+func passthroughString(raw json.RawMessage) (any, error) {
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func passthroughNumber(raw json.RawMessage) (any, error) {
+	var n float64
+	if err := json.Unmarshal(raw, &n); err != nil {
+		return nil, err
+	}
+	return n, nil
 }
 
 // decodeResultData 把线上的 JSON 对象还原为服务层可断言的 map[string]any。

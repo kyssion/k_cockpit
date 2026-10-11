@@ -64,3 +64,40 @@ func TestDecodeResultDataTyped(t *testing.T) {
 		t.Errorf("未登记键应走通用解码，实际 %T", out["extra"])
 	}
 }
+
+// TestDecodeConsoleFrame 控制台帧的往返：[]byte 经 JSON base64 往返后必须
+// 还原为 []byte（服务层取 frame.Data 直接回给浏览器）。
+func TestDecodeConsoleFrame(t *testing.T) {
+	f := agent.ConsoleFrame{MIME: "image/png", Data: []byte("hello-png"), Width: 640, Height: 480}
+	b, err := json.Marshal(map[string]any{agent.FrameDataKey: f})
+	if err != nil {
+		t.Fatalf("编码: %v", err)
+	}
+	out, err := decodeResultData(agent.OpVMConsoleFrame, string(b))
+	if err != nil {
+		t.Fatalf("解码: %v", err)
+	}
+	got, ok := out[agent.FrameDataKey].(agent.ConsoleFrame)
+	if !ok {
+		t.Fatalf("应为 ConsoleFrame，实际 %T", out[agent.FrameDataKey])
+	}
+	if string(got.Data) != "hello-png" || got.Width != 640 || got.MIME != "image/png" {
+		t.Fatalf("字段不符: %+v", got)
+	}
+}
+
+// TestDecodeScalarKeys 标量键解码后必须是 string / float64（服务层的类型
+// 断言依赖）。
+func TestDecodeScalarKeys(t *testing.T) {
+	out, err := decodeResultData(agent.OpVMSnapshotCreate,
+		`{"domain_name":"p2v9-snap3","size_bytes":2048}`)
+	if err != nil {
+		t.Fatalf("解码: %v", err)
+	}
+	if s, _ := out["domain_name"].(string); s != "p2v9-snap3" {
+		t.Errorf("domain_name 应为 string，实际 %T", out["domain_name"])
+	}
+	if f, _ := out["size_bytes"].(float64); f != 2048 {
+		t.Errorf("size_bytes 应为 float64，实际 %T", out["size_bytes"])
+	}
+}

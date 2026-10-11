@@ -71,6 +71,8 @@ type Hub struct {
 	conns map[int64]*conn
 	// gs 是网关的 gRPC server（Serve 时登记，Stop 时优雅关闭）。
 	gs *grpc.Server
+	// agentStreams 是「已应答建立、等待/正在 StreamData 转发」的流。
+	agentStreams map[string]*streamBridge
 
 	opSeq atomic.Uint64
 }
@@ -82,10 +84,11 @@ func New(deps Deps) (*Hub, error) {
 		return nil, err
 	}
 	return &Hub{
-		repo:      deps.Repo,
-		registrar: deps.Registrar,
-		certs:     certs,
-		conns:     map[int64]*conn{},
+		repo:         deps.Repo,
+		registrar:    deps.Registrar,
+		certs:        certs,
+		conns:        map[int64]*conn{},
+		agentStreams: map[string]*streamBridge{},
 	}, nil
 }
 
@@ -102,7 +105,9 @@ type conn struct {
 
 	mu      sync.Mutex
 	pending map[string]*pendingOp
-	closed  bool
+	// pendingStreams 是等 StreamOpened 应答的流打开请求（stream.go）。
+	pendingStreams map[string]chan *streamOpenedMsg
+	closed         bool
 }
 
 // pendingOp 是一次在途的 Execute。
@@ -264,15 +269,6 @@ func (h *Hub) Snapshot(ctx context.Context, nodeID int64) (*agent.Snapshot, erro
 		snap.CapabilitiesAt = *row.CapabilitiesAt
 	}
 	return snap, nil
-}
-
-// OpenStream 实现 agent.StreamOpener。
-//
-// P0 仅打通通道（Register/Channel/Execute），字节流在 P2 随控制台一起接入；
-// 返回哨兵错误让服务层走「不支持」分支——那是为 mock 设计的同一出口，
-// 前端会显示「当前节点不支持控制台通道」，如实反映 P0 阶段的能力。
-func (h *Hub) OpenStream(_ context.Context, _ agent.StreamKind, _ int64, _ string) (agent.Stream, error) {
-	return nil, agent.ErrStreamUnsupported
 }
 
 // send 把下行消息投进连接的发送队列；连接关闭或 ctx 取消时返回错误。

@@ -43,6 +43,10 @@ type Daemon struct {
 	Registry Registry
 	// Now 供测试注入。
 	Now func() time.Time
+
+	// conn 是当前会话的 gRPC 连接（StreamData 回拨需要与通道同一条 mTLS
+	// 连接；由 session 建立时写入）。
+	conn *grpc.ClientConn
 }
 
 func (d *Daemon) now() time.Time {
@@ -108,6 +112,7 @@ func (d *Daemon) session(ctx context.Context) error {
 		return fmt.Errorf("连接控制面: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
+	d.conn = conn
 
 	stream, err := agentproto.NewAgentGatewayClient(conn).Channel(ctx)
 	if err != nil {
@@ -187,13 +192,9 @@ func (d *Daemon) session(ctx context.Context) error {
 				}
 			}(req.OpId, op)
 		case *agentproto.ServerToAgent_OpenStream:
-			// P0：字节流转发未接入。如应答 ok=false，控制面走「不支持」分支。
-			_ = stream.Send(&agentproto.AgentToServer{Payload: &agentproto.AgentToServer_StreamOpened{
-				StreamOpened: &agentproto.StreamOpened{
-					StreamId: p.OpenStream.StreamId, Ok: false,
-					Message: "字节流转发尚未启用（P2）",
-				},
-			}})
+			if out := d.handleOpenStream(ctx, p.OpenStream); out != nil {
+				outbox <- out
+			}
 		default:
 			// 未知下行消息忽略（协议兼容承诺）。
 		}

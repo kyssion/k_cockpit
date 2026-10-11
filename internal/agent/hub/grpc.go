@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
@@ -120,19 +121,28 @@ func (g *gateway) Channel(stream agentproto.AgentGateway_ChannelServer) error {
 		case *agentproto.AgentToServer_Result:
 			g.h.onResult(c, p.Result)
 		case *agentproto.AgentToServer_StreamOpened:
-			// P0：hub.OpenStream 不发起流打开，正常情况下不会有这条消息；
-			// 收到只说明对端实现超前于控制面，忽略并留一行日志。
-			log.Printf("[agent-hub] 节点 %d 发来流应答（P0 未发起，忽略）: %s", node.ID, p.StreamOpened.StreamId)
+			c.mu.Lock()
+			ch := c.pendingStreams[p.StreamOpened.StreamId]
+			c.mu.Unlock()
+			if ch != nil {
+				ch <- p.StreamOpened
+			}
 		default:
 			// 未知消息忽略不报错：协议承诺「未知字段/消息不破坏兼容」。
 		}
 	}
 }
 
-// StreamData 承载节点回传的字节流（VNC 等）。P0 阶段 agent 不发起该 RPC；
-// 服务端实现先行占位，P2 接入真实转发时替换。
+// StreamData 承载节点回传的字节流（VNC 等）。流标识经请求头携带，
+// 转发与桥接逻辑在 stream.go。
 func (g *gateway) StreamData(stream agentproto.AgentGateway_StreamDataServer) error {
-	return status.Error(codes.Unimplemented, "字节流转发尚未启用（P2）")
+	md, _ := metadata.FromIncomingContext(stream.Context())
+	id := streamIDFromContext(md)
+	if id == "" {
+		return status.Error(codes.InvalidArgument, "缺少 x-kc-stream-id")
+	}
+	g.h.serveAgentStream(id, stream)
+	return nil
 }
 
 // Serve 在 ln 上启动 gRPC 网关（阻塞）。TLS 与客户端证书校验见 certManager。
