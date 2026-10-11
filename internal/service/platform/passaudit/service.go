@@ -57,6 +57,17 @@ type Result struct {
 }
 
 // RunNow 立即检查一次。
+// firstEnrolledNode 返回第一个已接入（enrolled）节点的 ID；没有返回 0。
+func (s *Service) firstEnrolledNode(ctx context.Context) int64 {
+	var ids []int64
+	if err := s.db.WithContext(ctx).Model(&model.Node{}).
+		Where("enroll_state = ? AND deleted_at IS NULL", model.NodeEnrollEnrolled).
+		Order("id").Limit(1).Pluck("id", &ids).Error; err != nil || len(ids) == 0 {
+		return 0
+	}
+	return ids[0]
+}
+
 func (s *Service) RunNow(ctx context.Context) (*Result, error) {
 	if s.enabled != nil && !s.enabled() {
 		return nil, api.ValidationFailed("定时口令检查未开启，如需立即检查请先打开开关")
@@ -65,9 +76,17 @@ func (s *Service) RunNow(ctx context.Context) (*Result, error) {
 		return &Result{Unavailable: "未连接节点，无法检查"}, nil
 	}
 
+	// 目标节点：取**第一个已接入节点**（mock 时代写死 0——那时单节点且
+	// mock 不看 NodeID；真实通道下 NodeID 是路由键，0 永远不在线）。
+	// 多节点部署时这里应遍历全部已接入节点，随多节点口令审计需求展开。
+	nodeID := s.firstEnrolledNode(ctx)
+	if nodeID == 0 {
+		return &Result{Unavailable: "没有已接入的节点，无法检查"}, nil
+	}
+
 	result, err := s.agent.Execute(ctx, agent.Operation{
 		Kind:   agent.OpSecurityPasswordAudit,
-		NodeID: 0,
+		NodeID: nodeID,
 		Target: "passwords",
 	})
 	if err != nil {

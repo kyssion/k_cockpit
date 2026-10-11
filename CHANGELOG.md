@@ -18,6 +18,14 @@
 ## [Unreleased]
 
 ### Added
+- **真实 agent P3~P5：全部领域执行器接入（分支 `feat/agent`，能力自报 85 项）**：
+  - **P3 网络**：VPC 交换机（OVS 桥 + internal 网关 + 独立 dnsmasq + NAT，create/update/delete/reconfigure/release_port）、Linux 基础桥、上行口入桥（**节点侧看门狗**先布防再操作，confirm 解除）、收敛修复、安全组（per-VM iptables 链）、双层防火墙（KC-FW/KC-HFW 链，先写入后收紧；rollback 全通恢复）、端口转发 DNAT、公网地址 1:1 DNAT、端口安全（OVS 防伪造流表）、端口镜像（OVS mirror + 看门狗）、抓包（tcpdump 落盘）
+  - **P4 存储**：池格式化挂载（wipefs→mkfs→mount→fstab nofail）、删除/配置/卸载（数据保留）、trim（fstrim）、分区增删（parted）、LVM 卷（vgcreate/lvcreate）、用户存储文件提交（SHA-256 校验）与读取、9p 共享目录（realpath 越界拒绝）
+  - **P5 长尾**：冷迁移（源侧停机+磁盘清单回传）、重装（备份→模板重建→失败自动还原备份）、救援（配置快照保存/还原）、导出（qemu-img convert）、口令审计（读 /etc/shadow + crypt(3) 比对弱口令，真机 36 账号验证）、SSH 访问开关（sshd_config.d drop-in + 踢在线会话）、配额处置（FORWARD 链按用户 IP DROP）
+  - **控制面修复**：passaudit 的 NodeID 写死 0（mock 时代遗留）导致真实通道下永远「节点不可达」——改为取第一个已接入节点（Pluck 修正 Scan 单列问题）
+  - 每批执行器注册即能力自报（85 项），hub 解码表同步登记全部键；真机 agent（Ubuntu 24.04 arm64）已升级部署并通过口令审计/OVS 状态/节点在线三链路验收
+
+### Added
 - **真实 agent P0：通道骨架上线（分支 `feat/agent`，[f-6-08](docs/07-specs/f-6-08-agent.md)）**——控制面与节点的通信从 mock 假执行走向真执行的第一步，按 f-6-01 §5.2 定稿实现（gRPC over mTLS 反向长连接 + protobuf，[`internal/agentproto`](internal/agentproto/agent.proto) 为线上契约）：
   - **控制面网关**（`internal/agent/hub`）：私有 CA 与服务端证书自举；一次性令牌注册并签发客户端证书（注册业务复用 node 域，经 `Registrar` 接口延迟解析避免装配循环）；连接注册表把 `agent.Client.Execute` 路由到对应节点（阶段透传任务时间线）；心跳落库，Snapshot 从 DB 心跳推导。`AGENT_TRANSPORT=grpc` 启用（`:8443`，PKI 落 `agent-pki/`），mock 分支原样保留
   - **agent 二进制**（`cmd/agent` + `internal/nodeagent`）：`enroll` 换证书（enroll TLS 信任锚=令牌本身，成功后材料原子落盘 `/var/lib/k_cockpit-agent`）；`run` 常驻（首帧心跳 + 10s 周期；断线指数退避 1s×1.6 上限 60s±20%，稳定会话 30s 归零）；执行器注册表与能力自报同源；未实现操作返回明确失败的 Result（诚实的能力边界）
