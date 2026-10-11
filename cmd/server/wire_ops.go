@@ -40,19 +40,19 @@ type opsServices struct {
 
 // setupOpsServices 装配 ops 域全部服务。
 func (a *app) setupOpsServices() {
-	db, queue, mockAgent := a.db, a.queue, a.mockAgent
+	db, queue, agentClient := a.db, a.queue, a.agentClient
 
 	a.ops.monitor = monitor.NewService(db)
 	// 宿主机调优（KSM / zRAM / 嵌套虚拟化）。工作台要复用它读一次状态，
 	// 因此先建出来而不是塞进 Deps 里现造——两个实例意味着两份缓存口径。
-	a.ops.hostTuning = hosttuning.NewService(db, queue, mockAgent, a.recorder)
+	a.ops.hostTuning = hosttuning.NewService(db, queue, agentClient, a.recorder)
 
 	// 工作台概览（F-8-03 / F-8-04）：只读聚合，节点运行态复用节点服务。
 	a.ops.dashboard = dashboard.NewService(db, a.node.nodeSvc)
 	// 工作台上的 KSM / zRAM 直接读调优服务（同一份口径），硬件与网络统计
 	// 走 agent 的两个按需操作。
 	a.ops.dashboard.SetTuning(a.ops.hostTuning)
-	a.ops.dashboard.SetAgent(mockAgent)
+	a.ops.dashboard.SetAgent(agentClient)
 	a.ops.schedulerSvc = sched.NewService(db, a.schedRegistry)
 
 	// 告警中心（F-8-07）。
@@ -67,12 +67,12 @@ func (a *app) setupOpsServices() {
 	a.ops.maintenance = maintenance.NewService(db, a.node.nodeSvc, a.recorder)
 	a.ops.maintenance.SetVMShutdown(a.compute.vmSvc.ShutdownAllOnNode)
 
-	a.ops.quotaEnforce = quotaenforce.NewService(db, queue, mockAgent, a.recorder)
+	a.ops.quotaEnforce = quotaenforce.NewService(db, queue, agentClient, a.recorder)
 	a.ops.diagnostics = diagnostics.NewService(db, a.platform.settings, a.schedRegistry, a.recorder)
 	// 版本摘要进诊断包：排障时第一个要问的就是「跑的是哪个版本」，
 	// 而它应当随包一起走，不必再让人回头去问。
 	a.ops.diagnostics.Version = version.Summary()
-	a.ops.platformChk = platformcheck.NewService(db, queue, mockAgent, a.recorder)
+	a.ops.platformChk = platformcheck.NewService(db, queue, agentClient, a.recorder)
 	a.ops.search = search.NewService(db)
 }
 

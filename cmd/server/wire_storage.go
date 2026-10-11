@@ -23,7 +23,7 @@ type storageServices struct {
 
 // setupStorageServices 装配存储配额、用户存储与存储池服务。
 func (a *app) setupStorageServices() {
-	db, queue, mockAgent := a.db, a.queue, a.mockAgent
+	db, queue, agentClient := a.db, a.queue, a.agentClient
 
 	// 存储配额（f-9-02）：按用户按节点。
 	a.storage.quota = quota.NewService(db, a.recorder)
@@ -33,6 +33,6 @@ func (a *app) setupStorageServices() {
 		log.Fatalf("[server] 初始化上传暂存区失败: %v", err)
 	}
 	a.storage.userStorage = userstorage.NewService(db, a.recorder, a.storage.quota).
-		WithChunks(chunkStore).WithAgent(mockAgent)
-	a.storage.storageSvc = pool.NewService(db, queue, a.recorder, mockAgent, a.platform.settings)
+		WithChunks(chunkStore).WithAgent(agentClient)
+	a.storage.storageSvc = pool.NewService(db, queue, a.recorder, agentClient, a.platform.settings)
 }

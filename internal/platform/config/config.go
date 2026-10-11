@@ -72,7 +72,7 @@ type Security struct {
 const (
 	// AgentTransportMock 开发期使用：接口直接返回假数据，不与节点通信。
 	AgentTransportMock = "mock"
-	// AgentTransportGRPC 走 gRPC 双向流，尚未开发。
+	// AgentTransportGRPC 走 gRPC 双向流（f-6-01 §5.2：mTLS 反向长连接）。
 	AgentTransportGRPC = "grpc"
 )
 
@@ -81,6 +81,13 @@ type Agent struct {
 	// Transport 在**启动时**决定，运行期不可切换（ADR-0007）。
 	// 同一进程内不得对不同节点使用不同实现，否则会出现无法复现的中间状态。
 	Transport string
+	// ListenAddr 是 agent 网关（gRPC over TLS）监听地址；仅 grpc 运输层使用。
+	// 默认 :8443——该端口属于控制面与 agent 的私有通道，与 HTTP 面分离：
+	// 两类流量的超时、限流与暴露面都不同。
+	ListenAddr string
+	// TLSDir 是网关私有 CA 与服务端证书目录。空值由装配层落到数据库同级
+	// 的 agent-pki/ 下（控制面持久化数据都在一处）。
+	TLSDir string
 }
 
 // Session 是认证会话配置。
@@ -242,7 +249,9 @@ func Load() (Config, error) {
 			AbsoluteTimeout: envDuration("SESSION_ABSOLUTE_TIMEOUT", 7*24*time.Hour),
 		},
 		Agent: Agent{
-			Transport: env("AGENT_TRANSPORT", AgentTransportMock),
+			Transport:  env("AGENT_TRANSPORT", AgentTransportMock),
+			ListenAddr: env("AGENT_LISTEN_ADDR", ":8443"),
+			TLSDir:     env("AGENT_TLS_DIR", ""),
 		},
 		Security: Security{
 			DevBypassCode: env("SECURITY_DEV_BYPASS_CODE", ""),

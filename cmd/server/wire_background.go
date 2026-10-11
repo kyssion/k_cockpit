@@ -107,7 +107,7 @@ func (a *app) setupBackground() {
 	// 用它算出来的任何趋势都与真实情况无关，而它看起来像一份正常的图表。
 	//
 	// 采集有它自己的节奏，与谁在看无关。
-	a.bg.collector = monitor.NewCollector(a.db, a.mockAgent, monitor.DefaultOptions())
+	a.bg.collector = monitor.NewCollector(a.db, a.agentClient, monitor.DefaultOptions())
 	a.bg.collector.Observe(a.schedRecorder)
 
 	// 调度事件保留清理（G-48）：保留期从设置读取，每次清理前现取值。
@@ -118,14 +118,14 @@ func (a *app) setupBackground() {
 	})
 
 	// 存储空间自动回收（G-52）：开关从设置读取，执行结果记入调度事件。
-	a.bg.trimLoop = pool.NewTrimLoop(a.db, a.mockAgent, a.schedRecorder, pool.TrimOptions{
+	a.bg.trimLoop = pool.NewTrimLoop(a.db, a.agentClient, a.schedRecorder, pool.TrimOptions{
 		Enabled: func() bool {
 			return a.platform.settings.Bool(settings.KeyStorageAutoTrim, false)
 		},
 	})
 
 	// 安装介质自动弹出（F-2-17）：Windows 初始化就绪后弹出安装 ISO。
-	a.bg.mediaEjectLoop = vm.NewMediaEjectLoop(a.compute.vmSvc, a.db, a.mockAgent, a.schedRecorder, vm.MediaEjectOptions{})
+	a.bg.mediaEjectLoop = vm.NewMediaEjectLoop(a.compute.vmSvc, a.db, a.agentClient, a.schedRecorder, vm.MediaEjectOptions{})
 }
 
 // startBackground 启动全部后台周期组件。

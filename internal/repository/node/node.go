@@ -43,6 +43,16 @@ func (r *Repo) GetNode(ctx context.Context, id int64) (*model.Node, error) {
 	return &node, nil
 }
 
+// GetNodeByAgentID 按 agent 持久化身份取节点（agent_hub 的连接身份解析）。
+func (r *Repo) GetNodeByAgentID(ctx context.Context, agentID string) (*model.Node, error) {
+	var node model.Node
+	err := r.db.WithContext(ctx).Where("agent_id = ?", agentID).First(&node).Error
+	if err != nil {
+		return nil, err
+	}
+	return &node, nil
+}
+
 // FindByEnrollToken 按注册令牌哈希取**待接入**状态的节点。
 func (r *Repo) FindByEnrollToken(ctx context.Context, tokenHash string) (*model.Node, error) {
 	var node model.Node

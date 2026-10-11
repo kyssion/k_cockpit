@@ -1,0 +1,36 @@
+# k_cockpit-agent systemd 单元（f-6-08）。
+#
+# 安装（在节点上，root）：
+#   install -m 0755 k_cockpit-agent /usr/local/bin/
+#   install -m 0644 k_cockpit-agent.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now k_cockpit-agent
+#
+# enroll 一次即可（root）：
+#   k_cockpit-agent enroll -server <控制面IP>:8443 -token <一次性令牌>
+#
+# 升级：替换二进制后 systemctl restart k_cockpit-agent。
+# 卸载：systemctl disable --now k_cockpit-agent 并删除
+#   /usr/local/bin/k_cockpit-agent 与 /var/lib/k_cockpit-agent。
+
+[Unit]
+Description=K Cockpit Node Agent
+Documentation=https://github.com/kyssion/k_cockpit
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/k_cockpit-agent run
+StateDirectory=k_cockpit-agent
+# 断线自治与重连由 agent 自身负责（指数退避）；systemd 只兜底进程崩溃。
+Restart=on-failure
+RestartSec=2s
+# 以 root 运行：agent 是唯一直接操作 libvirt/KVM 与宿主网络的角色
+# （ADR-0005）；后续如做能力切分再收敛权限。
+User=root
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/k_cockpit /var/lib/k_cockpit-agent /run
+
+[Install]
+WantedBy=multi-user.target

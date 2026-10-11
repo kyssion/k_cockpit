@@ -114,7 +114,7 @@ func (a *app) setupAuth() {
 // 它是服务装配的第一步：后面每个域的设置项读取（陈旧阈值、SMTP、保留期）
 // 都从这里取实例。
 func (a *app) setupPlatformServices() {
-	db, mockAgent := a.db, a.mockAgent
+	db, agentClient := a.db, a.agentClient
 
 	a.platform.settings = settings.NewService(db, a.recorder)
 	// 请求日志的开关来自设置项：每次写入前读取，因此改了设置立即生效，
@@ -124,7 +124,7 @@ func (a *app) setupPlatformServices() {
 	})
 
 	// 口令检查：判定在节点侧，这里只做开关、定时与结果落地。
-	a.platform.passAudit = passaudit.NewService(db, mockAgent, func() bool {
+	a.platform.passAudit = passaudit.NewService(db, agentClient, func() bool {
 		return a.platform.settings.Bool("security.password_breach_check", false)
 	}, a.recorder)
 	// 邮件（F-1-08）：配置来自系统设置，因此管理员保存 SMTP 后**立即**生效，
@@ -168,6 +168,6 @@ func (a *app) setupPlatformAdminServices() {
 		return a.platform.settings.String(settings.KeySiteURL, "")
 	})
 	// SSH 访问要下发到宿主机，因此接上 agent（不接时只改控制面记录）。
-	a.platform.userAdmin.SetAgent(a.mockAgent)
+	a.platform.userAdmin.SetAgent(a.agentClient)
 	a.platform.accessControl = accesscontrol.NewService(db, a.recorder, accesscontrol.Options{})
 }

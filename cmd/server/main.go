@@ -60,9 +60,11 @@ type app struct {
 	cfg    config.Config   // internal/platform/config
 	logger *logging.Logger // internal/platform/logging
 	db     *gorm.DB        // internal/platform/database
-	// mockAgent 是节点通道（internal/agent）的当前唯一实现，全部域共用；
-	// 真实 agent 落地后换类型，装配代码不感知（ADR-0007）。
-	mockAgent *agent.MockClient
+	// agentClient 是节点通道（internal/agent.Client）：全部域共用。
+	// 实现按 AGENT_TRANSPORT 切换（mock / grpc 网关），业务不感知（ADR-0007）。
+	agentClient agent.Client
+	// agentGatewayStop 优雅停止 agent 网关（仅 grpc 运输层非空）。
+	agentGatewayStop func()
 	// recorder 是审计记录器（internal/platform/audit），全部写操作共用。
 	recorder *audit.Recorder
 	// bus / queue 是实时事件总线与任务队列（internal/service/ops/realtime、task），
@@ -121,6 +123,12 @@ func main() {
 	// Spin 阻塞运行，并在收到 SIGINT / SIGTERM / SIGHUP 时触发优雅退出。
 	log.Printf("HTTP 服务启动，监听 %s", a.cfg.HTTP.Addr())
 	h.Spin()
+
+	// 网关在后台 goroutine 上服务；优雅退出时先停它，让在途的 agent
+	// 操作有收尾窗口。
+	if a.agentGatewayStop != nil {
+		a.agentGatewayStop()
+	}
 }
 
 // loadConfig 加载 .env 与应用配置。

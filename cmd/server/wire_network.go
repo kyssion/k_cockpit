@@ -36,22 +36,22 @@ type networkServices struct {
 // 依赖：platform 的设置（交换机的带宽总限从设置读取）；不依赖 compute——
 // publicIP 与计算配额的接线在 setupCrossWiring（那时 compute 已就绪）。
 func (a *app) setupNetworkServices() {
-	db, queue, mockAgent := a.db, a.queue, a.mockAgent
+	db, queue, agentClient := a.db, a.queue, a.agentClient
 
-	a.network.publicIP = publicip.NewService(db, queue, mockAgent, a.recorder)
-	a.network.sg = securitygroup.NewService(db, queue, mockAgent, a.recorder)
-	a.network.firewall = firewall.NewService(db, mockAgent, a.recorder)
-	a.network.mirror = portmirror.NewService(db, mockAgent, a.recorder)
-	a.network.netSvc = bridge.NewService(db, mockAgent, a.recorder)
-	a.network.portSecurity = portsecurity.NewService(db, mockAgent, a.recorder, queue)
-	a.network.capture = capture.NewService(db, mockAgent, a.recorder, queue)
+	a.network.publicIP = publicip.NewService(db, queue, agentClient, a.recorder)
+	a.network.sg = securitygroup.NewService(db, queue, agentClient, a.recorder)
+	a.network.firewall = firewall.NewService(db, agentClient, a.recorder)
+	a.network.mirror = portmirror.NewService(db, agentClient, a.recorder)
+	a.network.netSvc = bridge.NewService(db, agentClient, a.recorder)
+	a.network.portSecurity = portsecurity.NewService(db, agentClient, a.recorder, queue)
+	a.network.capture = capture.NewService(db, agentClient, a.recorder, queue)
 	// 面板与 SSH 端口作为**合成的保护规则**传给服务——它们跟着配置走，
 	// 不存进表：端口改了而表里那条还在，它会保护一个不再监听的端口。
 	a.network.hostFirewall = hostfirewall.NewService(
-		db, queue, mockAgent, a.recorder, a.cfg.HTTP.Port, nil)
-	a.network.vpcACL = vpcacl.NewService(db, mockAgent, queue, a.recorder)
+		db, queue, agentClient, a.recorder, a.cfg.HTTP.Port, nil)
+	a.network.vpcACL = vpcacl.NewService(db, agentClient, queue, a.recorder)
 
-	a.network.networkSvc = vswitch.NewService(db, mockAgent, queue, a.recorder)
+	a.network.networkSvc = vswitch.NewService(db, agentClient, queue, a.recorder)
 	// 全局带宽总限（G-44）从设置读取：下发时现取值，改设置不需要重启。
 	a.network.networkSvc.SetSettingsProvider(a.platform.settings)
 }

@@ -33,21 +33,21 @@ type computeServices struct {
 
 // setupComputeServices 装配计算域全部服务。
 func (a *app) setupComputeServices() {
-	db, queue, mockAgent := a.db, a.queue, a.mockAgent
+	db, queue, agentClient := a.db, a.queue, a.agentClient
 
 	a.compute.computeQuota = computequota.NewService(db, a.recorder)
 	a.compute.tag = vmtag.NewService(db, a.recorder)
 	// vm 与 storage 都要读设置里的陈旧阈值：把 settings 作为 Provider
 	// 注入，让「面板上改的阈值」真的影响业务行为——否则那两个设置项就是
 	// 摆设，而「改了不生效」正是 f-9-01 R-002 要消灭的现象。
-	a.compute.vmSvc = vm.NewService(db, queue, a.recorder, mockAgent,
+	a.compute.vmSvc = vm.NewService(db, queue, a.recorder, agentClient,
 		a.platform.settings, a.storage.quota)
 	a.compute.vmSvc.SetComputeQuota(a.compute.computeQuota)
 	// 列表要带标签与最近占用，两者都是**一次批量查询**；不装配则列表不带这两列。
 	a.compute.vmSvc.SetTagProvider(a.compute.tag)
-	a.compute.template = template.NewService(db, queue, a.recorder, mockAgent, a.storage.quota)
-	a.compute.importer = importer.NewService(db, queue, mockAgent, a.recorder, a.storage.quota)
-	a.compute.passthrough = passthrough.NewService(db, queue, mockAgent, a.recorder)
+	a.compute.template = template.NewService(db, queue, a.recorder, agentClient, a.storage.quota)
+	a.compute.importer = importer.NewService(db, queue, agentClient, a.recorder, a.storage.quota)
+	a.compute.passthrough = passthrough.NewService(db, queue, agentClient, a.recorder)
 }
 
 // setupCredentials 给需要可逆凭据的服务注入加密密钥。
