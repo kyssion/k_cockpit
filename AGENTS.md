@@ -28,8 +28,8 @@
 |---|---|---|---|
 | 架构形态 | 控制面 + 节点代理（agent） | — | 每台宿主机只部署轻量 agent；控制面**不持有**宿主机登录凭据（[ADR-0005](docs/06-decisions/0005-control-plane-node-agent-architecture.md)） |
 | 节点代理 | 与控制面同仓库构建的独立二进制 | — | systemd 托管；节点侧**唯一**直接操作 libvirt/KVM 的角色 |
-| 控制面 ↔ agent 协议 | 领域操作 + 任务指令 / 进度流的 RPC 长连接 | **待定** | agent **反向**长连接，宿主机无需开放入站端口；不转发 libvirt 原始 RPC |
-| 节点接入鉴权 | 一次性注册令牌 + mTLS 客户端证书 | — | 控制面不持有宿主机登录凭据 |
+| 控制面 ↔ agent 协议 | gRPC 双向流 + Protocol Buffers（[`internal/agentproto`](internal/agentproto/agent.proto) 为线上契约） | ProtocolVersion 1 | agent **反向**长连接（f-6-01 §5.2 定稿）；宿主机无需开放入站端口；不转发 libvirt 原始 RPC |
+| 节点接入鉴权 | 一次性注册令牌 + mTLS 客户端证书（控制面私有 CA 自举） | — | 控制面不持有宿主机登录凭据；`AGENT_TRANSPORT=grpc` 启用真实通道，mock 保留 |
 | 语言 | Go | 1.27 | 版本以 `go.mod` 为准 |
 | Web 框架 | CloudWeGo Hertz | v0.10.6 | 基于 netpoll，兼容 net/http |
 | ORM | GORM | v1.31.2 | 已关闭默认事务，使用单数表名 |

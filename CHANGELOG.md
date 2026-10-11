@@ -17,6 +17,14 @@
 
 ## [Unreleased]
 
+### Added
+- **真实 agent P0：通道骨架上线（分支 `feat/agent`，[f-6-08](docs/07-specs/f-6-08-agent.md)）**——控制面与节点的通信从 mock 假执行走向真执行的第一步，按 f-6-01 §5.2 定稿实现（gRPC over mTLS 反向长连接 + protobuf，[`internal/agentproto`](internal/agentproto/agent.proto) 为线上契约）：
+  - **控制面网关**（`internal/agent/hub`）：私有 CA 与服务端证书自举；一次性令牌注册并签发客户端证书（注册业务复用 node 域，经 `Registrar` 接口延迟解析避免装配循环）；连接注册表把 `agent.Client.Execute` 路由到对应节点（阶段透传任务时间线）；心跳落库，Snapshot 从 DB 心跳推导。`AGENT_TRANSPORT=grpc` 启用（`:8443`，PKI 落 `agent-pki/`），mock 分支原样保留
+  - **agent 二进制**（`cmd/agent` + `internal/nodeagent`）：`enroll` 换证书（enroll TLS 信任锚=令牌本身，成功后材料原子落盘 `/var/lib/k_cockpit-agent`）；`run` 常驻（首帧心跳 + 10s 周期；断线指数退避 1s×1.6 上限 60s±20%，稳定会话 30s 归零）；执行器注册表与能力自报同源；未实现操作返回明确失败的 Result（诚实的能力边界）
+  - **测试**：hub↔nodeagent 真实 TLS 全链路集成测试（enroll→上线→Execute 阶段/结果→断线未送达语义 + 无证书 Channel 拒绝）+ 退避/解码单测；mock 栈 E2E 5/5 不受影响
+  - **真机验收（Ubuntu 24.04 arm64 + libvirt 10 + OVS 3.3.9）**：面板注册令牌 → 真机 enroll → 节点 online（版本/协议号正确、心跳 10s 周期推进）；杀进程 45s 内 offline；`systemctl restart` 自动恢复 online；生产形态 root systemd 服务部署通过（[`deploy/agent/`](deploy/agent/k_cockpit-agent.service)）
+  - AGENTS.md 协议行从「待定」落定为 gRPC/mTLS
+
 ### Changed
 - **internal 按层重组（[ADR-0012](docs/06-decisions/0012-layered-internal-structure.md)，取代 ADR-0010 的顶级组织方式）**：顶级目录 = 层（`router` 路由层 / `handler` 接口层 / `service` 服务层 / `repository` 数据库访问层 / `model` 数据库层 / `platform` 基础设施 / `agent` 契约），业务域沉为 service 与 repository 的二级目录。纯机械迁移（git mv + 全仓 import 重写，约 320 文件，零逻辑改动）：五个域目录与 platform 的 12 个业务服务包迁入 `service/`，platform 瘦身为纯基础设施（api / audit 写侧 / authz / config / cryptoutil / database / logging / version）
   - **路由层按域拆分**：router.go（1112 行）拆为入口 + `routes_{platform,node,compute,network,storage,ops}.go`，342 条路由逐条迁移；coverage 对账测试改为扫描整个 router 包

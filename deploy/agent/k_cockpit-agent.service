@@ -30,7 +30,10 @@ RestartSec=2s
 User=root
 NoNewPrivileges=true
 ProtectSystem=full
-ReadWritePaths=/var/lib/k_cockpit /var/lib/k_cockpit-agent /run
+# StateDirectory 已授予 /var/lib/k_cockpit-agent 的读写；
+# /run 留给未来的控制台 socket。虚拟机磁盘目录（/var/lib/k_cockpit）
+# 随 P2 虚拟机生命周期落地时再加入本行。
+ReadWritePaths=/run
 
 [Install]
 WantedBy=multi-user.target

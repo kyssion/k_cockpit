@@ -84,7 +84,8 @@ docs/06-decisions/             不得违背既有 ADR
 
 | 文件 | 功能 | 覆盖需求 | 状态 | 负责人 |
 |---|---|---|---|---|
-| [`f-6-01-node-onboarding.md`](f-6-01-node-onboarding.md) | 节点纳管与 agent 通道 | F-6-01、F-6-02、F-6-08 | **Ready**（7 项决策见 §9） | <!-- TODO --> |
+| [`f-6-01-node-onboarding.md`](f-6-01-node-onboarding.md) | 节点纳管与 agent 通道 | F-6-01、F-6-02 | **Ready**（7 项决策见 §9） | <!-- TODO --> |
+| [`f-6-08-agent.md`](f-6-08-agent.md) | 节点 agent（真实通道与领域执行，P0 已交付 / P1~P5 分期） | F-6-08 | **生效中** | <!-- TODO --> |
 | [`f-1-01-auth-session.md`](f-1-01-auth-session.md) | 本地账号登录与会话令牌 | F-1-01、F-1-02 | **Ready**（8 项决策见 §9） | <!-- TODO --> |
 | [`f-1-06-authorization.md`](f-1-06-authorization.md) | 授权与资源归属 | F-1-06、F-1-09 | **Ready**（8 项决策见 §9） | <!-- TODO --> |
 | [`f-7-01-task-queue.md`](f-7-01-task-queue.md) | 异步任务队列、任务中心与实时通道 | F-7-01、F-7-02、F-7-03 | **Ready**（11 项决策见 §9） | <!-- TODO --> |
