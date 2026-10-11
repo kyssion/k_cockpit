@@ -4,12 +4,14 @@ package nodeagent
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
+	"k_cockpit/internal/agent"
 	agentproto "k_cockpit/internal/agentproto"
 )
 
@@ -80,9 +82,42 @@ func Enroll(ctx context.Context, in EnrollInput) (*EnrollResult, error) {
 
 // NewRegistry 返回本构建的执行器注册表。
 //
-// P0：通道骨架，无领域执行器——能力清单为空是**诚实**的（面板显示该
-// 节点还没有可执行能力），任何操作都会得到明确的「未实现」结果。P1 起
-// 在这里逐个注册探测类执行器。
+// 注册即能力（Capabilities 由注册表生成）。P1 覆盖全部只读探测；
+// 生命周期/网络/存储类操作随 P2~P4 逐个注册——未注册的操作返回明确的
+// 「未实现」结果，能力清单永远与实际可执行的操作一致。
 func NewRegistry() Registry {
-	return Registry{}
+	return Registry{
+		// node 域
+		agent.OpNodeStats:   nodeStats,
+		agent.OpNodeDisks:   nodeDisks,
+		agent.OpNodeNetwork: nodeNetwork,
+		agent.OpNodeDomains: nodeDomains,
+		// host 域
+		agent.OpHostStats:       hostStats,
+		agent.OpHostHardware:    hostHardware,
+		agent.OpHostNetStats:    hostNetstats,
+		agent.OpHostTuning:      hostTuning,
+		agent.OpHostIOMMU:       hostIOMMU,
+		agent.OpHostPCIDevices:  hostPCIDevices,
+		agent.OpHostConnections: hostConnections,
+		// vm 域（只读）
+		agent.OpVMStatus:    vmStatus,
+		agent.OpVMStats:     vmStats,
+		agent.OpVMDiskList:  vmDiskList,
+		agent.OpVMXML:       vmXML,
+		agent.OpVMPcieInfo:  vmPCIeInfo,
+		agent.OpVMNeighbors: vmNeighbor,
+		// 网络探测
+		agent.OpNetworkProbe:  networkProbe,
+		agent.OpOVSStatus:     ovsStatus,
+		agent.OpOVSPorts:      ovsPorts,
+		agent.OpDHCPLeases:    dhcpLeases,
+		agent.OpPlatformCheck: platformCheck,
+		agent.OpMigrateAssess: migrateAssess,
+	}
 }
+
+// jsonMarshal / jsonUnmarshalTo 是 ex_net.go 里期望解码用的小助手。
+func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
+
+func jsonUnmarshalTo(b []byte, v any) error { return json.Unmarshal(b, v) }

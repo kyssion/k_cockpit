@@ -1,0 +1,60 @@
+{
+   "blockdevices": [
+      {
+         "name": "loop0",
+         "path": "/dev/loop0",
+         "size": "125G",
+         "type": "loop",
+         "fstype": "ext4",
+         "mountpoint": "/var/lib/kvm-user-storage"
+      },{
+         "name": "sda",
+         "path": "/dev/sda",
+         "size": "3.6G",
+         "type": "disk",
+         "fstype": "iso9660",
+         "mountpoint": null,
+         "children": [
+            {
+               "name": "sda1",
+               "path": "/dev/sda1",
+               "size": "3.6G",
+               "type": "part",
+               "fstype": "iso9660",
+               "mountpoint": null
+            },{
+               "name": "sda2",
+               "path": "/dev/sda2",
+               "size": "7.1M",
+               "type": "part",
+               "fstype": "vfat",
+               "mountpoint": null
+            }
+         ]
+      },{
+         "name": "vda",
+         "path": "/dev/vda",
+         "size": "128G",
+         "type": "disk",
+         "fstype": null,
+         "mountpoint": null,
+         "children": [
+            {
+               "name": "vda1",
+               "path": "/dev/vda1",
+               "size": "1G",
+               "type": "part",
+               "fstype": "vfat",
+               "mountpoint": "/boot/efi"
+            },{
+               "name": "vda2",
+               "path": "/dev/vda2",
+               "size": "126.9G",
+               "type": "part",
+               "fstype": "ext4",
+               "mountpoint": "/"
+            }
+         ]
+      }
+   ]
+}

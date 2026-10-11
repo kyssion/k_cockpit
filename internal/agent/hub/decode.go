@@ -10,6 +10,7 @@ package hub
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 
 	"k_cockpit/internal/agent"
 )
@@ -20,10 +21,47 @@ type decodeFunc func(raw json.RawMessage) (any, error)
 // typedDecoders 登记**结构体/切片**类结果的解码器，按 OpKind 分组。
 //
 // 键名与 agent 包各契约文件的 XxxDataKey 常量一一对应；新增操作的解码器
-// 在这里登记（P1 起随操作实现逐个补齐），登记遗漏的表现是服务层断言失败
-// ——那会在对账测试里暴露，而不是静默丢数据。
+// 在这里登记，登记遗漏的表现是服务层断言失败——那会在对账测试里暴露，
+// 而不是静默丢数据。
 var typedDecoders = map[agent.OpKind]map[string]decodeFunc{
-	// P0 阶段尚无真实操作返回结构体结果；框架先行，随 P1 探测类操作逐个登记。
+	// node 域（P1）
+	agent.OpNodeStats:   {agent.NodeStatsDataKey: into(agent.NodeStats{})},
+	agent.OpNodeDisks:   {agent.DiskListKey: into([]agent.Disk{})},
+	agent.OpNodeNetwork: {agent.NetworkKey: into(agent.NetworkBackend{})},
+	agent.OpNodeDomains: {agent.NodeDomainsDataKey: into([]agent.DomainInfo{})},
+	// host 域（P1）
+	agent.OpHostStats:       {agent.HostStatsDataKey: into(agent.HostStats{})},
+	agent.OpHostHardware:    {agent.HostHardwareDataKey: into(agent.HostHardware{})},
+	agent.OpHostNetStats:    {agent.HostNetStatsDataKey: into(agent.HostNetStats{})},
+	agent.OpHostTuning:      {agent.TuningStateKey: into(agent.TuningState{})},
+	agent.OpHostIOMMU:       {agent.IOMMUStatusKey: into(agent.IOMMUStatus{})},
+	agent.OpHostPCIDevices:  {agent.PCIDevicesKey: into([]agent.PCIDevice{})},
+	agent.OpHostConnections: {agent.HostConnectionsKey: into([]agent.HostConnection{})},
+	// vm 域只读（P1）
+	agent.OpVMStats:     {agent.StatsDataKey: into(agent.VMStats{})},
+	agent.OpVMDiskList:  {agent.VMDiskListDataKey: into([]agent.VMDisk{})},
+	agent.OpVMXML:       {agent.VMXMLKey: into(agent.VMXMLInfo{})},
+	agent.OpVMPcieInfo:  {agent.PCIeDataKey: into(agent.PCIeInfo{})},
+	agent.OpVMNeighbors: {agent.NeighborDataKey: into([]agent.NeighborEntry{})},
+	// 网络探测（P1）
+	agent.OpNetworkProbe:  {agent.NetworkCapabilityKey: into(agent.NetworkCapability{})},
+	agent.OpOVSStatus:     {agent.OVSStatusKey: into(agent.OVSStatus{})},
+	agent.OpOVSPorts:      {agent.OVSPortsKey: into([]agent.OVSPort{})},
+	agent.OpDHCPLeases:    {agent.DHCPLeasesKey: into([]agent.DHCPLease{})},
+	agent.OpPlatformCheck: {agent.PlatformCheckKey: into([]agent.PlatformCheckResult{})},
+	agent.OpMigrateAssess: {agent.MigrateAssessDataKey: into(agent.MigrateAssessInfo{})},
+}
+
+// into 返回「解码进 sample 同型结构」的解码器（sample 只用于取类型）。
+func into(sample any) decodeFunc {
+	return func(raw json.RawMessage) (any, error) {
+		v := reflect.New(reflect.TypeOf(sample)).Interface()
+		if err := json.Unmarshal(raw, v); err != nil {
+			return nil, err
+		}
+		// *T → T（切片/结构体都解引用为服务层断言期望的形状）。
+		return reflect.ValueOf(v).Elem().Interface(), nil
+	}
 }
 
 // decodeResultData 把线上的 JSON 对象还原为服务层可断言的 map[string]any。
