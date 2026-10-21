@@ -50,6 +50,7 @@ func vmCreate(ctx context.Context, op agent.Operation, report Reporter) (*agent.
 	if err := os.MkdirAll(imagesDir, 0o755); err != nil {
 		return failResult("创建镜像目录失败: " + err.Error()), nil
 	}
+	ensureAppArmorAllowsImages(imagesDir)
 	// 同名域拒绝：libvirt define 会拒绝，但提前检查能给出更清晰的文案。
 	if sys.DomainExists(ctx, spec.Name) {
 		return failResult("虚拟化层已存在同名域 " + spec.Name), nil
@@ -100,6 +101,14 @@ func vmCreate(ctx context.Context, op agent.Operation, report Reporter) (*agent.
 	}
 
 	report(Stage{Key: "domain_start", Name: "落实自启与收尾", Index: 4, Total: 4})
+	_ = ensureQemuReadable(diskPath)
+	for i, d := range spec.DataDisks {
+		dev := d.DevHint
+		if dev == "" {
+			dev = nextDataDev(i)
+		}
+		_ = ensureQemuReadable(dataDiskPath(spec.Name, dev, extOf(d.Format)))
+	}
 	if spec.AutoStart {
 		_, _ = sys.Run(ctx, "virsh", "autostart", spec.Name)
 	}
@@ -186,17 +195,30 @@ func vmDelete(ctx context.Context, op agent.Operation, report Reporter) (*agent.
 	}
 
 	report(Stage{Key: "domain_undefine", Name: "清理域配置", Index: 2, Total: 4})
-	undefArgs := []string{"undefine", "--nvram", op.Target}
-	if force {
-		undefArgs = []string{"undefine", "--nvram", "--force", op.Target}
+	// 注意 virsh undefine **没有 --force 选项**（真机实测报 "command
+	// 'undefine' doesn't support option --force"）——force 语义是控制面
+	// 跳过状态校验，不是 virsh 参数。--managed-save 处理掉已保存状态的
+	// 域（undefine 对有 managed-save 的域会拒绝，这是另一种「删不掉」）。
+	undefErr := sys.Run0(ctx, "virsh", "undefine", "--nvram", "--managed-save", op.Target)
+	if undefErr != nil && strings.Contains(undefErr.Error(), "snapshots") {
+		// 带快照的关机域会被 libvirt 拒绝删除（真机实测 "cannot delete
+		// inactive domain with 1 snapshots"）——僵尸域的常见形态之一。
+		// --snapshots-metadata 连同快照元数据一起清掉：force 路径的语义
+		// 就是「这台机器不要了」，残留的元数据只会让同名重建失败。
+		undefErr = sys.Run0(ctx, "virsh", "undefine", "--nvram", "--managed-save",
+			"--snapshots-metadata", op.Target)
 	}
-	if _, err := sys.Run(ctx, "virsh", undefArgs...); err != nil {
-		if force {
-			// 域可能已不存在（这就是「僵尸」的常见形态）——继续清理残留。
-			report(Stage{Key: "residue_clean", Name: "清理磁盘与运行态残留", Index: 3, Total: 4})
-		} else {
-			return failResult("删除域失败: " + err.Error()), nil
+	if undefErr != nil && !sys.DomainExists(ctx, op.Target) {
+		undefErr = nil // 域本就不存在（已消失的僵尸）——视为已清理。
+	}
+	if undefErr != nil {
+		if !force {
+			return failResult("删除域失败: " + undefErr.Error()), nil
 		}
+		// force 路径：undefine 失败也要**如实**报出来，而不是吞掉继续——
+		// 吞掉的后果是任务成功、磁盘被删、域却留着（真机复现过两次），
+		// 用户再建同名机器会被「虚拟化层已存在同名域」拒绝且无从下手。
+		return failResult("强制删除未能移除域定义（磁盘未动）: " + undefErr.Error()), nil
 	}
 
 	var transferred []agent.TransferredDisk
@@ -237,9 +259,10 @@ func vmDelete(ctx context.Context, op agent.Operation, report Reporter) (*agent.
 	if force {
 		report(Stage{Key: "libvirt_restart", Name: "重启 libvirt 服务", Index: 4, Total: 4})
 		_, _ = sys.Run(ctx, "systemctl", "restart", "libvirtd")
-		report(Stage{Key: "verify", Name: "复核域已不存在", Index: 4, Total: 4})
-	} else {
-		report(Stage{Key: "verify", Name: "复核域已不存在", Index: 4, Total: 4})
+	}
+	report(Stage{Key: "verify", Name: "复核域已不存在", Index: 4, Total: 4})
+	if sys.DomainExists(ctx, op.Target) {
+		return failResult("复核发现域仍存在（删除未生效）"), nil
 	}
 
 	data := map[string]any{}
@@ -273,12 +296,15 @@ func vmSnapshotCreate(ctx context.Context, op agent.Operation, report Reporter) 
 
 	args := []string{"snapshot-create-as", "--domain", op.Target, "--name", name}
 	// 运行中 + 含内存 → 内部快照自带内存（libvirt 默认）；关机 → 仅磁盘。
+	// --quiesce 是无值开关（--quiesce=off 是非法语法，真机实测 "invalid
+	// '=' after option --quiesce"）；且 quiesce 需要 Guest Agent，关机态
+	// 传它只会让命令失败。
 	state, _ := sys.DomainStateOf(ctx, op.Target)
-	if state != "running" {
-		args = append(args, "--disk-only", "--quiesce=off")
-		_ = includeMemory
-	} else if !includeMemory {
+	if state != "running" || !includeMemory {
+		// 关机域或「不含内存」：--disk-only 走外部快照——UEFI(pflash)
+		// 域不支持内部快照（libvirt 限制），--disk-only 是唯一可用路径。
 		args = append(args, "--disk-only")
+		_ = includeMemory
 	}
 	report(Stage{Key: "disk_snapshot", Name: "创建磁盘快照", Index: 2, Total: 3})
 	if _, err := sys.Run(ctx, "virsh", args...); err != nil {
@@ -290,9 +316,26 @@ func vmSnapshotCreate(ctx context.Context, op agent.Operation, report Reporter) 
 		return failResult("创建快照失败: " + msg), nil
 	}
 	report(Stage{Key: "metadata_write", Name: "记录快照元数据", Index: 3, Total: 3})
+	// --disk-only 的新 overlay 由 libvirtd 以 root 落盘（真机实测 root:600），
+	// qemu 下次开机打不开——这里把链上盘文件的属主归一到 qemu 用户。
+	for _, d := range sys.ParseDomainDisks(xmlNow(ctx, op.Target)) {
+		if d.SourceFile != "" {
+			_ = ensureQemuReadable(d.SourceFile)
+		}
+	}
 	return &agent.Result{Success: true, Data: map[string]any{
 		"domain_name": name,
 	}}, nil
+}
+
+// xmlNow 现读域定义（失败返回空串——快照后的属主归一是尽力而为的加固，
+// 读不到定义时跳过，不阻断快照结果）。
+func xmlNow(ctx context.Context, vm string) string {
+	xml, err := sys.DumpXML(ctx, vm, false)
+	if err != nil {
+		return ""
+	}
+	return xml
 }
 
 func vmSnapshotRestore(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
@@ -310,6 +353,13 @@ func vmSnapshotRestore(ctx context.Context, op agent.Operation, report Reporter)
 		return failResult("恢复快照失败: " + err.Error()), nil
 	}
 	report(Stage{Key: "config_restore", Name: "恢复配置", Index: 3, Total: 3})
+	// 恢复切活动盘后同样归一属主（真机实测：恢复新建 overlay root:600，
+	// 随后开机 qemu 报 Permission denied——这是本次修复的原始现场）。
+	for _, d := range sys.ParseDomainDisks(xmlNow(ctx, op.Target)) {
+		if d.SourceFile != "" {
+			_ = ensureQemuReadable(d.SourceFile)
+		}
+	}
 	return &agent.Result{Success: true}, nil
 }
 

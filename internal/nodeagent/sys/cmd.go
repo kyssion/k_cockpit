@@ -65,3 +65,19 @@ func osReadFile(path string) (string, error) {
 	}
 	return string(b), nil
 }
+
+// Run0 执行命令只返回错误（不看输出）——给「成功与否即结论」的写命令用。
+func Run0(ctx context.Context, name string, args ...string) error {
+	ctx, cancel := context.WithTimeout(ctx, cmdTimeout)
+	defer cancel()
+	var stderr strings.Builder
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return fmt.Errorf("%s: %s", name, msg)
+		}
+		return err
+	}
+	return nil
+}

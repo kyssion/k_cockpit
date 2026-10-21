@@ -678,6 +678,20 @@ func (s *Service) CreateBatch(
 	if req.VCPU <= 0 || req.MemoryMB <= 0 || req.DiskGB <= 0 {
 		return nil, api.InvalidParameter("CPU、内存与磁盘必须为正数")
 	}
+	// 规格上限（与编辑矩阵同一套 Min/Max）：validateCreateConfig 刻意跳过
+	// 规格三件套（模板会抬高下限），但**上限**没有任何人校验过——真机上
+	// disk_gb=999999 一路直通，落成 977 TiB 的稀疏盘，配额未配置时无遮拦。
+	// 上限不随模板变化，在这里校验是安全的。
+	if f, ok := editFieldByKey("disk_gb"); ok && f.Max > 0 && req.DiskGB > f.Max {
+		return nil, api.InvalidParameter(
+			"系统盘不能超过 " + strconv.Itoa(f.Max) + " GB（当前 " + strconv.Itoa(req.DiskGB) + "）")
+	}
+	if f, ok := editFieldByKey("vcpu"); ok && f.Max > 0 && req.VCPU > f.Max {
+		return nil, api.InvalidParameter("CPU 核数超出上限 " + strconv.Itoa(f.Max))
+	}
+	if f, ok := editFieldByKey("memory_mb"); ok && f.Max > 0 && req.MemoryMB > f.Max {
+		return nil, api.InvalidParameter("内存超出上限 " + strconv.Itoa(f.Max) + " MB")
+	}
 	if err := validateCreateConfig(req); err != nil {
 		return nil, err
 	}

@@ -185,6 +185,36 @@ func (q *Queue) Enqueue(ctx context.Context, spec Spec) (*model.Task, error) {
 		if spec.IdempotencyKey != "" && isDuplicateKey(err) {
 			existing, findErr := q.findByIdempotencyKey(ctx, spec.IdempotencyKey)
 			if findErr == nil {
+				// 幂等键只对**在途**意图生效：既有任务已终态（尤其是失败）
+				// 时，重试是一次新意图——原样返回旧任务会把「已失败」当
+				// 「已受理」回给调用方，且该键把名字挡到 24 小时后被清理
+				// 才解封（真机复现：失败创建后同名重试永远拿到旧任务）。
+				// 处置：清掉终态任务的键（它只剩历史价值），插入新任务。
+				if existing.IsTerminal() {
+					if clrErr := q.db.WithContext(ctx).Model(&model.Task{}).
+						Where("id = ?", existing.ID).
+						Update("idempotency_key", nil).Error; clrErr != nil {
+						log.Printf("[task] 释放终态任务幂等键失败 id=%d: %v", existing.ID, clrErr)
+						return nil, api.Internal()
+					}
+					t.IdempotencyKey = &spec.IdempotencyKey
+					if retryErr := q.db.WithContext(ctx).Create(&t).Error; retryErr != nil {
+						log.Printf("[task] 入队失败(重试): %v", retryErr)
+						return nil, api.Internal()
+					}
+					q.record(ctx, audit.Entry{
+						OperatorID:   spec.CreatedBy,
+						ResourceType: spec.ResourceType,
+						ResourceID:   spec.ResourceID,
+						ResourceName: spec.ResourceName,
+						Action:       "task.enqueue",
+						AfterState:   map[string]any{"task_id": t.ID, "type": t.Type, "retried_after": existing.ID},
+						Success:      true,
+					})
+					q.publish(&t, model.TaskPending)
+					q.signal()
+					return &t, nil
+				}
 				return existing, nil
 			}
 		}

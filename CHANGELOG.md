@@ -17,6 +17,16 @@
 
 ## [Unreleased]
 
+### Fixed
+- **全栈真机深测发现的六个缺陷修复（分支 `feat/agent`，测试环境 Ubuntu 24.04 arm64 + libvirt 10 + OVS 3.3.9 + QVMConsole 共存机）**：
+  - **force-delete 永远残留域（高危）**：`virsh undefine` 没有 `--force` 选项（命令必然失败且被 force 分支吞掉），任务报 success 但域留在虚拟化层、磁盘被删——同名重建被「已存在同名域」拒绝且无从下手。真机两次复现。修复：改用 `--nvram --managed-save`，带快照的关机域追加 `--snapshots-metadata`（libvirt 拒绝删除带快照的关机域——僵尸域的常见形态），undefine 失败**如实报错**，末尾真实复核域已不存在
+  - **创建规格无上限校验（高危）**：`validateCreateConfig` 刻意跳过规格三件套（模板会抬高下限），但上限无人校验——`disk_gb=999999` 一路直通，真机落成 977 TiB 稀疏盘。修复：模板推导后按编辑矩阵 Max 校验（盘 2000GB / vCPU 64 / 内存 256GB）
+  - **失败创建的幂等键永久占据名字（中）**：队列对重复幂等键无条件返回既有任务（含已失败的），同名重试拿到 200+旧失败任务，名字被挡到 24h 保留清理后。修复：既有任务已是终态时释放其键、入队新任务（附回归测试）
+  - **关机态快照命令非法（中）**：`--quiesce=off` 不是合法 virsh 语法（quiesce 是无值开关），关机域快照 100% 失败。修复：关机或不含内存统一走 `--disk-only` 外部快照
+  - **外部快照链 qemu 打不开盘（中）**：两层根因——恢复新建的 overlay 是 root:600（libvirt 不经自己启动路径不改属主）；libvirt 动态 AppArmor profile 不为 /var/lib/libvirt 之外的镜像路径生成放行（QVMConsole pitfalls 同款）。修复：新增 `qemuowner.go`——qemu 属主探测+回退（libvirt 运行目录 → getent）归一属主与 0644；镜像目录幂等写入 `abstractions/libvirt-qemu`（每个域 profile 都 include 它）。修复后快照→恢复→再开机全链路通过
+  - **快照恢复后投影不刷新**（观察项，未改）：外部快照恢复的成功路径把 VM 状态记为 unknown——语义保守（回滚后状态本不可信），但界面显示可优化
+- passaudit 的 NodeID 写死 0（mock 时代遗留）导致真实通道下永远「节点不可达」——改为取第一个已接入节点（Pluck 修正 Scan 单列问题）
+
 ### Added
 - **真实 agent P3~P5：全部领域执行器接入（分支 `feat/agent`，能力自报 85 项）**：
   - **P3 网络**：VPC 交换机（OVS 桥 + internal 网关 + 独立 dnsmasq + NAT，create/update/delete/reconfigure/release_port）、Linux 基础桥、上行口入桥（**节点侧看门狗**先布防再操作，confirm 解除）、收敛修复、安全组（per-VM iptables 链）、双层防火墙（KC-FW/KC-HFW 链，先写入后收紧；rollback 全通恢复）、端口转发 DNAT、公网地址 1:1 DNAT、端口安全（OVS 防伪造流表）、端口镜像（OVS mirror + 看门狗）、抓包（tcpdump 落盘）
