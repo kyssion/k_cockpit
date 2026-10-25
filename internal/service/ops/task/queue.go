@@ -199,6 +199,14 @@ func (q *Queue) Enqueue(ctx context.Context, spec Spec) (*model.Task, error) {
 					}
 					t.IdempotencyKey = &spec.IdempotencyKey
 					if retryErr := q.db.WithContext(ctx).Create(&t).Error; retryErr != nil {
+						// 并发重试撞键：另一请求抢先插入同键新任务——回到
+						// 查询返回它，而不是给这个请求一个无来由的 500
+						//（review 抓出的交错窗口）。
+						if isDuplicateKey(retryErr) {
+							if winner, findErr := q.findByIdempotencyKey(ctx, spec.IdempotencyKey); findErr == nil {
+								return winner, nil
+							}
+						}
 						log.Printf("[task] 入队失败(重试): %v", retryErr)
 						return nil, api.Internal()
 					}

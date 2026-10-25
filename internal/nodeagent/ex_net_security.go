@@ -189,14 +189,18 @@ func firewallApply(ctx context.Context, op agent.Operation, report Reporter) (*a
 			if proto == "" {
 				args = []string{}
 			}
-			if port > 0 {
+			// 没有 -p 的 --dport 是非法规则（iptables 报错被 iptablesAdd
+			// 吞掉，规则静默缺失）——无协议时端口无从匹配，忽略。
+			if port > 0 && proto != "" {
 				args = append(args, "--dport", strconv.Itoa(int(port)))
 			}
 			if src, ok := m["source"].(string); ok && src != "" {
 				args = append(args, "-s", src)
 			}
+			// 没有 -j 的规则只是计数器：匹配后什么都不做，allow/deny
+			// 全部静默无效（review 抓出——此前 target 算完被丢弃）。
+			args = append(args, "-j", target)
 			iptablesAdd(ctx, append([]string{chain}, args...)...)
-			_ = target
 		}
 	}
 
@@ -207,11 +211,14 @@ func firewallApply(ctx context.Context, op agent.Operation, report Reporter) (*a
 		if _, err := sys.Run(ctx, "iptables", "-I", "INPUT", "1", "-j", chain); err != nil {
 			return failResult("接入 INPUT 失败: " + err.Error()), nil
 		}
+		// 默认策略是整套防火墙最关键的一条——失败必须如实报，否则
+		// 「收紧失败 + 报告成功」等于裸奔（review 抓出）。
+		policy := "ACCEPT"
 		if defaultAction == "drop" {
-			// 收紧默认策略放最后（先写入后收紧）。
-			_, _ = sys.Run(ctx, "iptables", "-P", "INPUT", "DROP")
-		} else {
-			_, _ = sys.Run(ctx, "iptables", "-P", "INPUT", "ACCEPT")
+			policy = "DROP" // 收紧默认策略放最后（先写入后收紧）。
+		}
+		if perr := sys.Run0(ctx, "iptables", "-P", "INPUT", policy); perr != nil {
+			return failResult("设置 INPUT 默认策略失败: " + perr.Error()), nil
 		}
 	} else {
 		_, _ = sys.Run(ctx, "iptables", "-P", "INPUT", "ACCEPT")
@@ -384,7 +391,6 @@ func macOf(ctx context.Context, ifname string) string {
 func portMirrorEnable(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	name := strParam(op.Params, "name")
 	report(Stage{Key: "create_mirror", Name: "建立镜像", Index: 1, Total: 2})
-	// 源口与目标交换机：源口所在桥上建 mirror，目标为 internal 口。
 	sources, _ := op.Params["source_ports"].([]any)
 	if len(sources) == 0 {
 		return failResult("缺少镜像源端口"), nil
@@ -394,21 +400,31 @@ func portMirrorEnable(ctx context.Context, op agent.Operation, report Reporter) 
 		return failResult(err.Error()), nil
 	}
 	mirrorName := "kc-mir-" + name
-	_, _ = sys.Run(ctx, "ovs-vsctl", "--", "--may-exist", "create", "mirror", "name="+mirrorName)
-	args := []string{"set", "bridge", bridge}
-	for _, s := range sources {
-		args = append(args, fmt.Sprintf("mirrors=@m -- --id=@m get Mirror %s", mirrorName))
-		_ = s
+	// ovs-vsctl 的事务语义（OVS 3.3 真机逐一实测）：
+	//   - create 没有 --may-exist（报 "no option"），幂等只能「先查后建」；
+	//   - create 同事务内被引用必须带 --id=@m，且引用列要在 create 上
+	//     直接内联（@m 不能出现在 record 位置）；
+	//   - 引用列的值不能写端口名字符串（"vnet0 is not a valid UUID"），
+	//     要先 --id=@p0 get Port 换成命名 UUID；
+	//   - 行已存在时 set 的 record 用名字、add 的值必须先 get _uuid。
+	ensureMirror := func(source string) error {
+		if mirrorRowExists(ctx, mirrorName) {
+			args := []string{"--", "--id=@p0", "get", "Port", source,
+				"--", "set", "Mirror", mirrorName,
+				"select_src_port=@p0", "select_dst_port=@p0",
+				"--", "--id=@m", "get", "Mirror", mirrorName, "_uuid",
+				"--", "add", "Bridge", bridge, "mirrors", "@m"}
+			_, err := sys.Run(ctx, "ovs-vsctl", args...)
+			return err
+		}
+		args := []string{"--", "--id=@p0", "get", "Port", source,
+			"--", "--id=@m", "create", "Mirror", "name=" + mirrorName,
+			"select_src_port=@p0", "select_dst_port=@p0",
+			"--", "add", "Bridge", bridge, "mirrors", "@m"}
+		_, err := sys.Run(ctx, "ovs-vsctl", args...)
+		return err
 	}
-	// 简化：选第一个源口的方向镜像（select_src）。
-	_, err = sys.Run(ctx, "ovs-vsctl",
-		"--", "--may-exist", "create", "mirror", "name="+mirrorName,
-		"--", "add", "bridge", bridge, "mirrors", "@m",
-		"--", "--id=@"+mirrorName, "get", "Mirror", mirrorName,
-		"--", "set", "bridge", bridge, "mirrors=@"+mirrorName,
-		"--", "add", "Mirror", mirrorName, "select_src_port", fmtAnyString(sources[0]),
-		"select_dst_port", fmtAnyString(sources[0]))
-	if err != nil {
+	if err := ensureMirror(fmtAnyString(sources[0])); err != nil {
 		return failResult("建立镜像失败: " + err.Error()), nil
 	}
 
@@ -419,14 +435,13 @@ func portMirrorEnable(ctx context.Context, op agent.Operation, report Reporter) 
 	}
 	confirmFile := "/run/kc-mirror-confirm-" + name
 	_ = osRemove(confirmFile)
-	timeAfterFunc(wd, func() {
+	schedule(wd, func() {
 		if _, err := osStat(confirmFile); err == nil {
 			return
 		}
 		ctx2, cancel2 := contextWithTimeout(5 * timeSecond)
 		defer cancel2()
-		_, _ = sys.Run(ctx2, "ovs-vsctl", "--", "remove", "bridge", bridge, "mirrors", mirrorName,
-			"--", "clear", "bridge", bridge, "mirrors")
+		detachMirror(ctx2, mirrorName)
 	})
 
 	return &agent.Result{Success: true, Data: map[string]any{
@@ -437,9 +452,26 @@ func portMirrorEnable(ctx context.Context, op agent.Operation, report Reporter) 
 	}}, nil
 }
 
-func timeAfterFunc(sec int, f func()) *time.Timer { return schedule(sec, f) }
+// mirrorRowExists 按名字精确判定 Mirror 行是否存在（get 对不存在的行报错）。
+func mirrorRowExists(ctx context.Context, name string) bool {
+	_, err := sys.Run(ctx, "ovs-vsctl", "get", "Mirror", name, "name")
+	return err == nil
+}
 
-// portMirrorConfirm / Disable。
+// detachMirror 把名为 name 的 Mirror 从所有桥上摘挂。
+//
+// Bridge.mirrors 是弱引用：摘掉**最后一个**引用后 Mirror 行被自动删除
+// （真机实测）。挂载中的行对 `destroy` 静默无效（退出码还是 0），因此
+// 摘挂是撤销镜像的唯一正确路径。行不存在时 get 报错、事务整体无效，
+// 各桥尝试彼此独立、互不影响。
+func detachMirror(ctx context.Context, name string) {
+	brs, _ := sys.OVSListBridges(ctx)
+	for _, br := range brs {
+		_, _ = sys.Run(ctx, "ovs-vsctl", "--", "--id=@m", "get", "Mirror", name, "_uuid",
+			"--", "remove", "Bridge", br, "mirrors", "@m")
+	}
+}
+
 func portMirrorConfirm(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	_ = osWriteFile("/run/kc-mirror-confirm-"+op.Target, []byte("ok"), 0o644)
 	return &agent.Result{Success: true, Data: map[string]any{
@@ -449,20 +481,12 @@ func portMirrorConfirm(ctx context.Context, op agent.Operation, report Reporter)
 
 func portMirrorDisable(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	report(Stage{Key: "disable", Name: "撤销镜像", Index: 1, Total: 1})
-	mirrorName := "kc-mir-" + op.Target
-	for _, br := range mustBridges(ctx) {
-		_, _ = sys.Run(ctx, "ovs-vsctl", "--", "remove", "bridge", br, "mirrors", mirrorName,
-			"--", "clear", "bridge", br, "mirrors")
-	}
+	// 只摘本镜像（弱引用 GC 会随后删掉孤儿行），同桥其它镜像不受影响。
+	detachMirror(ctx, "kc-mir-"+op.Target)
 	_ = osRemove("/run/kc-mirror-confirm-" + op.Target)
 	return &agent.Result{Success: true, Data: map[string]any{
 		agent.PortMirrorDataKey: agent.PortMirrorInfo{Applied: 0, Message: "镜像已撤销"},
 	}}, nil
-}
-
-func mustBridges(ctx context.Context) []string {
-	brs, _ := sys.OVSListBridges(ctx)
-	return brs
 }
 
 // networkCapture 实现一次限时抓包（tcpdump 落盘，控制面稍后 fetch）。

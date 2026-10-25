@@ -19,12 +19,14 @@ import (
 // 真实 agent 共用同一段注册逻辑（ADR-0007 的原则），预置出来的节点
 // 与手工接入的没有任何差别。
 func (s *Service) EnsureSimulated(ctx context.Context, names []string) error {
-	names, err := s.repo.NodeNames(ctx)
+	// 现有名单用独立变量：复用入参名 names 会把待预置清单遮蔽成现有名单，
+	// 循环变成「对每个已存在的名字查已存在」——一台都预置不出来。
+	existingNames, err := s.repo.NodeNames(ctx)
 	if err != nil {
 		return fmt.Errorf("查询现有节点: %w", err)
 	}
-	existing := make(map[string]struct{}, len(names))
-	for _, n := range names {
+	existing := make(map[string]struct{}, len(existingNames))
+	for _, n := range existingNames {
 		existing[n] = struct{}{}
 	}
 

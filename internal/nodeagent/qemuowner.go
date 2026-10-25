@@ -102,14 +102,16 @@ func runID(name string) (string, error) {
 // 非 /var/lib/libvirt 路径生成 .files 放行（QVMConsole 的 pitfalls 踩过同
 // 款）——qemu 报 Permission denied 而属主权限完全正常。把目录写进
 // abstractions/libvirt-qemu（每个域的 profile 都 include 它）是发行版通用
-// 解法。幂等：已含标记行则跳过；apparmor 不存在则空操作。
+// 解法。幂等：已含**该目录**的标记行则跳过；apparmor 不存在则空操作。
 func ensureAppArmorAllowsImages(dir string) {
 	const abstraction = "/etc/apparmor.d/abstractions/libvirt-qemu"
-	const marker = "# kc.images"
 	b, err := os.ReadFile(abstraction)
 	if err != nil {
 		return // 无 apparmor（或路径不同）——无需处理。
 	}
+	// 幂等必须按**目录**判定：只判「出现过 kc.images 标记」会让首个放行的
+	// 目录吞掉后续所有调用（ISO 的 userdata、快照链的其它池目录永远写不进）。
+	marker := "# kc.images:" + dir
 	if strings.Contains(string(b), marker) {
 		return
 	}

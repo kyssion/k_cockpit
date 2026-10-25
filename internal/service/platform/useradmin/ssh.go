@@ -36,6 +36,17 @@ type SSHAccessResult struct {
 // 即使节点没实现，控制面记录也要改：列表上显示的"允许 / 不允许"是**我们的
 // 意图**，而宿主机上是否生效由 Unavailable 单独说明。这两件事混在一起会让
 // "明明禁用了却还能登"变成无法解释的问题。
+// enrolledNodeIDs 返回全部已接入节点（SSH 开关的目标集合）。
+func (s *Service) enrolledNodeIDs(ctx context.Context) []int64 {
+	var ids []int64
+	if err := s.db.WithContext(ctx).Model(&model.Node{}).
+		Where("enroll_state = ? AND deleted_at IS NULL", model.NodeEnrollEnrolled).
+		Order("id").Pluck("id", &ids).Error; err != nil {
+		return nil
+	}
+	return ids
+}
+
 func (s *Service) SetSSHAccess(
 	ctx context.Context, id int64, enabled bool, v authz.Viewer, operatorName, clientIP string,
 ) (*SSHAccessResult, error) {
@@ -68,25 +79,48 @@ func (s *Service) SetSSHAccess(
 	}
 
 	out := &SSHAccessResult{}
-	if s.agent == nil {
-		out.Unavailable = "未连接节点，宿主机上尚未生效"
+	// 目标节点：SSH 的落点是宿主机，但真实通道里 NodeID 是路由键（0 永远
+	// 不在线——mock 不看 NodeID 的时代遗留，与 passaudit 同型；review
+	// 抓出）。单节点部署取第一个已接入节点；多节点时遍历全部，任一失败
+	// 如实带出。
+	nodeIDs := s.enrolledNodeIDs(ctx)
+	if s.agent == nil || len(nodeIDs) == 0 {
+		out.Unavailable = "没有已接入的节点，宿主机上尚未生效"
 	} else {
-		result, err := s.agent.Execute(ctx, agent.Operation{
-			// 作用目标是宿主机而不是某个节点资源：SSH 登录的落点在宿主机上。
-			Kind:   agent.OpUserSSHAccess,
-			NodeID: 0,
-			Target: row.Username,
-			Params: map[string]any{"username": row.Username, "enabled": enabled},
-		})
+		// unreachable 计数独立于业务结果：一台不可达不能把已生效的节点
+		// 遮蔽成「整批不可达」（此前 lastErr 只在部分路径被清，多节点时
+		// 误报且丢失成功节点的结果——review 抓出）。
+		unreachable := 0
+		var lastResult *agent.Result
+		for _, nid := range nodeIDs {
+			result, err := s.agent.Execute(ctx, agent.Operation{
+				Kind:   agent.OpUserSSHAccess,
+				NodeID: nid,
+				Target: row.Username,
+				Params: map[string]any{"username": row.Username, "enabled": enabled},
+			})
+			if err != nil {
+				unreachable++
+				continue
+			}
+			lastResult = result
+			if !result.Success {
+				break
+			}
+		}
 		switch {
-		case err != nil:
+		case lastResult != nil && !lastResult.Success:
+			out.Unavailable = lastResult.Message
+		case lastResult == nil:
 			out.Unavailable = "节点不可达，宿主机上尚未生效"
-		case !result.Success:
-			out.Unavailable = result.Message
 		default:
-			info := decodeSSHAccess(result.Data)
+			info := decodeSSHAccess(lastResult.Data)
 			out.KilledSessions = info.KilledSessions
 			out.Message = info.Message
+			if unreachable > 0 {
+				out.Message += "；另有 " + strconv.Itoa(unreachable) +
+					" 台节点不可达，宿主机上未生效"
+			}
 		}
 	}
 

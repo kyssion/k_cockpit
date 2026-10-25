@@ -204,7 +204,52 @@
 
 ---
 
-## 7. 运行环境变更清单
+## 7. 案例复盘：OVS 端口镜像的事务语义 + agent 沙箱吞写（2026-10-22 真机）
+
+两个独立问题在**同一轮真机验证**里先后暴露，且有一个共同点：单位级 review 与单测都发现不了，
+只有真机上的真实 ovs-vsctl / systemd 才会说话。
+
+### 7.1 现象
+
+1. 端口镜像 enable 报 `建立镜像失败`：先后出现 `applying "create" command to table Mirror
+   without --id option will have no effect`、`"vnet0" is not a valid UUID`、
+   `no row "@m" in table Mirror`——三种报错对应三种错误的事务写法。
+2. 修好 enable 后，AppArmor 放行条目（`ensureAppArmorAllowsImages`）**写不进**且无任何报错，
+   ISO 挂载后在开机时仍会 Permission denied。
+
+### 7.2 OVS Mirror 的事务语义（ovs-vsctl 3.3 逐一实测）
+
+| 写法 | 结果 |
+|---|---|
+| `--may-exist create Mirror name=X` | **报 "no option"**——create 根本没有该选项，幂等只能「先查后建」 |
+| `create Mirror name=X -- set Mirror X ...` | 无 `--id` 的 create 在同事务内**不可引用**，`set` 按名字也找不到刚建的行 |
+| `set Mirror X select_src_port=vnet0` | **报 not a valid UUID**——引用列的值不能写端口名字符串，必须先 `--id=@p get Port vnet0` 再用 `@p` |
+| `set Mirror @m ...`（@m 作 record） | **报 no row "@m"**——命名 UUID 只能出现在**值**位置，record 位置必须是名字或 UUID |
+| `destroy Mirror X`（X 为名字，行在） | **退出码 0 但行还在**——名字做 record 的 destroy 静默无效 |
+| `destroy Mirror <uuid>`（行挂载中） | 静默无效（退出码 0，行还在） |
+| `remove Bridge br mirrors @m`（最后一个引用） | **行被自动删除**（弱引用 GC）——摘挂就是撤销的唯一正确路径 |
+| 正确的 create 形状 | `-- --id=@p0 get Port <口> -- --id=@m create Mirror name=X select_src_port=@p0 select_dst_port=@p0 -- add Bridge <桥> mirrors @m` |
+| 正确的 exists 形状 | `-- --id=@p0 get Port <口> -- set Mirror X select_src_port=@p0 select_dst_port=@p0 -- --id=@m get Mirror X _uuid -- add Bridge <桥> mirrors @m` |
+
+**结论**：对 Mirror 这类「挂在别的表上」的行，撤销语义 = 摘挂（弱引用 GC 顺带删行），
+而不是 destroy；引用一律走命名 UUID，不赌名字解析。
+
+### 7.3 agent 的 systemd 沙箱会静默吞掉 /etc 写入
+
+`k_cockpit-agent.service` 原来是 `ProtectSystem=full` + `ReadWritePaths=/run`：
+`full` 档把 **/etc 设为只读**（/var 不受限）。因此 agent 里所有写 `/etc` 的路径——
+AppArmor 放行条目、sshd 的 DenyUsers drop-in、fstab 挂载项——**全部被只读层挡掉，
+而调用侧按「尽力而为」吞掉了错误**，表现为任务成功、宿主机没生效。
+
+**修法**：`ReadWritePaths` 按真实写点做最小豁免（带 `-` 前缀容忍路径不存在）：
+`/run -/etc/apparmor.d/abstractions -/etc/ssh/sshd_config.d /etc/fstab`。
+
+**教训**：`ProtectSystem=full` 之后的「写 /etc 不报错但也不生效」要首先怀疑沙箱；
+agent 侧对「尽力而为」的写入至少要留一行日志，否则真机上无从定位。
+
+---
+
+## 8. 运行环境变更清单
 
 **动手前：**
 
@@ -223,9 +268,10 @@
 
 ---
 
-## 8. 变更记录
+## 9. 变更记录
 
 | 日期 | 变更内容 |
 |---|---|
 | 2026-09-13 | 创建文档：固化排障原则、定界方法、远端操作纪律、跨层工具陷阱、systemd 检查清单，以及 OVS dnsmasq 误杀案例复盘 |
 | 2026-09-14 | 新增 §6.6：同类问题在另一台全新宿主机复现，补充"程序命令日志直接坐实凶手"的证据、具体函数定位、`SubnetPrefix` 对结论的影响，以及"缓解需进入部署清单"的持久性结论 |
+| 2026-10-22 | 新增 §7：OVS Mirror 事务语义逐条实测表（create/--id/命名 UUID/弱引用 GC）+ agent `ProtectSystem=full` 静默吞 /etc 写入的沙箱案例；原 §7/§8 顺延为 §8/§9 |

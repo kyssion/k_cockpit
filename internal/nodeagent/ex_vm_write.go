@@ -101,13 +101,35 @@ func vmCreate(ctx context.Context, op agent.Operation, report Reporter) (*agent.
 	}
 
 	report(Stage{Key: "domain_start", Name: "落实自启与收尾", Index: 4, Total: 4})
+	// 数据盘此前只进域 XML 不落盘（review 抓出）——define 成功、开机
+	// 必失败（libvirt 找不到盘文件）。在 define 之后补建：此时域已定义、
+	// 盘路径已确定，建盘失败则整体报错（define 留着无盘域比删域更糟，
+	// 但控制面任务失败后用户会重试——重试撞同名域，因此失败时回滚域）。
 	_ = ensureQemuReadable(diskPath)
+	created := []string{diskPath}
 	for i, d := range spec.DataDisks {
+		if d.SizeGB <= 0 {
+			continue
+		}
 		dev := d.DevHint
 		if dev == "" {
 			dev = nextDataDev(i)
 		}
-		_ = ensureQemuReadable(dataDiskPath(spec.Name, dev, extOf(d.Format)))
+		dp := dataDiskPath(spec.Name, dev, extOf(d.Format))
+		if _, err := sys.Run(ctx, "qemu-img", "create", "-f", extOf(d.Format),
+			dp, fmt.Sprintf("%dG", d.SizeGB)); err != nil {
+			// 回滚要清掉**全部**已建盘：只删系统盘会让先建好的数据盘成
+			// 孤儿文件（重试不会挡路——qemu-img create 对已存在文件静默
+			// 重建——但垃圾留在宿主机盘上）。
+			created = append(created, dp) // create 失败也可能留下半成品
+			_, _ = sys.Run(ctx, "virsh", "undefine", "--nvram", "--managed-save", spec.Name)
+			for _, p := range created {
+				_ = os.Remove(p)
+			}
+			return failResult("创建数据盘 " + dev + " 失败: " + err.Error()), nil
+		}
+		created = append(created, dp)
+		_ = ensureQemuReadable(dp)
 	}
 	if spec.AutoStart {
 		_, _ = sys.Run(ctx, "virsh", "autostart", spec.Name)
@@ -258,7 +280,13 @@ func vmDelete(ctx context.Context, op agent.Operation, report Reporter) (*agent.
 
 	if force {
 		report(Stage{Key: "libvirt_restart", Name: "重启 libvirt 服务", Index: 4, Total: 4})
-		_, _ = sys.Run(ctx, "systemctl", "restart", "libvirtd")
+		if rerr := sys.Run0(ctx, "systemctl", "restart", "libvirtd"); rerr != nil {
+			return failResult("重启 libvirtd 失败: " + rerr.Error()), nil
+		}
+		// 等服务真正起来再复核：重启窗口内 virsh 连不上会误判「域不在」
+		//（DomainExists 用 dominfo，连接失败返回 false——复核假通过，
+		// review 抓出的时序缺陷）。
+		waitLibvirtdUp(ctx)
 	}
 	report(Stage{Key: "verify", Name: "复核域已不存在", Index: 4, Total: 4})
 	if sys.DomainExists(ctx, op.Target) {
@@ -317,10 +345,13 @@ func vmSnapshotCreate(ctx context.Context, op agent.Operation, report Reporter) 
 	}
 	report(Stage{Key: "metadata_write", Name: "记录快照元数据", Index: 3, Total: 3})
 	// --disk-only 的新 overlay 由 libvirtd 以 root 落盘（真机实测 root:600），
-	// qemu 下次开机打不开——这里把链上盘文件的属主归一到 qemu 用户。
+	// qemu 下次开机打不开——这里把链上盘文件的属主归一到 qemu 用户；
+	// AppArmor 引导也在此兜底（升级部署后第一个操作可能是快照而非
+	// 创建——review 抓出的引导缺席场景）。
 	for _, d := range sys.ParseDomainDisks(xmlNow(ctx, op.Target)) {
 		if d.SourceFile != "" {
 			_ = ensureQemuReadable(d.SourceFile)
+			ensureAppArmorAllowsImages(filepath.Dir(d.SourceFile))
 		}
 	}
 	return &agent.Result{Success: true, Data: map[string]any{
@@ -358,6 +389,7 @@ func vmSnapshotRestore(ctx context.Context, op agent.Operation, report Reporter)
 	for _, d := range sys.ParseDomainDisks(xmlNow(ctx, op.Target)) {
 		if d.SourceFile != "" {
 			_ = ensureQemuReadable(d.SourceFile)
+			ensureAppArmorAllowsImages(filepath.Dir(d.SourceFile))
 		}
 	}
 	return &agent.Result{Success: true}, nil
@@ -501,6 +533,9 @@ func vmCDROMApply(ctx context.Context, op agent.Operation, report Reporter) (*ag
 	if isoPath != "" && !strings.HasPrefix(isoPath, "/") {
 		// 控制面下发的是「我的存储」相对路径；节点侧存储根 + rel_path。
 		isoPath = filepath.Join(userdataRoot, isoPath)
+		// qemu 要打开的 ISO 在 images 之外——AppArmor 只放行了镜像目录
+		//（review 抓出：挂 ISO 后开机 Permission denied，与快照链同根因）。
+		ensureAppArmorAllowsImages(userdataRoot)
 	}
 
 	report(Stage{Key: "render_device", Name: "渲染光驱设备", Index: 1, Total: 2})
@@ -522,7 +557,9 @@ func vmCDROMApply(ctx context.Context, op agent.Operation, report Reporter) (*ag
 	var err error
 	switch action {
 	case "remove":
-		_, err = sys.Run(ctx, "virsh", "detach-device", op.Target, getStdinXML(dev, bus))
+		// 与 attach 对称地带 --config：运行态 detach 对关机域直接报
+		// "domain is not running"（review 抓出的不对称）。
+		_, err = sys.Run(ctx, "virsh", "detach-device", "--config", op.Target, getStdinXML(dev, bus))
 	case "load":
 		// 已有光驱 → update-device；未挂载 → attach-device。
 		if cdromExists(ctx, op.Target, dev) {
@@ -620,4 +657,18 @@ func vmFloppyApply(ctx context.Context, op agent.Operation, report Reporter) (*a
 	action := strParam(op.Params, "action")
 	_ = action // 挂载路径解析依赖我的存储接入（P4），P2 先保证操作不悬空
 	return &agent.Result{Success: true, Message: "软驱操作待我的存储节点侧路径接入（P4）"}, nil
+}
+
+// waitLibvirtdUp 轮询等待 libvirtd 可服务（最多 ~10s）。
+func waitLibvirtdUp(ctx context.Context) {
+	for i := 0; i < 10; i++ {
+		if sys.RunOK(ctx, "virsh", "-r", "-c", "qemu:///system", "hostname") {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Second):
+		}
+	}
 }

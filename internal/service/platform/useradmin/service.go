@@ -24,6 +24,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -83,15 +84,31 @@ func (s *Service) SetAgent(c agent.Client) { s.agent = c }
 // 与 Create 的区别只有一处：**密码是受邀人自己设的**，因此不走强制改密——
 // 他自己刚设的密码，再让他改一遍没有意义。其余校验（角色、用户名）与 Create
 // 保持一致，避免两条创建路径长成两套口径。
-func (s *Service) CreateFromInvite(
-	ctx context.Context, email, username, password, role string,
-	quotaEnabled bool, quotaBytes int64,
-) error {
+
+// usernamePattern 与 auth 引导同一口径：用户名会下发到节点（SSH 开关
+// 的 pkill、域命名等）——字符集必须收敛到注入安全的子集。
+var usernamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{3,64}$`)
+
+// validateUsername 是 Create / CreateFromInvite 共用的入口校验。
+func validateUsername(username string) error {
 	if strings.TrimSpace(username) == "" {
 		return api.InvalidParameter("必须填写用户名")
 	}
 	if len(username) > 64 {
 		return api.InvalidParameter("用户名最长 64 字")
+	}
+	if !usernamePattern.MatchString(username) {
+		return api.InvalidParameter("用户名需为 3-64 位字母、数字、下划线或连字符")
+	}
+	return nil
+}
+
+func (s *Service) CreateFromInvite(
+	ctx context.Context, email, username, password, role string,
+	quotaEnabled bool, quotaBytes int64,
+) error {
+	if err := validateUsername(username); err != nil {
+		return err
 	}
 	// 受邀人自设密码，要求比管理员给的初始密码更长（12 位）：他只设这一次，
 	// 而这次的质量决定这个账号的长期强度。
@@ -116,17 +133,22 @@ func (s *Service) CreateFromInvite(
 		return err
 	}
 
-	// 配额：邀请时就把额度定下来。
+	// 配额：邀请时就把额度定下来。此前 NodeID 写死 0——quota.Set 对
+	// NodeID<=0 直接 InvalidParameter（配额按「用户 × 节点」建模），邀请
+	// 配额因此**从未设置成功过**（review 抓出）。改为对全部已接入节点
+	// 各设一份：邀请时无法选节点，而配额必须在节点上才拦得住创建。
 	if s.quota != nil && quotaEnabled {
 		var row model.User
 		if e := s.db.WithContext(ctx).Where("username = ?", username).Select("id").First(&row).Error; e == nil {
-			if e := s.quota.Set(ctx, QuotaRequest{
-				UserID: row.ID, NodeID: 0,
-				QuotaBytes: quotaBytes, Enabled: true,
-			}, 0, "invite", ""); e != nil {
-				// 配额设置失败**不算注册失败**：账号已经能用了，额度可以随后
-				// 补。让一次配额写入失败把注册判为失败，用户会以为邮箱被占了。
-				log.Printf("[useradmin] 设置邀请配额失败 user=%d: %v", row.ID, e)
+			for _, nid := range s.enrolledNodeIDs(ctx) {
+				if e := s.quota.Set(ctx, QuotaRequest{
+					UserID: row.ID, NodeID: nid,
+					QuotaBytes: quotaBytes, Enabled: true,
+				}, 0, "invite", ""); e != nil {
+					// 配额设置失败**不算注册失败**：账号已经能用了，额度可以随后
+					// 补。让一次配额写入失败把注册判为失败，用户会以为邮箱被占了。
+					log.Printf("[useradmin] 设置邀请配额失败 user=%d node=%d: %v", row.ID, nid, e)
+				}
 			}
 		}
 	}
@@ -258,11 +280,8 @@ func (s *Service) Create(
 	ctx context.Context, req CreateRequest, v authz.Viewer, operatorName, clientIP string,
 ) (*View, error) {
 	username := strings.TrimSpace(req.Username)
-	if username == "" {
-		return nil, api.InvalidParameter("必须填写用户名")
-	}
-	if len(username) > 64 {
-		return nil, api.InvalidParameter("用户名最长 64 字")
+	if err := validateUsername(username); err != nil {
+		return nil, err
 	}
 	if len(req.Password) < 8 {
 		// 下限是 8 位而不是更长：管理员创建的是**初始密码**，而强制复杂度的

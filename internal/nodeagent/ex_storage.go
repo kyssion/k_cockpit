@@ -202,9 +202,13 @@ func storageVolumeApply(ctx context.Context, op agent.Operation, report Reporter
 					devs = append(devs, s)
 				}
 			}
-			if _, err := sys.Run(ctx, "vgcreate", vg, strings.Join(devs, " ")); err != nil {
-				// vg 已存在不阻塞。
-				_, _ = sys.Run(ctx, "vgcreate", vg, devOf(devs))
+			// 多块盘是多个参数（strings.Join 会拼成单个参数——vgcreate
+			// 收到一个名叫 "sdb sdc" 的盘，永远建不成；review 抓出）。
+			// VG 已存在时 vgcreate 失败不阻塞（收敛语义），只管建 LV。
+			if _, err := sys.Run(ctx, "vgcreate", append([]string{vg}, devs...)...); err != nil {
+				if _, err2 := sys.Run(ctx, "vgcreate", append([]string{vg}, devOf(devs))...); err2 != nil {
+					_ = err // 两次都失败：VG 可能已存在，继续建 LV 由它兜底。
+				}
 			}
 		}
 		if _, err := sys.Run(ctx, "lvcreate", "-L", fmt.Sprintf("%dG", int(sizeGB)),

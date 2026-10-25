@@ -82,6 +82,11 @@ func vmReinstall(ctx context.Context, op agent.Operation, report Reporter) (*age
 	templatePath := strParam(op.Params, "template_disk_path")
 	diskGB, _ := op.Params["disk_gb"].(float64)
 	report(Stage{Key: "backup", Name: "备份原系统盘", Index: 1, Total: 3})
+	// 重装要求关机：运行中 mv 系统盘=拔正在写的硬盘（数据损坏）。
+	// 控制面受理层已校验，这里是节点侧兜底。
+	if state, _ := sys.DomainStateOf(ctx, op.Target); state == "running" || state == "paused" {
+		return failResult("虚拟机正在运行，重装要求先关机"), nil
+	}
 	sysDev := sysDiskDev(ctx, op.Target)
 	if sysDev == "" {
 		return failResult("找不到系统盘"), nil
@@ -112,10 +117,26 @@ func vmReinstall(ctx context.Context, op agent.Operation, report Reporter) (*age
 	}
 
 	report(Stage{Key: "uuid", Name: "刷新域定义", Index: 3, Total: 3})
-	_, _ = sys.Run(ctx, "virsh", "undefine", "--nvram", op.Target)
-	if _, err := sys.Run(ctx, "virsh", "define", xmlFileOf(xml)); err != nil {
-		return failResult("重新定义域失败: " + err.Error()), nil
+	// undefine 失败要如实报并还原备份（此前吞错，后续 define 的报错
+	// 掩盖真根因——与强删 bug 同型；review 抓出）。--managed-save /
+	// --snapshots-metadata 与强删路径同一套兜底。
+	uerr := sys.Run0(ctx, "virsh", "undefine", "--nvram", "--managed-save", op.Target)
+	if uerr != nil && strings.Contains(uerr.Error(), "snapshots") {
+		uerr = sys.Run0(ctx, "virsh", "undefine", "--nvram", "--managed-save",
+			"--snapshots-metadata", op.Target)
 	}
+	if uerr != nil && sys.DomainExists(ctx, op.Target) {
+		_ = osRename(backupPath, sourcePath)
+		return failResult("移除旧域定义失败: " + uerr.Error()), nil
+	}
+	if _, err := sys.Run(ctx, "virsh", "define", xmlFileOf(xml)); err != nil {
+		_ = osRename(backupPath, sourcePath)
+		// 此步失败时旧域定义已移除、原盘已还原但域处于未定义态——如实
+		// 告知状态，别让用户以为机器还能直接开机。
+		return failResult("重新定义域失败: " + err.Error() +
+			"（原盘数据已还原，但域定义已被移除；重试重装或重建虚拟机可恢复）"), nil
+	}
+	_ = ensureQemuReadable(sourcePath)
 	uuid, _ := sys.DomainUUID(ctx, op.Target)
 	return &agent.Result{Success: true, Data: map[string]any{
 		"uuid": uuid,
@@ -154,8 +175,10 @@ func vmReinstallPurge(ctx context.Context, op agent.Operation, report Reporter) 
 
 // vmRescue 实现 vm.rescue.enter / exit（救援模式）。
 //
-// enter：保存当前配置快照（dumpxml）→ 挂救援 ISO → 改盘型 SATA + 网卡
-// e1000e + 从光驱引导；exit：按保存的定义还原。
+// enter：保存当前配置快照（dumpxml）→ 关机 → 挂救援 ISO 并开机。
+// **引导顺序不改写**：域定义的 boot 顺序保持原样，原盘可引导时需要在
+// 来宾固件里手动选光驱启动（盘型/网卡改写与 boot 顺序调整随 P5 的 XML
+// 通道深化）；exit：按保存的定义还原。
 func vmRescueEnter(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	snapshotXML := strParam(op.Params, "snapshot")
 	rescueISO := strParam(op.Params, "rescue_iso")
@@ -175,9 +198,17 @@ func vmRescueEnter(ctx context.Context, op agent.Operation, report Reporter) (*a
 		}
 		frag := cdromFragment("sdc", "scsi", rescueISO)
 		f := "/tmp/kc-rescue-" + op.Target + ".xml"
-		_ = osWriteFile(f, []byte("<device>"+frag+"</device>"), 0o600)
-		_, _ = sys.Run(ctx, "virsh", "attach-device", "--config", op.Target, f)
-		_, _ = sys.Run(ctx, "virsh", "start", op.Target)
+		if werr := osWriteFile(f, []byte("<device>"+frag+"</device>"), 0o600); werr != nil {
+			return failResult("写救援设备片段失败: " + werr.Error()), nil
+		}
+		// 挂载失败/启动失败都必须如实报（此前全吞、恒报成功——救援
+		// 是救砖场景，假成功会让人以为已经能进系统；review 抓出）。
+		if _, aerr := sys.Run(ctx, "virsh", "attach-device", "--config", op.Target, f); aerr != nil {
+			return failResult("挂载救援介质失败: " + aerr.Error()), nil
+		}
+		if _, serr := sys.Run(ctx, "virsh", "start", op.Target); serr != nil {
+			return failResult("从救援介质启动失败: " + serr.Error()), nil
+		}
 	}
 	return &agent.Result{Success: true}, nil
 }
@@ -280,7 +311,7 @@ func securityPasswordAudit(ctx context.Context, op agent.Operation, report Repor
 	}
 	report(Stage{Key: "check", Name: "比对抗弱口令", Index: 2, Total: 2})
 	// 候选集：常用弱口令 + 用户名本身。argon2/yescrypt 的计算成本高，
-	// 每用户只比对前 32 个候选（f-10-06 的性能边界）。
+	// 候选集固定 18 条，天然满足 f-10-06「每用户 ≤ 32 个候选」的性能边界。
 	candidates := []string{"123456", "password", "admin", "root", "12345678",
 		"qwerty", "111111", "123123", "abc123", "password123", "letmein",
 		"welcome", "monkey", "dragon", "master", "login", "princess", "sunshine"}
@@ -295,9 +326,6 @@ func securityPasswordAudit(ctx context.Context, op agent.Operation, report Repor
 			continue // 无密码或已锁定
 		}
 		for _, cand := range candidates {
-			if len(candidates) > 32 {
-				break
-			}
 			if checkCryptPassword(cand, hash) {
 				hits = append(hits, agent.PasswordHit{Username: username, Reason: "口令在常见弱口令表中"})
 				break
@@ -335,18 +363,41 @@ func userSSHAccess(ctx context.Context, op agent.Operation, report Reporter) (*a
 	report(Stage{Key: "ssh", Name: "调整 SSH 访问", Index: 1, Total: 1})
 	killed := 0
 	if !enabled {
-		// 结束该用户的在线会话（pkill 按 uid 匹配）。
-		if out, err := sys.Run(ctx, "sh", "-c",
-			"for u in $(who | awk '{print $1}' | sort -u); do [ \"$u\" = \""+username+"\" ] && pkill -KILL -u "+username+" -x sshd; done"); err == nil {
-			_ = out
+		// 结束该用户的在线会话。参数化调用（绝不拼 shell 字符串——
+		// 用户名来自控制面用户表，此前拼进 sh -c 是 root 级注入面；
+		// review 抓出。控制面已加字符集校验，这里是第二道防线）。
+		if out, err := sys.Run(ctx, "loginctl", "list-sessions", "--no-legend"); err == nil {
+			for _, line := range strings.Split(out, "\n") {
+				fields := strings.Fields(line)
+				if len(fields) >= 3 && fields[2] == username {
+					if _, kerr := sys.Run(ctx, "loginctl", "terminate-session", fields[0]); kerr == nil {
+						killed++
+					}
+				}
+			}
 		}
 	}
 	// sshd DenyUsers drop-in（sshd_config.d 目录，发行版惯例）。
 	denyFile := "/etc/ssh/sshd_config.d/10-kc-deny-" + username + ".conf"
+	denyExists := false
+	if _, err := osStat(denyFile); err == nil {
+		denyExists = true
+	}
 	_ = osRemove(denyFile)
 	if !enabled {
 		_ = osWriteFile(denyFile, []byte("DenyUsers "+username+"\n"), 0o600)
-		_, _ = sys.Run(ctx, "systemctl", "reload", "ssh")
+	}
+	// 禁用与解禁都要 reload：drop-in 只在 sshd 重载时被读取——只写/删文件
+	// 不重载，内存里的 DenyUsers 依旧生效（表现为「解禁了却登不上」或
+	// 反向「禁用了却还能登」）。解禁且此前没有 drop-in 时配置未变，跳过。
+	// 服务名探测 + 回退：Debian/Ubuntu 是 ssh，RHEL/Fedora 是 sshd
+	//（AGENTS.md：禁止硬编码服务名）。
+	if !enabled || denyExists {
+		for _, unit := range []string{"ssh", "sshd"} {
+			if sys.RunOK(ctx, "systemctl", "reload", unit) {
+				break
+			}
+		}
 	}
 	return &agent.Result{Success: true, Data: map[string]any{
 		agent.UserSSHAccessDataKey: agent.UserSSHAccessInfo{

@@ -18,6 +18,19 @@
 ## [Unreleased]
 
 ### Fixed
+- **Review 修复批次 + 真机复验（2026-10-22，Ubuntu 24.04 arm64 真机全链路验收，详见 [f-6-08](docs/07-specs/f-6-08-agent.md) 与 [TROUBLESHOOTING §7](docs/04-engineering/TROUBLESHOOTING.md)）**：
+  - **端口镜像 enable 恒失败/重复建行**：`ensureMirror` 的「先查后建」条件写成了恒真，且 create 带了 ovs-vsctl 不支持的 `--may-exist`。真机进一步抓出三种错误事务形状（create 无 `--id` 同事务不可引用、引用列值不能写端口名、命名 UUID 不能作 record）——按 OVS 3.3 实测语义重写：先查后建、引用列经 `get Port` 换命名 UUID、撤销走摘挂（弱引用 GC 顺带删行，挂载中的 `destroy` 静默无效）。真机验收：enable/confirm/disable/重建/stale 行重 enable 全通过，不产生重复行、不误杀同桥兄弟镜像
+  - **AppArmor 放行只对首个目录生效**：幂等判定是「文件里出现过 kc.images 标记」而非「该目录已放行」——首个放行目录会吞掉后续所有目录（ISO 的 userdata、快照链的其它池目录永远写不进）。改为按目录标记幂等；真机验证旧条目保留、新目录写入、开机零拒绝
+  - **agent systemd 单元静默吞掉 /etc 写入（部署层）**：`ProtectSystem=full` 使 /etc 只读，AppArmor 放行条目、SSH drop-in、fstab 写入全部被只读层挡掉且被调用侧吞错。单元按真实写点加最小 `ReadWritePaths` 豁免（`-/etc/apparmor.d/abstractions -/etc/ssh/sshd_config.d /etc/fstab`）——**已部署的节点需要同步更新单元文件并 `daemon-reload`**
+  - **SSH 开关解禁不 reload**：删除 DenyUsers drop-in 后不重载 sshd，内存里的拒绝规则依旧生效（「已允许却登不上」）。改为双向 reload，服务名按 ssh→sshd 探测回退（不再硬编码 Debian 系名）。真机验证 `sshd -T` 立即生效
+  - **SSH 开关多节点误报**：任一节点不可达会把已成功节点遮蔽成「整批不可达」。改为独立计数，部分成功如实带出
+  - **模拟节点预置从未生效**：`EnsureSimulated` 的入参 `names` 被同名局部变量遮蔽成「现有节点名」，一台都预置不出来（repository 重构引入，`TestEnsureSimulated` 长期失败）。修复后测试转绿
+  - **vmCreate 数据盘失败回滚不清已建盘**：只删系统盘，先建成功的数据盘成孤儿文件。回滚清全部已建盘
+  - **firewallApply 无协议时生成非法规则**：无 `-p` 却带 `--dport`，iptables 报错被静默吞掉、规则缺失。无协议时忽略端口
+  - **删除两处死代码**：模板默认值的服务端填充块（入口强校验后不可达，DefaultCPU/DefaultMemoryMB 实际由前端向导预填）；弱口令审计里恒假的候选数守卫
+  - **重装/救援如实性**：重装 define 失败文案补「域定义已移除、原盘已还原」的状态说明；救援 docstring 与实现对齐（不改写引导顺序）
+
+### Fixed
 - **全栈真机深测发现的六个缺陷修复（分支 `feat/agent`，测试环境 Ubuntu 24.04 arm64 + libvirt 10 + OVS 3.3.9 + QVMConsole 共存机）**：
   - **force-delete 永远残留域（高危）**：`virsh undefine` 没有 `--force` 选项（命令必然失败且被 force 分支吞掉），任务报 success 但域留在虚拟化层、磁盘被删——同名重建被「已存在同名域」拒绝且无从下手。真机两次复现。修复：改用 `--nvram --managed-save`，带快照的关机域追加 `--snapshots-metadata`（libvirt 拒绝删除带快照的关机域——僵尸域的常见形态），undefine 失败**如实报错**，末尾真实复核域已不存在
   - **创建规格无上限校验（高危）**：`validateCreateConfig` 刻意跳过规格三件套（模板会抬高下限），但上限无人校验——`disk_gb=999999` 一路直通，真机落成 977 TiB 稀疏盘。修复：模板推导后按编辑矩阵 Max 校验（盘 2000GB / vCPU 64 / 内存 256GB）

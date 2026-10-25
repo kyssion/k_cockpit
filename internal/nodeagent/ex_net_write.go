@@ -143,17 +143,20 @@ func vpcSwitchAction(ctx context.Context, op agent.Operation, report Reporter) (
 }
 
 // runDnsmasqForBridge 在桥上启动独立 dnsmasq（pid 文件幂等：已跑则先停）。
-func runDnsmasqForBridge(ctx context.Context, bridge, start, end string) error {
+func runDnsmasqForBridge(_ context.Context, bridge, start, end string) error {
 	pidFile := "/run/kc-dnsmasq-" + bridge + ".pid"
 	stopDnsmasqForBridge(bridge)
-	cmd := exec.CommandContext(ctx, "dnsmasq", "--no-daemon", "--pid-file="+pidFile,
+	// **刻意不用请求 ctx**：此前绑定在 gRPC 会话 ctx 上——agent 一断流
+	// 重连，全部交换机的 DHCP 同时被杀且无人拉起（review 抓出）。DHCP 的
+	// 生命周期属于桥，不属于某次下发；停机由 stopDnsmasqForBridge
+	// （删除/重配置交换机的路径）负责。
+	cmd := exec.Command("dnsmasq", "--no-daemon", "--pid-file="+pidFile,
 		"--interface="+bridge, "--bind-dynamic", /* 只服务该桥上的请求 */
 		"--dhcp-range="+start+","+end+",12h", "--dhcp-option=option:router,"+gatewayGuess(start),
 		"--no-hosts", "--no-resolv", "--log-facility=/dev/null")
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	// 不等退出：dnsmasq --no-daemon 会一直跑；交给系统，ctx 取消时kill。
 	go func() { _ = cmd.Wait() }()
 	return nil
 }

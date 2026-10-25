@@ -58,6 +58,9 @@ type Result struct {
 
 // RunNow 立即检查一次。
 // firstEnrolledNode 返回第一个已接入（enrolled）节点的 ID；没有返回 0。
+//
+// 已知缺口（多节点时其余节点漏检）见 RunNow 的注释；文档错位修正：
+// 下面的 RunNow 才是「立即检查一次」的入口。
 func (s *Service) firstEnrolledNode(ctx context.Context) int64 {
 	var ids []int64
 	if err := s.db.WithContext(ctx).Model(&model.Node{}).

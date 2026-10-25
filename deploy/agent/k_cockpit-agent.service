@@ -30,10 +30,15 @@ RestartSec=2s
 User=root
 NoNewPrivileges=true
 ProtectSystem=full
-# StateDirectory 已授予 /var/lib/k_cockpit-agent 的读写；
-# /run 留给未来的控制台 socket。虚拟机磁盘目录（/var/lib/k_cockpit）
-# 随 P2 虚拟机生命周期落地时再加入本行。
-ReadWritePaths=/run
+# StateDirectory 已授予 /var/lib/k_cockpit-agent 的读写；/var 在 full 档
+# 本就可写（虚拟机磁盘、用户存储、导出区都在 /var/lib/k_cockpit）。
+# /etc 下的三个豁免对应 P3~P5 的真实写点（真机验证踩出：缺了它们时
+# AppArmor 放行条目、SSH drop-in、fstab 挂载项的写入全被只读层静默吞掉）：
+#   - /etc/apparmor.d/abstractions   镜像目录放行（ensureAppArmorAllowsImages）
+#   - /etc/ssh/sshd_config.d          SSH 开关的 DenyUsers drop-in
+#   - /etc/fstab                      存储池挂载项
+# 带 - 前缀：路径不存在（如无 AppArmor 的发行版）不阻断启动。
+ReadWritePaths=/run -/etc/apparmor.d/abstractions -/etc/ssh/sshd_config.d /etc/fstab
 
 [Install]
 WantedBy=multi-user.target

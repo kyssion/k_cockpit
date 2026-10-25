@@ -764,15 +764,17 @@ func (s *Service) CreateBatch(
 	// 几乎不可能定位到「你在创建时把磁盘调小了」。
 	diskGB := req.DiskGB
 	vcpu, memoryMB := req.VCPU, req.MemoryMB
-	if tpl != nil {
-		if diskGB < tpl.MinDiskGB {
-			diskGB = tpl.MinDiskGB
-		}
-		if vcpu <= 0 {
-			vcpu = tpl.DefaultCPU
-		}
-		if memoryMB <= 0 {
-			memoryMB = tpl.DefaultMemoryMB
+	if tpl != nil && diskGB < tpl.MinDiskGB {
+		diskGB = tpl.MinDiskGB
+		// 导入模板的 MinDiskGB 取自 manifest（外部声明）——抬高后
+		// 复查上限，防「声明 999999 的导入包」绕过（review 抓出）。
+		// 模板的 DefaultCPU / DefaultMemoryMB 由前端向导预填表单：请求
+		// 到这里时三件套已在入口被要求为正、且逐一对照过矩阵上限，
+		// 服务端不做默认值填充（此前的填充块自入口强校验起就不可达）。
+		if f, ok := editFieldByKey("disk_gb"); ok && f.Max > 0 && diskGB > f.Max {
+			return nil, api.InvalidParameter(
+				"模板要求的最小磁盘 " + strconv.Itoa(diskGB) + " GB 超过上限 " +
+					strconv.Itoa(f.Max) + " GB，模板数据异常")
 		}
 	}
 
