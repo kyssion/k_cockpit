@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -56,13 +57,28 @@ func iptablesDel(ctx context.Context, args ...string) {
 	_, _ = sys.Run(ctx, "iptables", append([]string{"-D"}, args...)...)
 }
 
+// iptablesNatAdd/Del 是 nat 表版本的幂等三件套。
+//
+// 不能走 iptablesAdd：它把 -C 前置到整个参数串，而 `-C` 把紧跟的参数当
+// 链名——`iptables -C -t nat ...` 会把 "-t" 当链名解析成垃圾（真机排查
+// 端口转发时的同族发现）。nat 表规则必须 `-t nat` 打头、链名显式给出。
+func iptablesNatAdd(ctx context.Context, chain string, spec ...string) {
+	args := append([]string{"-t", "nat", "-C", chain}, spec...)
+	if !sys.RunOK(ctx, "iptables", args...) {
+		_, _ = sys.Run(ctx, "iptables", append([]string{"-t", "nat", "-A", chain}, spec...)...)
+	}
+}
+
+func iptablesNatDel(ctx context.Context, chain string, spec ...string) {
+	_, _ = sys.Run(ctx, "iptables", append([]string{"-t", "nat", "-D", chain}, spec...)...)
+}
+
 // securityGroupApply 实现 security_group.apply：per-VM 生效规则整台下发。
 //
-// 实现：为虚拟机的每个网口建一条专属链（KC-SG-<vm>），入向挂到对应
-// OVS/桥的 FORWARD 路径不可行（OVS 流表是 P3 深水区），因此采用
-// **宿主机 iptables 的 PHYSDEV 不可用时退化为 IP 口径**——按虚拟机当前
-// IP（邻居表/静态地址）匹配来源与目标。P3 第一批先落地「规则链建立 +
-// 默认拒绝/允许」；OVS 原生流表口径随端口安全一并深化。
+// 实现：专属链 KC-SG-<vm> + 按 VM 当前 IP 的入/出规则，最后把链挂进
+// FORWARD（-d/-s 各一条跳板）。链建好不挂 FORWARD 等于没建——review
+// 抓出的空转缺陷：规则全部就位但没有任何流量经过链。OVS 原生流表口径
+// 随端口安全一并深化。
 func securityGroupApply(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	report(Stage{Key: "render", Name: "渲染规则链", Index: 1, Total: 2})
 	vm := op.Target
@@ -72,6 +88,7 @@ func securityGroupApply(ctx context.Context, op agent.Operation, report Reporter
 	// 重建：先清空。
 	_, _ = sys.Run(ctx, "iptables", "-F", chain)
 
+	ip := vmIP(ctx, vm)
 	// rules: [{direction, protocol, port_start, port_end, target_type, target_value}]
 	rulesAny, _ := op.Params["rules"].([]any)
 	applied := 0
@@ -98,12 +115,12 @@ func securityGroupApply(ctx context.Context, op agent.Operation, report Reporter
 		var base []string
 		switch direction {
 		case "in":
-			base = []string{"-d", vmIP(ctx, vm)}
+			base = []string{"-d", ip}
 			if targetType == "cidr" || targetType == "ip" {
 				base = append(base, "-s", targetValue)
 			}
 		case "out":
-			base = []string{"-s", vmIP(ctx, vm)}
+			base = []string{"-s", ip}
 			if targetType == "cidr" || targetType == "ip" {
 				base = append(base, "-d", targetValue)
 			}
@@ -123,9 +140,23 @@ func securityGroupApply(ctx context.Context, op agent.Operation, report Reporter
 	iptablesAdd(ctx, chain, "-j", "DROP")
 
 	report(Stage{Key: "apply", Name: "下发规则", Index: 2, Total: 2})
+	msg := fmt.Sprintf("已下发 %d 条生效规则（链 %s）", applied, chain)
+	if ip == "0.0.0.0/0" {
+		// 解析不到 VM IP 时**不挂 FORWARD**：拿兜底网段做跳板会把全宿主机
+		// 的转发流量都引进这条带 DROP 链尾的链——等于掐断所有虚拟机网络。
+		// 规则照建（IP 出现后再 apply 一次即生效），如实说明未接入。
+		msg += "；未解析到虚拟机 IP，规则尚未接入转发路径（开机后重新应用）"
+	} else {
+		// 挂载幂等：先删后加。VM 换 IP 后旧跳板残留无害（旧 IP 已无人使用，
+		// 新链规则按新 IP 匹配），清理依赖下次 apply 时链被 -F 重建。
+		for _, dir := range [][]string{{"-d", ip}, {"-s", ip}} {
+			iptablesDel(ctx, append([]string{"FORWARD"}, append(dir, "-j", chain)...)...)
+			iptablesAdd(ctx, append([]string{"FORWARD"}, append(dir, "-j", chain)...)...)
+		}
+	}
 	return &agent.Result{Success: true, Data: map[string]any{
 		agent.SecurityGroupDataKey: agent.SecurityGroupInfo{
-			Applied: applied, Message: fmt.Sprintf("已下发 %d 条生效规则（链 %s）", applied, chain),
+			Applied: applied, Message: msg,
 		},
 	}}, nil
 }
@@ -171,7 +202,11 @@ func firewallApply(ctx context.Context, op agent.Operation, report Reporter) (*a
 			}
 		}
 	}
-	// 规则集（allow/deny）。
+	// 规则集。控制面的动作词表是 accept/deny（model.FirewallAccept/Deny），
+	// 键名是 port_start/port_end/source_cidr（RuleView 的 json tag）——此前
+	// agent 按 allow/m["port"]/m["source"] 读取，三处全 miss：accept 规则
+	// 被判成 DROP（真机实测「放行 443」落成 -p tcp -j DROP）、端口与来源
+	// 全部丢失。按真实下发形状对齐。
 	if rules, ok := op.Params["rules"].([]any); ok {
 		for _, r := range rules {
 			m, ok := r.(map[string]any)
@@ -180,21 +215,25 @@ func firewallApply(ctx context.Context, op agent.Operation, report Reporter) (*a
 			}
 			action, _ := m["action"].(string)
 			target := "DROP"
-			if action == "allow" {
+			if action == "allow" || action == "accept" {
 				target = "ACCEPT"
 			}
 			proto, _ := m["protocol"].(string)
-			port, _ := m["port"].(float64)
 			args := []string{"-p", proto}
 			if proto == "" {
 				args = []string{}
 			}
-			// 没有 -p 的 --dport 是非法规则（iptables 报错被 iptablesAdd
-			// 吞掉，规则静默缺失）——无协议时端口无从匹配，忽略。
-			if port > 0 && proto != "" {
-				args = append(args, "--dport", strconv.Itoa(int(port)))
+			ps, psOK := m["port_start"].(float64)
+			if psOK && ps > 0 && proto != "" {
+				port := strconv.Itoa(int(ps))
+				// 没有 -p 的 --dport 是非法规则（iptables 报错被 iptablesAdd
+				// 吞掉，规则静默缺失）——无协议时端口无从匹配，忽略。
+				if pe, ok := m["port_end"].(float64); ok && pe >= ps {
+					port += ":" + strconv.Itoa(int(pe))
+				}
+				args = append(args, "--dport", port)
 			}
-			if src, ok := m["source"].(string); ok && src != "" {
+			if src, ok := m["source_cidr"].(string); ok && src != "" {
 				args = append(args, "-s", src)
 			}
 			// 没有 -j 的规则只是计数器：匹配后什么都不做，allow/deny
@@ -212,9 +251,11 @@ func firewallApply(ctx context.Context, op agent.Operation, report Reporter) (*a
 			return failResult("接入 INPUT 失败: " + err.Error()), nil
 		}
 		// 默认策略是整套防火墙最关键的一条——失败必须如实报，否则
-		// 「收紧失败 + 报告成功」等于裸奔（review 抓出）。
+		// 「收紧失败 + 报告成功」等于裸奔（review 抓出）。控制面的词表是
+		// deny（model.FirewallDeny），不是 drop——只认 drop 会让 deny
+		// 策略静默不收紧（同族键位错位，真机防火墙测试连带抓出）。
 		policy := "ACCEPT"
-		if defaultAction == "drop" {
+		if defaultAction == "drop" || defaultAction == "deny" {
 			policy = "DROP" // 收紧默认策略放最后（先写入后收紧）。
 		}
 		if perr := sys.Run0(ctx, "iptables", "-P", "INPUT", policy); perr != nil {
@@ -243,8 +284,10 @@ func firewallRollback(ctx context.Context, op agent.Operation, report Reporter) 
 
 // hostFirewallApply 实现 host_firewall.apply（第一层：SSH/面板保护 + 规则）。
 //
-// 与 firewall.apply 同一机制、不同链名与固定保护规则（SSH 22 与面板端口
-// 永远放行——控制面传进来的面板端口是合成保护规则）。
+// 与 firewall.apply 同族，但控制面的下发形状不同（真机防火墙测试连带
+// 抓出的键位错位）：whitelist 是**逗号分隔字符串**而非列表，规则键是
+// port_start/port_end/source_cidr、动作词表 accept/deny——此前 rules
+// 完全没被读取（自定义规则静默丢弃）、whitelist 按 []any 断言恒失败。
 func hostFirewallApply(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	action := strParam(op.Params, "action")
 	if action == "rollback" {
@@ -258,12 +301,52 @@ func hostFirewallApply(ctx context.Context, op agent.Operation, report Reporter)
 	_, _ = sys.Run(ctx, "iptables", "-F", chain)
 	iptablesAdd(ctx, chain, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT")
 	iptablesAdd(ctx, chain, "-i", "lo", "-j", "ACCEPT")
-	iptablesAdd(ctx, chain, "-p", "tcp", "--dport", "22", "-j", "ACCEPT") // SSH 保护规则
-	if wl, ok := op.Params["whitelist"].([]any); ok {
+	iptablesAdd(ctx, chain, "-p", "tcp", "--dport", "22", "-j", "ACCEPT") // SSH 兜底保护
+	// 白名单：控制面发的是逗号分隔字符串；列表形态也容忍（与 firewall.apply 共用形状）。
+	if wl, ok := op.Params["whitelist"].(string); ok {
+		for _, w := range strings.Split(wl, ",") {
+			if w = strings.TrimSpace(w); w != "" {
+				iptablesAdd(ctx, chain, "-s", w, "-j", "ACCEPT")
+			}
+		}
+	} else if wl, ok := op.Params["whitelist"].([]any); ok {
 		for _, w := range wl {
 			if s, ok := w.(string); ok && s != "" {
 				iptablesAdd(ctx, chain, "-s", s, "-j", "ACCEPT")
 			}
+		}
+	}
+	// 规则集（含控制面合成的面板端口等保护规则——丢了它们应用后立刻失联）。
+	applied := 0
+	if rules, ok := op.Params["rules"].([]any); ok {
+		for _, r := range rules {
+			m, ok := r.(map[string]any)
+			if !ok {
+				continue
+			}
+			a, _ := m["action"].(string)
+			target := "DROP"
+			if a == "allow" || a == "accept" {
+				target = "ACCEPT"
+			}
+			proto, _ := m["protocol"].(string)
+			args := []string{"-p", proto}
+			if proto == "" {
+				args = []string{}
+			}
+			if ps, ok := m["port_start"].(float64); ok && ps > 0 && proto != "" {
+				port := strconv.Itoa(int(ps))
+				if pe, ok := m["port_end"].(float64); ok && pe >= ps {
+					port += ":" + strconv.Itoa(int(pe))
+				}
+				args = append(args, "--dport", port)
+			}
+			if src, ok := m["source_cidr"].(string); ok && src != "" {
+				args = append(args, "-s", src)
+			}
+			args = append(args, "-j", target)
+			iptablesAdd(ctx, append([]string{chain}, args...)...)
+			applied++
 		}
 	}
 	_, _ = sys.Run(ctx, "iptables", "-D", "INPUT", "-j", chain)
@@ -273,7 +356,9 @@ func hostFirewallApply(ctx context.Context, op agent.Operation, report Reporter)
 		}
 	}
 	return &agent.Result{Success: true, Data: map[string]any{
-		agent.HostFirewallDataKey: agent.HostFirewallInfo{AppliedRules: 1, Message: "宿主机防火墙已应用"},
+		agent.HostFirewallDataKey: agent.HostFirewallInfo{
+			AppliedRules: applied, Message: "宿主机防火墙已应用",
+		},
 	}}, nil
 }
 
@@ -292,17 +377,19 @@ func vmPortForwardChange(ctx context.Context, op agent.Operation, report Reporte
 	targetPort, _ := op.Params["target_port"].(float64)
 	targetIP := strParam(op.Params, "target_ip")
 
-	dnatArgs := []string{"-t", "nat", "-p", protocol, "--dport", strconv.Itoa(int(hostPort))}
+	// DNAT 在 PREROUTING 上做；此前既缺链名又把 -t nat 放在 iptablesAdd
+	// 的 -C 之后（-C 会把 "-t" 当链名），规则永远加不上（真机同族排查）。
+	dnat := []string{"-p", protocol, "--dport", strconv.Itoa(int(hostPort))}
 	if src, ok := op.Params["allowed_ips"].(string); ok && src != "" {
-		dnatArgs = append(dnatArgs, "-s", src)
+		dnat = append(dnat, "-s", src)
 	}
-	dnatTo := []string{"-j", "DNAT", "--to-destination", targetIP + ":" + strconv.Itoa(int(targetPort))}
+	dnat = append(dnat, "-j", "DNAT", "--to-destination", targetIP+":"+strconv.Itoa(int(targetPort)))
 
 	switch action {
 	case "add":
-		full := append(append([]string{}, dnatArgs...), dnatTo...)
-		iptablesAdd(ctx, full...)
-		// 转发路径放行（filter 层）。
+		iptablesNatAdd(ctx, "PREROUTING", dnat...)
+		// 转发路径放行（filter 表，FORWARD 链——iptablesAdd 的形态对
+		// filter 表成立：-C 后紧跟链名）。
 		fw := []string{"-p", protocol, "--dport", strconv.Itoa(int(hostPort))}
 		if src, ok := op.Params["allowed_ips"].(string); ok && src != "" {
 			fw = append(fw, "-s", src)
@@ -310,8 +397,7 @@ func vmPortForwardChange(ctx context.Context, op agent.Operation, report Reporte
 		iptablesAdd(ctx, append([]string{"FORWARD", "-d", targetIP}, fw...)...)
 		iptablesAdd(ctx, "FORWARD", "-d", targetIP, "-j", "ACCEPT")
 	case "remove":
-		full := append(append([]string{}, dnatArgs...), dnatTo...)
-		iptablesDel(ctx, full...)
+		iptablesNatDel(ctx, "PREROUTING", dnat...)
 	default:
 		return failResult("未知转发动作: " + action), nil
 	}
@@ -333,13 +419,15 @@ func publicIPChange(ctx context.Context, op agent.Operation, report Reporter) (*
 	action := strParam(op.Params, "action")
 	ip := strParam(op.Params, "ip")
 	vmIP := strParam(op.Params, "vm_ip")
-	_ = vmIP
 	// P2/P3 简化：以 1:1 全端口 DNAT 表达绑定（真实的多模式 NAT 随 P3 第三批）。
+	// PREROUTING + iptablesNatAdd：与端口转发同一族修复（缺链名/表参数
+	// 位置错误会让规则静默加不上）。
+	spec := []string{"-d", ip, "-j", "DNAT", "--to-destination", vmIP}
 	switch action {
 	case "bind":
-		iptablesAdd(ctx, "-t", "nat", "-p", "all", "-d", ip, "-j", "DNAT", "--to-destination", vmIP)
+		iptablesNatAdd(ctx, "PREROUTING", spec...)
 	case "unbind":
-		iptablesDel(ctx, "-t", "nat", "-p", "all", "-d", ip, "-j", "DNAT", "--to-destination", vmIP)
+		iptablesNatDel(ctx, "PREROUTING", spec...)
 	}
 	return &agent.Result{Success: true, Data: map[string]any{
 		agent.PublicIPDataKey: agent.PublicIPInfo{Message: "公网地址规则已更新"},
@@ -435,14 +523,7 @@ func portMirrorEnable(ctx context.Context, op agent.Operation, report Reporter) 
 	}
 	confirmFile := "/run/kc-mirror-confirm-" + name
 	_ = osRemove(confirmFile)
-	schedule(wd, func() {
-		if _, err := osStat(confirmFile); err == nil {
-			return
-		}
-		ctx2, cancel2 := contextWithTimeout(5 * timeSecond)
-		defer cancel2()
-		detachMirror(ctx2, mirrorName)
-	})
+	armMirrorWatchdog(name, mirrorName, wd)
 
 	return &agent.Result{Success: true, Data: map[string]any{
 		agent.PortMirrorDataKey: agent.PortMirrorInfo{
@@ -456,6 +537,54 @@ func portMirrorEnable(ctx context.Context, op agent.Operation, report Reporter) 
 func mirrorRowExists(ctx context.Context, name string) bool {
 	_, err := sys.Run(ctx, "ovs-vsctl", "get", "Mirror", name, "name")
 	return err == nil
+}
+
+// mirrorWDFile 是镜像看门狗的持久化文件（内容 = 到期 unix 秒）。
+//
+// 看门狗定时器在内存里，agent 重启即丢——镜像复制的是全量流量，残留
+// 是隐私问题而不只是清洁问题。/run 在 agent 重启间保留（重启整机才清空），
+// 启动时 rearmMirrorWatchdogs 据此补上定时器。
+func mirrorWDFile(name string) string { return "/run/kc-mirror-wd-" + name }
+
+// armMirrorWatchdog 布防一个看门狗：落盘到期时刻 + 内存定时器。
+func armMirrorWatchdog(name, mirrorName string, seconds int) {
+	_ = osWriteFile(mirrorWDFile(name), []byte(fmt.Sprintf("%d", timeNowSec()+int64(seconds))), 0o600)
+	schedule(seconds, func() { fireMirrorWatchdog(name, mirrorName) })
+}
+
+// fireMirrorWatchdog 是到期的动作：已确认则跳过，否则摘挂；两种情况都
+// 清掉持久化文件（到期后文件只剩历史价值，留着会让下次重启重复撤销）。
+func fireMirrorWatchdog(name, mirrorName string) {
+	defer func() { _ = osRemove(mirrorWDFile(name)) }()
+	if _, err := osStat("/run/kc-mirror-confirm-" + name); err == nil {
+		return
+	}
+	ctx2, cancel2 := contextWithTimeout(5 * timeSecond)
+	defer cancel2()
+	detachMirror(ctx2, mirrorName)
+}
+
+// rearmMirrorWatchdogs 在 agent 启动时恢复未了结的看门狗（已到期即刻补撤销）。
+func rearmMirrorWatchdogs() {
+	files, _ := filepath.Glob("/run/kc-mirror-wd-*")
+	now := timeNowSec()
+	for _, f := range files {
+		b, err := osReadFile(f)
+		if err != nil {
+			continue
+		}
+		deadline, perr := strconv.ParseInt(strings.TrimSpace(b), 10, 64)
+		if perr != nil {
+			_ = osRemove(f) // 内容损坏：文件已不可信，撤销由控制面对账兜底
+			continue
+		}
+		name := strings.TrimPrefix(filepath.Base(f), "kc-mirror-wd-")
+		remaining := deadline - now
+		if remaining < 0 {
+			remaining = 0 // 已过期：立刻补撤销（agent 停机期间错过的窗口）
+		}
+		schedule(int(remaining), func() { fireMirrorWatchdog(name, "kc-mir-"+name) })
+	}
 }
 
 // detachMirror 把名为 name 的 Mirror 从所有桥上摘挂。
@@ -474,6 +603,8 @@ func detachMirror(ctx context.Context, name string) {
 
 func portMirrorConfirm(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	_ = osWriteFile("/run/kc-mirror-confirm-"+op.Target, []byte("ok"), 0o644)
+	// 确认即取消看门狗——持久化文件也一并清掉，agent 重启后不得重臂。
+	_ = osRemove(mirrorWDFile(op.Target))
 	return &agent.Result{Success: true, Data: map[string]any{
 		agent.PortMirrorDataKey: agent.PortMirrorInfo{Applied: 1, Message: "看门狗已取消，镜像将保持生效"},
 	}}, nil

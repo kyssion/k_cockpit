@@ -237,6 +237,9 @@ func (s *Service) DeleteSwitch(
 			"action":      "delete",
 			"switch_id":   sw.ID,
 			"bridge_name": sw.BridgeName,
+			// spec.cidr 给节点侧拆 MASQUERADE 用：NAT 规则按地址段匹配，
+			// 不带它节点无从删起（真机验证抓出的 NAT 残留）。
+			"spec": map[string]any{"cidr": sw.CIDR},
 		},
 	})
 	if err != nil {

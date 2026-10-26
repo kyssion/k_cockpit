@@ -247,6 +247,25 @@ AppArmor 放行条目、sshd 的 DenyUsers drop-in、fstab 挂载项——**全�
 **教训**：`ProtectSystem=full` 之后的「写 /etc 不报错但也不生效」要首先怀疑沙箱；
 agent 侧对「尽力而为」的写入至少要留一行日志，否则真机上无从定位。
 
+### 7.4 同轮连带发现：控制面 ↔ agent 的参数词表/键位错位（单测与 mock 都看不见）
+
+同一轮真机扩展测试抓出的一族缺陷，共同形态：**控制面下发的词表/键名与
+agent 读取的对不上，agent 静默落到错误分支**。mock 不校验键名、单测两边
+都是自己人写的——只有真机上的 `iptables -S` / `ovs-vsctl list` 会说实话。
+
+| 现场（真机实态） | 根因 |
+|---|---|
+| 防火墙「accept tcp/443 from 网段」落成 `-p tcp -j DROP`（无端口无来源） | agent 读 `action=="allow"`/`m["port"]`/`m["source"]`，控制面发的是 `accept`/`port_start`/`source_cidr` |
+| `default_action=deny` 静默不收紧 | agent 只认 `drop`，控制面词表是 `deny` |
+| 端口转发/公网 IP 的 DNAT 永远加不上 | nat 规则既缺链名（PREROUTING）又把 `-t nat` 放在 `-C` 之后——`-C` 把 `"-t"` 当链名 |
+| 交换机删除后 dnsmasq 成孤儿 | dnsmasq 前台模式（`--no-daemon`）**实测不写 pid 文件**，stop 路径一直空转 |
+| 交换机删除后 POSTROUTING 残留 MASQUERADE | delete 指令不带 spec.cidr，节点无从删起 |
+| 512MB 域内存调到 1024MB 静默跳过 | `virsh setmem` 不能超过最大内存，扩容须先 `setmaxmem` |
+
+**排查手法**：怀疑此类问题时，把节点侧实态 dump 出来与控制面记录对读
+（`iptables -S` / `iptables -t nat -S` / `ovs-vsctl list` / `virsh dumpxml`），
+不要只看任务状态列的 success。
+
 ---
 
 ## 8. 运行环境变更清单
@@ -275,3 +294,4 @@ agent 侧对「尽力而为」的写入至少要留一行日志，否则真机�
 | 2026-09-13 | 创建文档：固化排障原则、定界方法、远端操作纪律、跨层工具陷阱、systemd 检查清单，以及 OVS dnsmasq 误杀案例复盘 |
 | 2026-09-14 | 新增 §6.6：同类问题在另一台全新宿主机复现，补充"程序命令日志直接坐实凶手"的证据、具体函数定位、`SubnetPrefix` 对结论的影响，以及"缓解需进入部署清单"的持久性结论 |
 | 2026-10-22 | 新增 §7：OVS Mirror 事务语义逐条实测表（create/--id/命名 UUID/弱引用 GC）+ agent `ProtectSystem=full` 静默吞 /etc 写入的沙箱案例；原 §7/§8 顺延为 §8/§9 |
+| 2026-10-26 | 新增 §7.4：控制面↔agent 参数词表/键位错位族（防火墙 accept→DROP、DNAT 缺链名、dnsmasq 前台不写 pid、MASQUERADE 残留、setmem 上限）——「节点实态与控制面记录对读」的排查手法 |

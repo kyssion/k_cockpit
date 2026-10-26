@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -129,7 +130,7 @@ func vmReinstall(ctx context.Context, op agent.Operation, report Reporter) (*age
 		_ = osRename(backupPath, sourcePath)
 		return failResult("移除旧域定义失败: " + uerr.Error()), nil
 	}
-	if _, err := sys.Run(ctx, "virsh", "define", xmlFileOf(xml)); err != nil {
+	if _, err := sys.Run(ctx, "virsh", "define", xmlFileOf(xml, op.Target)); err != nil {
 		_ = osRename(backupPath, sourcePath)
 		// 此步失败时旧域定义已移除、原盘已还原但域处于未定义态——如实
 		// 告知状态，别让用户以为机器还能直接开机。
@@ -156,9 +157,15 @@ func sysDiskSource(xml, dev string) string {
 	return ""
 }
 
+// agentSafeUsername 收敛可进文件路径/命令参数的用户名字符集。
+var agentSafeUsername = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+
 // xmlFileOf 把 XML 写入临时文件供 virsh define 使用。
-func xmlFileOf(xml string) string {
-	f := "/tmp/kc-redefine.xml"
+//
+// 文件名必须带目标域名：两台 VM 并发重装时共用 /tmp/kc-redefine.xml
+// 会互相覆盖——先写的域被 define 成别人家的 XML（review 抓出的碰撞）。
+func xmlFileOf(xml, target string) string {
+	f := "/tmp/kc-redefine-" + target + ".xml"
 	_ = osWriteFile(f, []byte(xml), 0o600)
 	return f
 }
@@ -222,7 +229,7 @@ func vmRescueExit(ctx context.Context, op agent.Operation, report Reporter) (*ag
 		if state == "running" {
 			_, _ = sys.Run(ctx, "virsh", "destroy", op.Target)
 		}
-		_, _ = sys.Run(ctx, "virsh", "define", xmlFileOf(string(b)))
+		_, _ = sys.Run(ctx, "virsh", "define", xmlFileOf(string(b), op.Target))
 		_ = osRemove(saved)
 	}
 	return &agent.Result{Success: true}, nil
@@ -325,15 +332,19 @@ func securityPasswordAudit(ctx context.Context, op agent.Operation, report Repor
 		if hash == "" || strings.HasPrefix(hash, "!") || strings.HasPrefix(hash, "*") {
 			continue // 无密码或已锁定
 		}
+		weak := false
 		for _, cand := range candidates {
 			if checkCryptPassword(cand, hash) {
 				hits = append(hits, agent.PasswordHit{Username: username, Reason: "口令在常见弱口令表中"})
+				weak = true
 				break
 			}
-			if cand == username {
-				hits = append(hits, agent.PasswordHit{Username: username, Reason: "口令与用户名相同"})
-				break
-			}
+		}
+		// 用户名作为口令：必须真实比过哈希才能报——此前 `cand == username`
+		// 直接记命中，用户名恰好叫 root/admin 的账号无论密码是什么都会被
+		// 误报（review 抓出的假阳性；假阳性会让整份报告失去可信度）。
+		if !weak && username != "" && checkCryptPassword(username, hash) {
+			hits = append(hits, agent.PasswordHit{Username: username, Reason: "口令与用户名相同"})
 		}
 	}
 	return &agent.Result{Success: true, Data: map[string]any{
@@ -360,6 +371,12 @@ func checkCryptPassword(candidate, hash string) bool {
 func userSSHAccess(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	username := strParam(op.Params, "username")
 	enabled := boolParam(op.Params, "enabled")
+	// 用户名会进文件路径（deny drop-in）——字符集必须收敛。控制面创建
+	// 时已校验，这里防的是「校验上线前建的老账号」：`a/b` 之类会把 drop-in
+	// 写到 sshd_config.d 之外（agent 侧第二道防线）。
+	if !agentSafeUsername.MatchString(username) {
+		return failResult("用户名字符集不合法（仅字母/数字/下划线/连字符）"), nil
+	}
 	report(Stage{Key: "ssh", Name: "调整 SSH 访问", Index: 1, Total: 1})
 	killed := 0
 	if !enabled {

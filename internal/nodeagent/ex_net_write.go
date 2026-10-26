@@ -106,6 +106,13 @@ func vpcSwitchChange(ctx context.Context, op agent.Operation, report Reporter) (
 	case "delete":
 		report(Stage{Key: "destroy", Name: "拆除交换机", Index: 1, Total: 1})
 		stopDnsmasqForBridge(bridge)
+		// NAT 的 MASQUERADE 随桥一起拆（真机验证抓出：此前只删桥，
+		// POSTROUTING 里的规则残留——交换机没了规则还在，地址段被下一个
+		// 交换机复用时会叠出双份规则）。
+		if spec.CIDR != "" {
+			_, _ = sys.Run(ctx, "iptables", "-t", "nat", "-D", "POSTROUTING",
+				"-s", spec.CIDR, "!", "-o", bridge, "-j", "MASQUERADE")
+		}
 		_, _ = sys.Run(ctx, "ip", "link", "del", bridge) // OVS 桥删除后 internal 口随之消失
 		if _, err := sys.Run(ctx, "ovs-vsctl", "--if-exists", "del-br", bridge); err != nil {
 			return failResult("删除 OVS 桥失败: " + err.Error()), nil
@@ -150,24 +157,42 @@ func runDnsmasqForBridge(_ context.Context, bridge, start, end string) error {
 	// 重连，全部交换机的 DHCP 同时被杀且无人拉起（review 抓出）。DHCP 的
 	// 生命周期属于桥，不属于某次下发；停机由 stopDnsmasqForBridge
 	// （删除/重配置交换机的路径）负责。
-	cmd := exec.Command("dnsmasq", "--no-daemon", "--pid-file="+pidFile,
+	// 不给 dnsmasq 传 --pid-file：前台模式（--no-daemon）实测**不写 pid
+	// 文件**（真机验证），靠它写等于没有——pid 由 agent 自己落盘。
+	cmd := exec.Command("dnsmasq", "--no-daemon",
 		"--interface="+bridge, "--bind-dynamic", /* 只服务该桥上的请求 */
 		"--dhcp-range="+start+","+end+",12h", "--dhcp-option=option:router,"+gatewayGuess(start),
 		"--no-hosts", "--no-resolv", "--log-facility=/dev/null")
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	_ = osWriteFile(pidFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0o600)
 	go func() { _ = cmd.Wait() }()
 	return nil
 }
 
 // stopDnsmasqForBridge 停掉桥对应的 dnsmasq。
+//
+// 杀前必须核验进程身份（AGENTS.md 杀进程纪律）：pid 文件在 /run，
+// dnsmasq 崩溃后 PID 被系统复用时，裸 kill 会杀掉一个毫不相干的进程。
+// /proc/<pid>/comm 不是 dnsmasq 一律不动（残留 pid 文件顺带清掉）。
 func stopDnsmasqForBridge(bridge string) {
-	b, err := osReadFile("/run/kc-dnsmasq-" + bridge + ".pid")
+	pidFile := "/run/kc-dnsmasq-" + bridge + ".pid"
+	b, err := osReadFile(pidFile)
 	if err != nil {
 		return
 	}
-	_ = exec.Command("kill", strings.TrimSpace(b)).Run()
+	pid := strings.TrimSpace(b)
+	if pid == "" {
+		return
+	}
+	comm, cerr := osReadFile("/proc/" + pid + "/comm")
+	if cerr != nil || strings.TrimSpace(comm) != "dnsmasq" {
+		_ = osRemove(pidFile) // 陈旧 pid 文件：进程已不在或被复用，只清文件不杀
+		return
+	}
+	_ = exec.Command("kill", pid).Run()
+	_ = osRemove(pidFile)
 }
 
 // gatewayGuess 从 DHCP 起址猜网关（.1 惯例仅展示用；真实网关取自网关 IP 配置）。

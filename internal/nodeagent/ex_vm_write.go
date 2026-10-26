@@ -433,7 +433,15 @@ func vmConfigUpdate(ctx context.Context, op agent.Operation, report Reporter) (*
 		}
 	}
 	if v, ok := numField(changes, "memory_mb"); ok && v > 0 {
-		if err := setV("setmem", op.Target, fmtInt(v*1024), "--config"); err == nil {
+		// setmem 不能超过域的最大内存——扩内存先抬天花板（setmaxmem）
+		// 再设当前值（真机验证抓出：512MB 域调到 1024MB 被静默跳过）。
+		err := setV("setmem", op.Target, fmtInt(v*1024), "--config")
+		if err != nil {
+			if e2 := setV("setmaxmem", op.Target, fmtInt(v*1024), "--config"); e2 == nil {
+				err = setV("setmem", op.Target, fmtInt(v*1024), "--config")
+			}
+		}
+		if err == nil {
 			applied = append(applied, "memory_mb")
 		} else {
 			skipped = append(skipped, "memory_mb（需要关机）")
@@ -533,6 +541,11 @@ func vmCDROMApply(ctx context.Context, op agent.Operation, report Reporter) (*ag
 	if isoPath != "" && !strings.HasPrefix(isoPath, "/") {
 		// 控制面下发的是「我的存储」相对路径；节点侧存储根 + rel_path。
 		isoPath = filepath.Join(userdataRoot, isoPath)
+		// Join 只做清洗不做约束：带 ../ 的 rel_path 会落到存储根之外
+		//（guest 可挂载宿主机任意文件）——越界直接拒绝。
+		if !strings.HasPrefix(isoPath, userdataRoot+"/") {
+			return failResult("镜像路径越出用户存储根: " + isoPath), nil
+		}
 		// qemu 要打开的 ISO 在 images 之外——AppArmor 只放行了镜像目录
 		//（review 抓出：挂 ISO 后开机 Permission denied，与快照链同根因）。
 		ensureAppArmorAllowsImages(userdataRoot)
@@ -559,19 +572,19 @@ func vmCDROMApply(ctx context.Context, op agent.Operation, report Reporter) (*ag
 	case "remove":
 		// 与 attach 对称地带 --config：运行态 detach 对关机域直接报
 		// "domain is not running"（review 抓出的不对称）。
-		_, err = sys.Run(ctx, "virsh", "detach-device", "--config", op.Target, getStdinXML(dev, bus))
+		_, err = sys.Run(ctx, "virsh", "detach-device", "--config", op.Target, getStdinXML(op.Target, dev, bus))
 	case "load":
 		// 已有光驱 → update-device；未挂载 → attach-device。
 		if cdromExists(ctx, op.Target, dev) {
-			_, err = sys.Run(ctx, "virsh", "update-device", op.Target, getStdinXML(dev, bus, isoPath))
+			_, err = sys.Run(ctx, "virsh", "update-device", op.Target, getStdinXML(op.Target, dev, bus, isoPath))
 		} else {
-			_, err = sys.Run(ctx, "virsh", "attach-device", "--config", op.Target, getStdinXML(dev, bus, isoPath))
+			_, err = sys.Run(ctx, "virsh", "attach-device", "--config", op.Target, getStdinXML(op.Target, dev, bus, isoPath))
 		}
 	case "attach":
-		_, err = sys.Run(ctx, "virsh", "attach-device", "--config", op.Target, getStdinXML(dev, bus, isoPath))
+		_, err = sys.Run(ctx, "virsh", "attach-device", "--config", op.Target, getStdinXML(op.Target, dev, bus, isoPath))
 	case "eject":
 		if cdromExists(ctx, op.Target, dev) {
-			_, err = sys.Run(ctx, "virsh", "update-device", op.Target, getStdinXML(dev, bus, ""))
+			_, err = sys.Run(ctx, "virsh", "update-device", op.Target, getStdinXML(op.Target, dev, bus, ""))
 		}
 	}
 	if err != nil {
@@ -621,12 +634,15 @@ func cdromExists(ctx context.Context, vm, dev string) bool {
 }
 
 // getStdinXML 把设备片段经临时文件交给 virsh attach/update-device。
-func getStdinXML(dev, bus string, isoPath ...string) string {
+// getStdinXML 把设备片段经临时文件交给 virsh attach/update-device。
+// 文件名带域名：不同 VM 的同名光驱（sda/hdb 很常见）并发操作时共用
+// 一个 /tmp 文件会互相覆盖（review 抓出的碰撞）。
+func getStdinXML(vm, dev, bus string, isoPath ...string) string {
 	frag := cdromFragment(dev, bus, "")
 	if len(isoPath) > 0 {
 		frag = cdromFragment(dev, bus, isoPath[0])
 	}
-	f := filepath.Join(os.TempDir(), "kc-cdrom-"+dev+".xml")
+	f := filepath.Join(os.TempDir(), "kc-cdrom-"+vm+"-"+dev+".xml")
 	_ = os.WriteFile(f, []byte(frag), 0o600)
 	// virsh attach-device file；留 2 秒清理窗口。
 	go func() {

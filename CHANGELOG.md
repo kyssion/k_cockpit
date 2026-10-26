@@ -18,6 +18,20 @@
 ## [Unreleased]
 
 ### Fixed
+- **第二轮深检 + 真机扩展验证（2026-10-26，同一测试环境；静态深挖 + 快照/看门狗/防火墙/交换机/配置/导出六条链路真机复验）**：
+  - **安全组规则空转（高危）**：`KC-SG-*` 链只建不挂，FORWARD 里没有任何跳板——规则全部就位但零流量经过。挂载幂等接入 FORWARD（-d/-s 各一条）；解析不到 VM IP 时**不挂**（兜底网段跳板会把全宿主机转发流量引进带 DROP 链尾的链）。真机验证兜底行为与挂载语法/幂等
+  - **防火墙词表/键位错位（高危，真机抓出）**：agent 按 `allow/port/source` 读取而控制面发 `accept/port_start/source_cidr`——「放行 443」落成 `-p tcp -j DROP`（无端口无来源，真机 iptables -S 实证）；`default_action=deny` 只认 `drop` 静默不收紧。按真实下发形状对齐，真机复验规则精确落成
+  - **hostfirewall 同族**：`KC-HFW` 完全不读 rules（自定义与保护规则静默丢弃）、whitelist 逗号字符串按 `[]any` 断言恒失败。补齐渲染与两种白名单形态
+  - **DNAT 全族加不上（真机同族排查）**：端口转发与公网 IP 的 nat 规则缺 PREROUTING 链名且 `-t nat` 位置错误（`-C` 把 "-t" 当链名）——新增 `iptablesNatAdd/Del`（`-t nat` 打头 + 链显式），真机验证
+  - **dnsmasq 生命周期两缺口（真机实证）**：前台模式（--no-daemon）**不写 pid 文件**，stop 路径一直空转成孤儿——改由 agent 落盘 PID；杀进程前核验 `/proc/<pid>/comm`（PID 复用防护）。交换机删除不拆 MASQUERADE（delete 指令补 spec.cidr）。真机全生命周期复验：pid 文件在→删→进程停+NAT 清+桥删
+  - **口令审计假阳性**：用户名叫 root/admin 的账号无论真实密码如何都被报「口令与用户名相同」（`cand == username` 未做 crypt 校验直接记命中）——改为真实比哈希
+  - **镜像看门狗双缺口**：节点定时器在内存、agent 重启即丢（镜像复制的是全量流量，残留是隐私问题）——到期时刻落 /run、启动时补臂（已过期立即补撤销）；控制面 `portmirror/bridge.Reconcile` 写好却无任何调用方——新增 `service/network/reconcile` 周期循环接入。真机验证：60s 窗口内重启 agent → 到期自动撤销 → 控制面一分钟内对账
+  - **路径包含性**：vmShareMount 前缀绕过（`userdata-evil` 同前缀目录通过 `HasPrefix`）；CDROM ISO 的 rel_path 带 `../` 可逃出存储根——均改为「目录内」判定
+  - **/tmp 固定文件名碰撞**：`kc-redefine.xml` 与 `kc-cdrom-<dev>.xml` 不带域名，并发操作互相覆盖——均带上目标名；agent 侧补 username 字符集守卫（防校验上线前的老账号把 drop-in 写到目录外）
+  - **内存扩容静默失败（真机抓出）**：`virsh setmem` 不能超过最大内存——扩容先 `setmaxmem` 抬天花板。真机 512MB→2048MB 复验生效
+  - 真机另证伪一项预判：UEFI 外部快照的 `snapshot-revert` 在 libvirt 10 上**可用且语义正确**（丢弃快照后 overlay、在快照点新建 overlay）；遗留小口径：快照 API 的 `kind` 恒显示 internal（实际外部机制）
+
+### Fixed
 - **Review 修复批次 + 真机复验（2026-10-22，Ubuntu 24.04 arm64 真机全链路验收，详见 [f-6-08](docs/07-specs/f-6-08-agent.md) 与 [TROUBLESHOOTING §7](docs/04-engineering/TROUBLESHOOTING.md)）**：
   - **端口镜像 enable 恒失败/重复建行**：`ensureMirror` 的「先查后建」条件写成了恒真，且 create 带了 ovs-vsctl 不支持的 `--may-exist`。真机进一步抓出三种错误事务形状（create 无 `--id` 同事务不可引用、引用列值不能写端口名、命名 UUID 不能作 record）——按 OVS 3.3 实测语义重写：先查后建、引用列经 `get Port` 换命名 UUID、撤销走摘挂（弱引用 GC 顺带删行，挂载中的 `destroy` 静默无效）。真机验收：enable/confirm/disable/重建/stale 行重 enable 全通过，不产生重复行、不误杀同桥兄弟镜像
   - **AppArmor 放行只对首个目录生效**：幂等判定是「文件里出现过 kc.images 标记」而非「该目录已放行」——首个放行目录会吞掉后续所有目录（ISO 的 userdata、快照链的其它池目录永远写不进）。改为按目录标记幂等；真机验证旧条目保留、新目录写入、开机零拒绝

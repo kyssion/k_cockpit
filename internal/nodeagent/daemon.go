@@ -70,6 +70,10 @@ var buildVersion string
 
 // Run 阻塞运行直到 ctx 取消。返回值仅表示主循环为何退出。
 func (d *Daemon) Run(ctx context.Context) error {
+	// 镜像看门狗的定时器在内存里，上个进程退出即丢——先按 /run 落盘的
+	// 到期时刻补上（已到期的立刻补撤销），再进入主循环。
+	rearmMirrorWatchdogs()
+
 	failures := 0
 	var lastSession time.Duration
 

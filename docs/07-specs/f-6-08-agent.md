@@ -27,6 +27,15 @@ enroll → 面板 online（版本/协议号正确）；`node.stats` 经真实通
 ③VM 创建携带两块数据盘：vda/vdb/vdc 全部真实落盘、属主归一 libvirt-qemu:kvm；
 ④SSH 开关禁用→drop-in 落盘且 `sshd -T` 立即生效；解禁→文件移除且 reload 后立即放开（此前解禁不 reload 的缺陷修复验证）。
 
+**2026-10-26 二轮深检验收（真机，同一环境）**：静态深挖 + 六条扩展链路——
+快照 create→restore（UEFI 外部快照 revert 真机证伪预判：**可用且语义正确**，API 的 kind 字段口径遗留）；
+镜像看门狗 60s 窗口内重启 agent→到期自动撤销→控制面新 reconcile 循环一分钟对账（/run 持久化补臂）；
+防火墙 apply/rollback 用 `iptables -S` 实态对读，抓出**词表/键位错位族**（accept→DROP、deny 不收紧、
+hostfirewall 丢规则、DNAT 缺链名）并全部修复复验；VPC 交换机全生命周期（dnsmasq 前台不写 pid→agent 自落、
+杀前核验 comm、delete 补 spec.cidr 拆 MASQUERADE）四项清零验证；配置变更 vcpu/内存扩容（setmaxmem 先行）、
+导出落盘。安全组 FORWARD 空转修复（无 IP 兜底不挂）+ 挂载语法真机验证。词表错位族全表见
+[TROUBLESHOOTING §7.4](../04-engineering/TROUBLESHOOTING.md)。
+
 ## 2. 分期路线（P0~P2 真机验收通过；P3~P5 执行器已全量注册并部署，深化项见各条注记）
 
 | 期 | 内容 | 状态 | 深化项（后续迭代） |

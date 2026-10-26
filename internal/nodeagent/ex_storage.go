@@ -294,7 +294,9 @@ func vmShareMount(ctx context.Context, op agent.Operation, report Reporter) (*ag
 		if err != nil {
 			return failResult("共享目录不存在: " + hostPath), nil
 		}
-		if !strings.HasPrefix(real, userdataRoot) {
+		// 前缀必须落到「目录内」而非「同前缀字符串」：/var/lib/k_cockpit/userdata-evil
+		// 同样满足 HasPrefix(userdataRoot)（review 抓出的越界路径）。
+		if real != userdataRoot && !strings.HasPrefix(real, userdataRoot+"/") {
 			return failResult("共享目录必须在用户存储根内（安全边界）"), nil
 		}
 	}

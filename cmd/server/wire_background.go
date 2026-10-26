@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"k_cockpit/internal/service/compute/vm"
+	"k_cockpit/internal/service/network/reconcile"
 	"k_cockpit/internal/service/ops/alert"
 	"k_cockpit/internal/service/ops/monitor"
 	"k_cockpit/internal/service/ops/quotaenforce"
@@ -31,6 +32,7 @@ type backgroundLoops struct {
 	schedRetention *scheduler.RetentionLoop
 	trimLoop       *pool.TrimLoop
 	mediaEjectLoop *vm.MediaEjectLoop
+	netReconcile   *reconcile.Loop
 	passAuditLoop  *passaudit.Loop
 	authKeyLoop    *authkey.Loop
 	collector      *monitor.Collector
@@ -126,6 +128,14 @@ func (a *app) setupBackground() {
 
 	// 安装介质自动弹出（F-2-17）：Windows 初始化就绪后弹出安装 ISO。
 	a.bg.mediaEjectLoop = vm.NewMediaEjectLoop(a.compute.vmSvc, a.db, a.agentClient, a.schedRecorder, vm.MediaEjectOptions{})
+
+	// 网络域看门狗对账：镜像看门狗与上行口确认窗口到期后把控制面记录
+	// 对齐为已关闭（撤销执行在节点侧；此前两个 Reconcile 无调用方，面板
+	// 上会永远显示「已启用」——review 抓出的接线缺失）。
+	a.bg.netReconcile = reconcile.NewLoop([]reconcile.Target{
+		{Name: "portmirror", Run: a.network.mirror.Reconcile},
+		{Name: "bridge", Run: a.network.netSvc.Reconcile},
+	}, reconcile.Options{})
 }
 
 // startBackground 启动全部后台周期组件。
@@ -140,6 +150,7 @@ func (a *app) startBackground() {
 	go a.bg.schedRetention.Start(ctx)
 	go a.bg.trimLoop.Start(ctx)
 	go a.bg.mediaEjectLoop.Start(ctx)
+	go a.bg.netReconcile.Start(ctx)
 }
 
 // stopBackground 停止需要优雅收尾的周期组件。
