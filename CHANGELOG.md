@@ -17,6 +17,32 @@
 
 ## [Unreleased]
 
+### Added
+- **P5 第二批：迁移三模式 + takeover 完整重建 + 来宾自动化（真机双节点端到端验收）**：
+  - **迁移三模式**：offline（停机搬运）与 warm（`virsh save` 落内存现场 → 搬运 → 目标侧
+    define + `virsh restore --xml` 恢复**运行现场不重启**，停机窗口≈传输时长）落地；live
+    **诚实阻断**——需要节点间 libvirt 互信（qemu+ssh/tcp），与「控制面不持有宿主机凭据」
+    （ADR-0005）冲突，待节点间通道定型后接入。控制面运行态自动选 warm（预检文案同步温迁移语义）
+  - **takeover 完整重建**：staging 文件幂等落位（暂存缺失但目标已在位=已落位）、XML 路径
+    重映射、NVRAM 放回、同名域按 **UUID 比对**处理（相同=源侧遗留可移除，不同=目标真有
+    同名机器拒绝覆盖）、温迁移 define-then-restore（libvirt 10 的 restore 无 --persistent
+    选项——先 define 再 restore 才能既在跑又持久；瞬态域宿主机重启即丢，真机实证）
+  - **重试闭环**：源侧 staging 落 domain.xml + manifest.json，域已移除的重试走快速路径重发
+    清单（温迁移内存态保留不降级）；takeover 幂等放置；控制面 unknown 状态 + 存在失败迁移
+    记录时放行重试
+  - **源侧数据在目标确认前不删**的边界细化：域定义保留到 cleanup（记录落库成功之后）才移除
+    ——提前 undefine 会让重试的状态探测落空且失败窗口内两侧皆无定义；cleanup best-effort，
+    失败只留日志绝不把成功迁移判成失败
+  - **来宾自动化**：password_online（guest-set-user-password）、expand_disk（qemu-img/blockresize
+    + guest-exec growpart/resize2fs/xfs_growfs）、disk_attach（建盘+attach+来宾分区）、
+    password_offline 依赖 libguestfs（未装如实报）；guest-exec 带 500ms×60 轮询收结果
+  - 真机验收（同机双 agent，第二个 agent 跑私有 mount namespace：镜像目录私有、staging 共享，
+    精确模拟真实双节点+控制面中转已回放）：**温迁移全链成功**（save→staging→落位→UUID 守卫→
+    define+restore→记录落库→源清理，迁移单 Moved 清单完整、盘只在目标、源/暂存清零）、
+    **offline 全链成功**、**失败→重试链路实测**、live 阻断与 guest 无 agent 诚实拒绝验证。
+    已知同机伪影（真双节点不存在）：共享 libvirtd 使 cleanup 的 undefine/nvram 清理波及目标侧
+  - 修复连带缺陷：vmStatus 对英文 locale「failed to get domain」不识别（域不存在被当成探测失败）
+
 ### Fixed
 - **第三轮收口（2026-10-26 补）**：
   - **快照 kind 记录错位**：受理时的 kind 是预测值，UEFI 域被 libvirt 强制走外部快照（--disk-only），关机 UEFI 建的快照记录 internal、实际是外部 overlay（真机实证）。agent 改为如实回报实际执行的种类，控制面按结果回写。真机复验：kind=external 且与 overlay 文件一致

@@ -93,14 +93,25 @@ func (e *MigrateExecutor) Run(ctx context.Context, t *model.Task) error {
 	// agent 执行、在控制面改记录**之前**——接管失败时记录仍指向源节点，
 	// 源侧数据未清理，重试是安全的；顺序反了会留下"面板说迁完了、目标
 	// 上根本起不来"的状态。
+	// 源侧回传的重建材料透传给目标：域 XML、文件清单（盘/NVRAM/内存态）、
+	// 内存态文件名。旧版源 agent 不带这些键（takeover 报「缺少源域 XML」，
+	// 源侧数据未清理、可回退重试）。
+	takeoverParams := map[string]any{
+		"from_node_id": p.FromNodeID,
+		"mode":         p.Mode,
+	}
+	if xmlStr, ok := result.Data["xml"].(string); ok && xmlStr != "" {
+		takeoverParams["xml"] = xmlStr
+		takeoverParams["files"] = result.Data["files"]
+		if mem, ok := result.Data["memory"].(string); ok {
+			takeoverParams["memory"] = mem
+		}
+	}
 	takeover, err := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, agent.Operation{
 		Kind:   agent.OpVMMigrateTakeover,
 		NodeID: p.ToNodeID,
 		Target: p.VMName,
-		Params: map[string]any{
-			"from_node_id": p.FromNodeID,
-			"mode":         p.Mode,
-		},
+		Params: takeoverParams,
 	})
 	if err != nil {
 		e.markFailed(ctx, p.MigrationID, "源侧迁移已完成，但目标节点不可达、接管未执行；"+
@@ -122,6 +133,24 @@ func (e *MigrateExecutor) Run(ctx context.Context, t *model.Task) error {
 		log.Printf("[vm] 迁移已由节点完成但控制面写入失败 vm=%d: %v", p.VMID, err)
 		e.markFailed(ctx, p.MigrationID, "节点已完成迁移，但控制面记录更新失败，请联系管理员")
 		return api.Internal()
+	}
+
+	// 源侧清理放在**记录落库成功之后**：清理失败只记日志（源残留可按
+	// 清单手工删），绝不能让一次已成功的迁移被清理问题判成失败——那会
+	// 诱导用户重试，而重试会在「源已 undefine、目标已有域」的中间态上
+	// 重新走一遍迁移。
+	cleanupParams := map[string]any{"action": "cleanup"}
+	if _, ok := result.Data["files"].([]any); ok {
+		cleanupParams["files"] = result.Data["files"]
+	}
+	if _, cerr := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, agent.Operation{
+		Kind:   agent.OpVMMigrate,
+		NodeID: p.FromNodeID,
+		Target: p.VMName,
+		Params: cleanupParams,
+	}); cerr != nil {
+		log.Printf("[vm] 迁移成功但源侧清理未送达 vm=%s node=%d: %v（残留可手工清理）",
+			p.VMName, p.FromNodeID, cerr)
 	}
 
 	log.Printf("[vm] 迁移完成 id=%d vm=%s %d → %d task=%d",

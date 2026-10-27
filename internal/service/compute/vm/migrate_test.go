@@ -68,10 +68,11 @@ func TestMigrateRejectsMaintenanceTarget(t *testing.T) {
 	}
 }
 
-// TestMigrateRunningGoesLive 运行中的机器走热迁移（F-2-15）。
+// TestMigrateRunningGoesWarm 运行中的机器走温迁移（P5 第二批）。
 //
-// 此前运行中一律拒绝（要求先关机）；热迁移落地后，运行状态对应 live
-// 方式、停机状态对应 offline 方式，方式由实时探测决定并写进迁移记录。
+// 热迁移需要节点间 libvirt 互信，被架构诚实阻断——运行状态对应 warm
+// （save/restore 保留内存现场）、停机状态对应 offline，方式由实时探测
+// 决定并写进迁移记录。
 func TestMigrateRunningGoesLive(t *testing.T) {
 	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
 	ctx := context.Background()
@@ -84,19 +85,19 @@ func TestMigrateRunningGoesLive(t *testing.T) {
 	task, err := svc.Migrate(ctx, row.ID, vm.MigrateRequest{ToNodeID: toNode},
 		authz.Viewer{UserID: 7}, "alice", "")
 	if err != nil {
-		t.Fatalf("运行中的机器应按热迁移受理: %v", err)
+		t.Fatalf("运行中的机器应按温迁移受理: %v", err)
 	}
 
 	var mig model.VMMigration
 	if err := db.Where("vm_id = ?", row.ID).First(&mig).Error; err != nil {
 		t.Fatalf("查询迁移记录失败: %v", err)
 	}
-	if mig.Mode != "live" {
+	if mig.Mode != "warm" {
 		t.Errorf("迁移方式 = %q, 期望 live", mig.Mode)
 	}
 	// 任务参数必须带方式与探测状态：执行器据此向节点下发不同的迁移语义。
-	if !strings.Contains(deref(task.Params), "\"mode\":\"live\"") {
-		t.Errorf("任务参数缺 mode=live: %s", deref(task.Params))
+	if !strings.Contains(deref(task.Params), "\"mode\":\"warm\"") {
+		t.Errorf("任务参数缺 mode=warm: %s", deref(task.Params))
 	}
 }
 

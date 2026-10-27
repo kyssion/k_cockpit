@@ -18,7 +18,11 @@ func vmStatus(ctx context.Context, op agent.Operation, report Reporter) (*agent.
 	if err != nil {
 		// 域不存在也是一次成功往返：状态 unknown 让控制面按「虚拟化层里
 		// 没有这台机器」处理（与投影漂移的语义一致）。
-		if strings.Contains(err.Error(), "not a valid") || strings.Contains(err.Error(), "失败的") {
+		// 英文/中文 locale 两套 virsh 报错都认（真机踩过：英文环境报
+		// "failed to get domain"，未映射时把「域不存在」当成了探测失败）。
+		if strings.Contains(err.Error(), "not a valid") ||
+			strings.Contains(err.Error(), "failed to get domain") ||
+			strings.Contains(err.Error(), "失败的") {
 			return &agent.Result{Success: true, Data: map[string]any{
 				agent.StatusDataKey: "unknown",
 			}}, nil

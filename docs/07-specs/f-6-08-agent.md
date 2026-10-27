@@ -43,6 +43,15 @@ hostfirewall 丢规则、DNAT 缺链名）并全部修复复验；VPC 交换机�
 vm_ip）改节点解析 + 关机 fail-fast + unbind 形状匹配删除。全部以节点实态
 （iptables -S/-t nat -S、ovs-ofctl dump-flows、ovs-vsctl）对读验证，残留清零。
 
+
+**2026-10-27 P5 第二批验收（真机双节点 rig）**：同机双 agent（kvm-host-2 以私有 mount namespace
+运行：镜像目录私有、staging 共享，等效真实双节点+控制面中转已回放）。温迁移（save→staging→
+幂等落位→UUID 守卫→define+restore→记录→源清理）与 offline 全链均一次通过；失败重试链路（暂存
+重发/幂等落位/unknown 放行）实测；live 阻断与 guest 无 agent 诚实拒绝验证。迭代中真机抓出并修复：
+staging 未建目录、restore 无 --persistent（瞬态域重启即丢）、restore 失败后重试的状态死锁、
+takeover 放置非幂等、英文 locale 域不存在误判。已知同机伪影（真双节点不存在）：共享 libvirtd 使
+cleanup 波及目标侧定义与 NVRAM。跨节点分片中转（relay 循环）待真实两机环境接入。
+
 ## 2. 分期路线（P0~P2 真机验收通过；P3~P5 执行器已全量注册并部署，深化项见各条注记）
 
 | 期 | 内容 | 状态 | 深化项（后续迭代） |
@@ -60,3 +69,38 @@ vm_ip）改节点解析 + 关机 fail-fast + unbind 形状匹配删除。全部�
 - 幂等收敛类操作下发期望状态而非增量；`vm.xml.apply` 校验用 libvirt 校验器；源侧迁移数据在目标确认前不删。
 - 阶段 Key 沿用 mock 的 stagePlan 词汇（前端时间线已按此渲染）；`Total=0` 表示总数未知。
 - 真实 IP/密码/证书不入仓库（红线）；测试机操作遵循 TROUBLESHOOTING 只读优先与最小变更原则。
+
+## 4. P5 第二批设计（迁移三模式 / takeover 完整重建 / 来宾自动化）
+
+### 4.1 迁移三模式（诚实的能力边界）
+
+| 模式 | 实现 | 停机窗口 | 说明 |
+|---|---|---|---|
+| offline（冷迁移） | 源：停机 → dump XML → 盘/NVRAM 复制到 staging → undefine 源；目标：takeover 从 staging 重建 | 全程 | 本批交付 |
+| warm（温迁移） | 源：`virsh save` 落内存态文件 + 同 offline；目标：`virsh restore --xml` 恢复**运行现场** | ≈ 传输时长（但不重启、内存现场保留） | 本批交付；libvirt ≥6.0 的 `restore --xml` 使 XML 重映射与内存恢复可同时成立 |
+| live（热迁移） | **诚实阻断** | — | libvirt 对等连接（qemu+ssh/tcp）要求节点间互信凭据，与 ADR-0005「控制面不持有宿主机登录凭据」冲突；待节点间通道定型（专用传输证书或受限 ssh 指纹登记）后接入 |
+
+**源侧数据在目标确认前不删**的边界细化：磁盘文件在 cleanup 阶段（记录落库成功之后）才删；
+域**定义**在源侧 staging 完成后即 undefine——同名双活比「暂时无定义」危险（有人可能把源侧那份
+开机，而控制面已指向目标），且定义可随时由已返回的 XML 重建，恢复路径无损。
+
+### 4.2 传输与 staging
+
+- staging 根：`/var/lib/k_cockpit/migrate/<vm>/`，条目命名沿用源盘 basename（+ `<vm>.memstate` / NVRAM basename），manifest 随 `MigrateResult` 回传（`xml`/`files`/`memory` 三个数据键）。
+- 跨节点中转：控制面拉取 staging 分片 → 回放到目标 staging（复用导出/分片上传通道）。**本批不实现 relay 循环**——单节点测试环境无法验证；同机双 agent（`--state-dir` 区分身份，共享文件系统使中转退化为 no-op）已可端到端验证全部编排与两侧执行器。跨节点 relay 随两节点环境补齐。
+- cleanup（`vm.migrate` 带 `action=cleanup`）：源删原盘 + staging，best-effort——失败只留日志（源残留可手工清，绝不因清理失败判迁移失败）。
+
+### 4.3 takeover 完整重建（目标侧）
+
+staging 文件落位到 images 目录（属主/AppArmor 归一）→ XML 磁盘路径重映射 → NVRAM 放回
+`/var/lib/libvirt/qemu/nvram/` → 有内存态则 `virsh restore --xml`（恢复后即运行），否则
+`virsh define`。时序：源成功之后、控制面改记录之前（失败时记录仍指源，重试安全）。
+
+### 4.4 来宾自动化（vm.guest）
+
+- 通道：`virsh qemu-agent-command`（guest-ping 探测；未装 agent 如实报「请在虚拟机内安装 qemu-guest-agent」）。
+- `password_online`：`guest-set-user-password`（base64 明文）。
+- `expand_disk`：宿主侧 `qemu-img resize`（运行中叠加 `virsh blockresize`），来宾侧 `guest-exec` 跑 `growpart` + `resize2fs`/`xfs_growfs`。
+- `disk_attach`：宿主侧建盘 + `attach-device --config`，来宾侧 `guest-exec` 分区/格式化/挂载。
+- `password_offline`：依赖 libguestfs（virt-customize）；未安装时**如实报不可用**，不伪造成功。
+- guest-exec 辅助：`guest-exec` + 轮询 `guest-exec-status`（500ms×60 上限），输出 base64 解码后回传。

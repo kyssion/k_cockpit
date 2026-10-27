@@ -15,6 +15,10 @@ const (
 	// MigrationOffline 停机迁移：先把机器关掉，复制完磁盘之后在目标节点上
 	// 启动。
 	MigrationOffline = "offline"
+	// MigrationWarm 温迁移：运行中的机器经 `virsh save` 落内存现场后搬运，
+	// 目标侧 `virsh restore` 恢复——**不重启、内存现场保留**，停机窗口
+	// ≈ 传输时长。运行态机器的实际迁移方式（live 被架构阻断，见 agent 侧）。
+	MigrationWarm = "warm"
 	// MigrationLive 热迁移（F-2-15）：运行中的机器不停机搬到目标节点，
 	// 只付出一个通常几百毫秒的停顿窗口。能否收敛取决于脏页速率与链路
 	// 带宽的比值，预检会给出量化结论。
@@ -117,14 +121,16 @@ func (s *Service) PreviewMigration(
 	out.Ready = len(out.Blockers) == 0
 
 	switch mode {
+	case MigrationWarm:
+		// 温迁移的停机窗口必须说清楚：不是零停机（那是被架构阻断的热迁移），
+		// 而是「搬运期间停机、但保留内存现场不重启」。
+		out.ModeNote = "运行中的虚拟机先保存内存现场再搬运，到目标节点恢复运行" +
+			"（不重启、现场保留）；停机窗口约等于传输所需的时间。"
 	case MigrationLive:
-		// 迁移方式必须说明白：热迁移不是"零停机"，而是"停顿窗口毫秒级"。
-		// 说零停机的人会在切换那一刻发现服务断了一下，然后不再信任面板。
+		// 热迁移被节点间互信约束阻断（migrationBlockers 已不再返回 live，
+		// 此分支留给未来节点间通道落地时的热迁移说明）。
 		out.ModeNote = "运行中的虚拟机**不停机**搬到目标节点，只在切换那一刻" +
 			"有一个通常几百毫秒的停顿窗口。"
-		if out.Ready {
-			s.previewLive(ctx, target, toNodeID, out)
-		}
 	default:
 		out.Mode = MigrationOffline
 		out.ModeNote = "先把虚拟机**关机**，把磁盘完整复制到目标节点，再在那边启动。" +
@@ -275,9 +281,23 @@ func (s *Service) migrationBlockers(
 	} else {
 		switch current {
 		case model.VMStatusRunning:
-			mode = MigrationLive
+			// 热迁移需要节点间 libvirt 互信（qemu+ssh/tcp），与「控制面不持有
+			// 宿主机凭据」冲突（agent 侧如实阻断）——运行态自动按温迁移：
+			// 保留内存现场、停机窗口≈传输时长。
+			mode = MigrationWarm
 		case model.VMStatusStopped:
 			// 停机迁移。
+		case model.VMStatusUnknown:
+			// 域在源侧不存在 + 该机有**失败的迁移记录** = 上次迁移在源侧
+			// save/staging 之后、接管之前失败——域被移除是那条失败路径的
+			// 中间态。放行为 offline：agent 会从暂存区重发清单（含内存态，
+			// 温迁移语义保留）。没有失败记录的 unknown 仍然拒绝。
+			if s.hasFailedMigration(ctx, target.ID) {
+				mode = MigrationOffline
+			} else {
+				out = append(out, api.ValidationFailed(
+					"无法确认虚拟机在虚拟化层的状态（域不存在或节点探测失败），拒绝迁移"))
+			}
 		default:
 			out = append(out, api.ValidationFailed(
 				"当前状态（"+DescribeStatus(current)+"）两种迁移方式都不适用："+
@@ -320,4 +340,16 @@ func (s *Service) nodeName(ctx context.Context, nodeID int64) string {
 		return fmt.Sprintf("#%d", nodeID)
 	}
 	return node.Name
+}
+
+// hasFailedMigration 报告该虚拟机是否存在失败迁移记录（unknown 状态的
+// 重试放行依据）。
+func (s *Service) hasFailedMigration(ctx context.Context, vmID int64) bool {
+	var n int64
+	if err := s.db.WithContext(ctx).Model(&model.VMMigration{}).
+		Where("vm_id = ? AND status = ?", vmID, model.MigrationFailed).
+		Limit(1).Count(&n).Error; err != nil {
+		return false
+	}
+	return n > 0
 }
