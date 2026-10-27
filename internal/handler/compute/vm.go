@@ -1453,7 +1453,12 @@ func (h *VM) DownloadExport(ctx context.Context, c *app.RequestContext) {
 	// 中文文件名要用 RFC 5987 的 filename* 形式，否则浏览器会得到乱码。
 	c.Header("Content-Disposition", api.ContentDisposition(name))
 	c.SetContentType(mime)
-	c.Response.SetBody(data)
+	// 流式写回：大导出（GB 级）分片经节点取回，控制面内存占用恒为单分片。
+	if len, lok := data.(interface{ Len() int }); lok {
+		c.Response.SetBodyStream(data, len.Len())
+	} else {
+		c.Response.SetBodyStream(data, -1)
+	}
 }
 
 type guestRequest struct {

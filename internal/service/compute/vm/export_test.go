@@ -2,6 +2,7 @@ package vm_test
 
 import (
 	"context"
+	"io"
 	"testing"
 	"time"
 
@@ -109,7 +110,11 @@ func TestExportCompletesAndReportsSize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读取产物失败: %v", err)
 	}
-	if name == "" || len(data) == 0 {
+	b, rerr := io.ReadAll(data)
+	if rerr != nil {
+		t.Fatalf("读取流失败: %v", rerr)
+	}
+	if name == "" || len(b) == 0 {
 		t.Error("产物为空")
 	}
 	if mime == "" {

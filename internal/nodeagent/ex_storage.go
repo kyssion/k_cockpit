@@ -151,6 +151,9 @@ func storagePartitionCreate(ctx context.Context, op agent.Operation, report Repo
 	deviceID := strParam(op.Params, "device_id")
 	sizeGB, _ := op.Params["size_gb"].(float64)
 	dev := devicePathFromID(deviceID)
+	if dev == "" {
+		return failResult("设备标识非法（须为 /dev/ 路径）"), nil
+	}
 	if _, err := sys.Run(ctx, "parted", "-s", dev, "mkpart", "primary",
 		"0%", strconv.Itoa(int(sizeGB))+"GiB"); err != nil {
 		return failResult("创建分区失败: " + err.Error()), nil
@@ -167,6 +170,9 @@ func storagePartitionDelete(ctx context.Context, op agent.Operation, report Repo
 	index, _ := op.Params["index"].(float64)
 	all := boolParam(op.Params, "all")
 	dev := devicePathFromID(deviceID)
+	if dev == "" {
+		return failResult("设备标识非法（须为 /dev/ 路径）"), nil
+	}
 	if all {
 		_, _ = sys.Run(ctx, "parted", "-s", dev, "mklabel", "gpt")
 	} else {
@@ -178,12 +184,14 @@ func storagePartitionDelete(ctx context.Context, op agent.Operation, report Repo
 	}}, nil
 }
 
+// devicePathFromID 把 device_id 归一为块设备路径。**只接受 /dev/ 前缀**
+// （by-id 稳定标识也以其开头）：裸字符串直接进 parted 是一个任意路径
+// 操作面（哪怕 parted 多半会因非块设备而失败，也不能赌）。
 func devicePathFromID(deviceID string) string {
-	if strings.HasPrefix(deviceID, "/dev/") {
+	if strings.HasPrefix(deviceID, "/dev/") && !strings.Contains(deviceID, "..") {
 		return deviceID
 	}
-	// device_id 是 by-id 稳定标识。
-	return deviceID
+	return ""
 }
 
 // storageVolumeApply 实现 storage.volume.apply（LVM 条带/镜像卷）。
@@ -244,6 +252,10 @@ func storageFileCommit(ctx context.Context, op agent.Operation, report Reporter)
 	staged := strParam(op.Params, "staged")
 
 	dst := filepath.Join(userdataRoot, relPath)
+	// relPath 带 ../ 会逃出存储根（guest 可读写宿主任意路径）——越界拒绝。
+	if !strings.HasPrefix(dst, userdataRoot+"/") {
+		return failResult("目标路径越出用户存储根: " + relPath), nil
+	}
 	if err := osMkdirAllErr(filepath.Dir(dst)); err != nil {
 		return failResult(err.Error()), nil
 	}
@@ -271,6 +283,9 @@ func storageFileRead(ctx context.Context, op agent.Operation, report Reporter) (
 	report(Stage{Key: "read", Name: "读取文件", Index: 1, Total: 1})
 	relPath := op.Target
 	path := filepath.Join(userdataRoot, relPath)
+	if !strings.HasPrefix(path, userdataRoot+"/") {
+		return failResult("读取路径越出用户存储根: " + relPath), nil
+	}
 	b, err := osReadFileBytes(path)
 	if err != nil {
 		return failResult("读取文件失败: " + err.Error()), nil

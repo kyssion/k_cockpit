@@ -111,6 +111,9 @@ func (d *Daemon) session(ctx context.Context) error {
 	conn, err := grpc.DialContext(dialCtx, d.Server,
 		grpc.WithTransportCredentials(credentials.NewTLS(d.TLS)),
 		grpc.WithBlock(),
+		// 与服务端同档：导出分片等大负载（默认 4MB 收包上限会拦）。
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(32<<20), grpc.MaxCallSendMsgSize(32<<20)),
 	)
 	if err != nil {
 		return fmt.Errorf("连接控制面: %w", err)

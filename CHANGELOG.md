@@ -17,6 +17,24 @@
 
 ## [Unreleased]
 
+### Fixed
+- **第四轮深检（路径安全 + 导出/抓包链路，真机验证）**：
+  - **导出删除从未真正删文件（真机实证）**：agent 读 `op.Target`（控制面只发 `file_path`
+    参数，恒为空）——`os.Remove("")` 失败被吞，产物在节点上永久残留。改读参数并限定导出目录；
+    真机验证删除后文件归零
+  - **导出下载必然炸于 ~4MB（真机修复+验证）**：整文件塞一条 gRPC 消息被默认 4MB 收包上限
+    拦下，且控制面整段载入内存。agent 侧 `vm.export.fetch` 增加 offset/length 分片（含
+    total_size）；控制面 `ExportFile` 改 `io.Reader` 分片流式（8MB/片，内存占用恒为单片），
+    handler `SetBodyStream` 直出；gRPC 两端显式 32MB 消息上限。真机下载哈希与节点源一致
+  - **用户存储 relPath 逃逸**：`storage.file.commit/read` 的 `../` 可逃出存储根（读写宿主
+    任意路径）——目录内包含性校验
+  - **抓包网口名拼接**：iface 直接拼进落盘路径（`../../tmp/evil` 可写出 captures 之外）——
+    agent 拒绝非安全字符；控制面同规则前置校验（真机实证：放行会得到一条永远 running 的
+    记录）。合法网口抓包 E2E 通过（tcpdump 落盘、状态 ready）
+  - **分区操作设备守卫**：`device_id` 非 `/dev/` 前缀直接拒绝（裸字符串进 parted 是任意
+    路径操作面）
+  - 分片 reader 无 total 时的死循环守卫（旧版 agent/mock 兼容：首片即 EOF）
+
 ### Added
 - **P5 第二批：迁移三模式 + takeover 完整重建 + 来宾自动化（真机双节点端到端验收）**：
   - **迁移三模式**：offline（停机搬运）与 warm（`virsh save` 落内存现场 → 搬运 → 目标侧

@@ -270,6 +270,17 @@ func (s *Service) validate(ctx context.Context, req Request) error {
 	if strings.TrimSpace(req.Interface) == "" {
 		return api.InvalidParameter("必须指定要抓包的网口")
 	}
+	// 网口名会拼进节点侧的落盘路径：带 / 或 .. 是路径穿越。agent 侧有
+	// 第二道防线，但放进来会得到一条永远 running 的记录（agent 拒了、
+	// 控制面不知道）——前置校验让错误在受理时就可见（真机实证）。
+	for _, r := range req.Interface {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.', r == '_', r == '-':
+		default:
+			return api.InvalidParameter("网口名只能包含字母、数字、点、下划线或连字符")
+		}
+	}
 	if req.DurationSec <= 0 {
 		return api.InvalidParameter("必须指定抓包时长")
 	}

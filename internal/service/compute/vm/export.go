@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 
 	"gorm.io/gorm"
@@ -245,7 +246,7 @@ func (s *Service) DeleteExport(
 // 整台机器的数据。转发多花一次带宽，但权限判断留在控制面这一处。
 func (s *Service) ExportFile(
 	ctx context.Context, vmID, exportID int64, v authz.Viewer,
-) (fileName string, data []byte, mime string, err error) {
+) (fileName string, data io.Reader, mime string, err error) {
 	if _, err := s.load(ctx, vmID, v); err != nil {
 		return "", nil, "", err
 	}
@@ -261,35 +262,92 @@ func (s *Service) ExportFile(
 		return "", nil, "", api.NotFound("该导出的产物已不在节点上")
 	}
 
-	result, err := s.agent.Execute(ctx, agent.Operation{
-		Kind:   agent.OpVMExportFetch,
-		NodeID: row.NodeID,
-		Target: row.VMName,
-		Params: map[string]any{"file_path": derefStr(row.FilePath)},
-	})
+	// 分片流式读取：整文件塞一条 gRPC 消息会被消息上限拦下（默认 4MB），
+	// GB 级导出必然失败。首片先发（拿 total_size 与首段数据），后续由
+	// reader 惰性拉取。
+	const chunk = 8 << 20
+	first, total, err := s.fetchExportChunk(ctx, row, 0, chunk)
 	if err != nil {
-		return "", nil, "", api.Unavailable("节点不可达，无法获取导出产物")
-	}
-	if !result.Success {
-		return "", nil, "", api.ValidationFailed(result.Message)
-	}
-
-	content, ok := result.Data[agent.ExportContentKey].(agent.ExportContent)
-	if !ok || len(content.Data) == 0 {
-		return "", nil, "", api.Unavailable("节点未返回导出产物")
+		return "", nil, "", err
 	}
 
 	name := derefStr(row.FileName)
 	if name == "" {
 		name = fmt.Sprintf("%s.%s", row.VMName, row.Format)
 	}
-	mime = content.MIME
-	if mime == "" {
-		// 未声明类型时给一个通用二进制流：**不要**猜成 text/plain——
-		// 那会让浏览器试图把镜像当文本渲染。
-		mime = "application/octet-stream"
+	// 未声明类型时给通用二进制流：不要猜 text/plain——浏览器会把镜像
+	// 当文本渲染。
+	mime = "application/octet-stream"
+	return name, newChunkedReader(s, row, first, total, chunk), mime, nil
+}
+
+// fetchExportChunk 取一段导出内容，返回 (数据, 文件总长)。
+func (s *Service) fetchExportChunk(
+	ctx context.Context, row *model.VMExport, offset, length int64,
+) ([]byte, int64, error) {
+	result, err := s.agent.Execute(ctx, agent.Operation{
+		Kind:   agent.OpVMExportFetch,
+		NodeID: row.NodeID,
+		Target: row.VMName,
+		Params: map[string]any{
+			"file_path": derefStr(row.FilePath),
+			"offset":    float64(offset),
+			"length":    float64(length),
+		},
+	})
+	if err != nil {
+		return nil, 0, api.Unavailable("节点不可达，无法获取导出产物")
 	}
-	return name, content.Data, mime, nil
+	if !result.Success {
+		return nil, 0, api.ValidationFailed(result.Message)
+	}
+	content, ok := result.Data[agent.ExportContentKey].(agent.ExportContent)
+	if !ok {
+		return nil, 0, api.Unavailable("节点未返回导出产物")
+	}
+	total := int64(0)
+	if t, ok := result.Data["total_size"].(float64); ok {
+		total = int64(t)
+	}
+	return content.Data, total, nil
+}
+
+// chunkedReader 把分片拉取拼成 io.Reader：HTTP 层流式写出，控制面内存
+// 占用恒为单个分片。
+type chunkedReader struct {
+	s        *Service
+	row      *model.VMExport
+	buf      []byte
+	off      int
+	next     int64
+	total    int64
+	chunkLen int64
+}
+
+func newChunkedReader(s *Service, row *model.VMExport, first []byte, total, chunk int64) *chunkedReader {
+	return &chunkedReader{s: s, row: row, buf: first, total: total, chunkLen: chunk, next: int64(len(first))}
+}
+
+func (r *chunkedReader) Read(p []byte) (int, error) {
+	for r.off >= len(r.buf) {
+		// 节点没报 total（旧版 agent / mock）：无法判断终点，按「首片即全部」
+		// 结束——比无限拉同一片安全（真实大文件必须由新版 agent 提供总长）。
+		if r.total <= 0 || r.next >= r.total {
+			return 0, io.EOF
+		}
+		data, total, err := r.s.fetchExportChunk(context.Background(), r.row, r.next, r.chunkLen)
+		if err != nil {
+			return 0, err
+		}
+		if len(data) == 0 {
+			return 0, io.EOF
+		}
+		r.buf, r.off, r.total = data, 0, total
+		r.next += int64(len(data))
+	}
+	n := copy(p, r.buf[r.off:])
+	r.off += n
+	return n, nil
 }
 
 // loadExport 读取导出记录并确认它属于指定虚拟机。

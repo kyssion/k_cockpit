@@ -147,7 +147,12 @@ func (g *gateway) StreamData(stream agentproto.AgentGateway_StreamDataServer) er
 
 // Serve 在 ln 上启动 gRPC 网关（阻塞）。TLS 与客户端证书校验见 certManager。
 func (h *Hub) Serve(ln net.Listener) error {
-	gs := grpc.NewServer(grpc.Creds(credentials.NewTLS(h.certs.TLSConfig())))
+	// 32MB：导出分片（8MB）与截帧等大负载需要显式余量——gRPC 默认 4MB
+	// 收包上限会把任何真实规模的导出分片直接拦下（真机验证前的静态推演）。
+	gs := grpc.NewServer(
+		grpc.Creds(credentials.NewTLS(h.certs.TLSConfig())),
+		grpc.MaxRecvMsgSize(32<<20), grpc.MaxSendMsgSize(32<<20),
+	)
 	agentproto.RegisterAgentGatewayServer(gs, &gateway{h: h})
 	h.mu.Lock()
 	h.gs = gs

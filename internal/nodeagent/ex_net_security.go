@@ -689,6 +689,22 @@ func portMirrorEnable(ctx context.Context, op agent.Operation, report Reporter) 
 	}}, nil
 }
 
+// pathSafe 报告名字是否只含文件名安全字符（用于拼进路径的设备/接口名）。
+func pathSafe(name string) string {
+	if name == "" {
+		return ""
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.', r == '_', r == '-':
+		default:
+			return ""
+		}
+	}
+	return name
+}
+
 // mirrorRowExists 按名字精确判定 Mirror 行是否存在（get 对不存在的行报错）。
 func mirrorRowExists(ctx context.Context, name string) bool {
 	_, err := sys.Run(ctx, "ovs-vsctl", "get", "Mirror", name, "name")
@@ -779,6 +795,11 @@ func portMirrorDisable(ctx context.Context, op agent.Operation, report Reporter)
 // networkCapture 实现一次限时抓包（tcpdump 落盘，控制面稍后 fetch）。
 func networkCapture(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	iface := strParam(op.Params, "interface")
+	// iface 直接拼进落盘路径（也传给 tcpdump -i）：带 / 或 .. 是路径穿越，
+	// 拒绝而不是落盘到 captures 之外。
+	if iface != pathSafe(iface) {
+		return failResult("网口名非法: " + iface), nil
+	}
 	duration := 30
 	if v, ok := op.Params["duration_sec"].(float64); ok && int(v) > 0 {
 		duration = int(v)

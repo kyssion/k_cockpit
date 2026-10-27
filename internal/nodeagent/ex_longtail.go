@@ -580,19 +580,65 @@ func vmExport(ctx context.Context, op agent.Operation, report Reporter) (*agent.
 }
 
 // vmExportDelete / vmExportFetch。
+//
+// file_path 来自控制面 params（此前 agent 读 op.Target——恒为空串，
+// osRemove("") 永远失败又被吞掉：导出删除从未真正删过文件，节点上
+// 永久残留，真机实证）。路径必须落在导出目录内。
+const exportDir = "/var/lib/k_cockpit/exports"
+
 func vmExportDelete(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
-	_ = osRemove(op.Target)
+	path := strParam(op.Params, "file_path")
+	if !strings.HasPrefix(path, exportDir+"/") {
+		return failResult("导出路径越界（仅允许导出目录）: " + path), nil
+	}
+	if err := osRemove(path); err != nil {
+		return failResult("删除导出文件失败: " + err.Error()), nil
+	}
 	return &agent.Result{Success: true}, nil
 }
 
+// vmExportFetch 分片读取导出文件：offset/length 参数缺省时读全文件
+// （仅向后兼容小文件）。大导出走分片——整文件塞一条 gRPC 消息会被
+// 消息上限拦下（默认 4MB）。
 func vmExportFetch(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	path := strParam(op.Params, "file_path")
-	b, err := osReadFileBytes(path)
+	if !strings.HasPrefix(path, exportDir+"/") {
+		return failResult("导出路径越界（仅允许导出目录）: " + path), nil
+	}
+	st, err := osStat(path)
 	if err != nil {
-		return failResult("读取导出文件失败: " + err.Error()), nil
+		return failResult("导出文件不存在: " + path), nil
+	}
+	offset, hasOff := op.Params["offset"].(float64)
+	length, hasLen := op.Params["length"].(float64)
+	if !hasOff || !hasLen {
+		b, rerr := osReadFileBytes(path)
+		if rerr != nil {
+			return failResult("读取导出文件失败: " + rerr.Error()), nil
+		}
+		return &agent.Result{Success: true, Data: map[string]any{
+			"content":    agent.ExportContent{Data: b, MIME: "application/octet-stream"},
+			"total_size": float64(st.Size()),
+		}}, nil
+	}
+	if offset < 0 || length <= 0 || int64(offset) > st.Size() {
+		return failResult("分片范围非法"), nil
+	}
+	if int64(offset+length) > st.Size() {
+		length = float64(st.Size() - int64(offset))
+	}
+	buf := make([]byte, int(length))
+	f, oerr := os.Open(path)
+	if oerr != nil {
+		return failResult("打开导出文件失败: " + oerr.Error()), nil
+	}
+	defer func() { _ = f.Close() }()
+	if _, rerr := f.ReadAt(buf, int64(offset)); rerr != nil && rerr.Error() != "EOF" {
+		return failResult("读取导出分片失败: " + rerr.Error()), nil
 	}
 	return &agent.Result{Success: true, Data: map[string]any{
-		"content": agent.ExportContent{Data: b, MIME: "application/octet-stream"},
+		"content":    agent.ExportContent{Data: buf, MIME: "application/octet-stream"},
+		"total_size": float64(st.Size()),
 	}}, nil
 }
 
