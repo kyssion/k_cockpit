@@ -160,11 +160,18 @@ func (d *Daemon) session(ctx context.Context) error {
 
 	reporter := func(opID string) Reporter {
 		return func(s Stage) {
-			outbox <- &agentproto.AgentToServer{Payload: &agentproto.AgentToServer_Stage{
+			// **非阻塞上报**：断线窗口里 sendPump 已退出、outbox 会堆满——
+			// 阻塞发送会把执行 goroutine 永久卡死（channel 属于已结束的
+			// 会话，无人再消费），每个在途操作泄漏一份。阶段只是进度展示，
+			// 满了丢弃无妨。
+			select {
+			case outbox <- &agentproto.AgentToServer{Payload: &agentproto.AgentToServer_Stage{
 				Stage: &agentproto.StageUpdate{
 					OpId: opID, Key: s.Key, Name: s.Name, Index: int32(s.Index), Total: int32(s.Total),
 				},
-			}}
+			}}:
+			default:
+			}
 		}
 	}
 
@@ -195,13 +202,23 @@ func (d *Daemon) session(ctx context.Context) error {
 				out := d.Registry.dispatch(ctx, op, reporter(opID))
 				select {
 				case outbox <- resultMsg(opID, out):
+				case <-sendDone:
+					// 通道已死：丢弃结果（控制面任务侧自会按未送达处理）。
 				case <-ctx.Done():
 				}
 			}(req.OpId, op)
 		case *agentproto.ServerToAgent_OpenStream:
-			if out := d.handleOpenStream(ctx, p.OpenStream); out != nil {
-				outbox <- out
+			// dial 限 3s：VNC 端口异常时不能让接收循环整体卡住
+			//（心跳与后续指令都被压在后面）。
+			dialCtx, dialCancel := context.WithTimeout(ctx, 3*time.Second)
+			if out := d.handleOpenStream(dialCtx, p.OpenStream); out != nil {
+				select {
+				case outbox <- out:
+				default:
+					_ = dialCancel
+				}
 			}
+			dialCancel()
 		default:
 			// 未知下行消息忽略（协议兼容承诺）。
 		}

@@ -18,6 +18,24 @@
 ## [Unreleased]
 
 ### Fixed
+- **第五轮深检（VNC 控制台全链 + agent 会话层，真机 WS E2E 验证）**：
+  - **VNC 对默认配置的域直接不可用**：`virsh vncdisplay` 的裸显示号输出 `:0` 被旧解析
+    （`LastIndex > 0` 条件跳过剥离）送进 `Atoi` 必炸——剥离逻辑重写（兼容 `host:N`/`:N`/
+    IPv6 字面量）
+  - **VNC 空闲会话泄漏**：控制面断开后对侧协程卡在 `conn.Read`（VM 空闲无数据），
+    `<-done` 永远等不到、`conn.Close` 排在其后——每次会话泄漏两协程加一 fd。Recv 退出
+    立即关 conn
+  - **流登记竞态**：StreamData 是独立 RPC，与主通道 StreamOpened(ok) 无顺序保证——旧代码
+    收到 ok 后才登记 bridge，RPC 先到即夭折。bridge 提前登记、失败路径统一关桥
+  - **io 契约两处**：Write 循环后返回被切空的 `len(p)`（恒 0，违反 Writer 契约，io.Copy
+    报错）→ 返回原始长度；Read 丢弃超长 chunk 剩余字节（字节流中段丢失破坏 RFB）→ 剩余缓冲
+  - **agent 会话 outbox 阻塞泄漏**：阶段上报/结果回包用阻塞发送，断线窗口（sendPump 已退、
+    outbox 满）把执行 goroutine 永久卡死（channel 属已结束会话无人消费）——阶段非阻塞
+    （满即弃）、结果 select sendDone 快速放弃；VNC dial 限 3s（防接收循环被卡）
+  - 真机验证：原生 WS 客户端全链打通（101 升级 → RFB 3.8 横幅下行 → 客户端版本上行 →
+    安全类型列表回执），双向字节流完整
+
+### Fixed
 - **第四轮深检（路径安全 + 导出/抓包链路，真机验证）**：
   - **导出删除从未真正删文件（真机实证）**：agent 读 `op.Target`（控制面只发 `file_path`
     参数，恒为空）——`os.Remove("")` 失败被吞，产物在节点上永久残留。改读参数并限定导出目录；

@@ -61,21 +61,34 @@ func (b *streamBridge) isClosed() bool {
 }
 
 // controlSide 把桥的一端包装成控制台 handler 期望的 Stream。
-type controlSide struct{ b *streamBridge }
+type controlSide struct {
+	b    *streamBridge
+	pend []byte // 上次 Read 没装下的剩余字节（丢了就是字节流中段丢失）
+}
 
-func (s controlSide) Read(p []byte) (int, error) {
+func (s *controlSide) Read(p []byte) (int, error) {
+	// 先消费上次的剩余：VNC 是字节流，中段丢字节会直接破坏 RFB 协议。
+	if len(s.pend) > 0 {
+		n := copy(p, s.pend)
+		s.pend = s.pend[n:]
+		return n, nil
+	}
 	chunk, ok := <-s.b.chFromAgent
 	if !ok {
 		return 0, errBridgeClosed
 	}
 	n := copy(p, chunk)
+	if n < len(chunk) {
+		s.pend = chunk[n:]
+	}
 	return n, nil
 }
 
-func (s controlSide) Write(p []byte) (int, error) {
+func (s *controlSide) Write(p []byte) (int, error) {
 	if s.b.isClosed() {
 		return 0, errBridgeClosed
 	}
+	total := len(p)
 	// 分片拷贝：p 归调用方所有，异步转发必须持有副本。
 	for len(p) > 0 {
 		n := len(p)
@@ -91,7 +104,9 @@ func (s controlSide) Write(p []byte) (int, error) {
 			return 0, errBridgeClosed
 		}
 	}
-	return len(p), nil
+	// 返回**原始**长度：循环结束后 p 已被切空，旧代码返回 len(p) 恒为 0，
+	// 违反 io.Writer 契约（n<len(p) 且 err==nil），io.Copy 直接报错。
+	return total, nil
 }
 
 func (s controlSide) Close() error { s.b.close(); return nil }
@@ -120,12 +135,34 @@ func (h *Hub) OpenStream(ctx context.Context, kind agent.StreamKind, nodeID int6
 	bridge := newStreamBridge(streamID)
 	waitCh := make(chan *streamOpenedMsg, 1)
 
+	// **先登记 bridge 再下发打开指令**：StreamData 是另一条 RPC，与主通道
+	// 上的 StreamOpened(ok) 没有顺序保证——旧代码等 ok 之后才登记，RPC
+	// 先到时 takeAgentStream 拿到 nil，会话直接夭折。失败路径统一关桥。
 	h.mu.Lock()
+	if h.agentStreams == nil {
+		h.agentStreams = map[string]*streamBridge{}
+	}
+	h.agentStreams[streamID] = bridge
 	if c.pendingStreams == nil {
 		c.pendingStreams = map[string]chan *streamOpenedMsg{}
 	}
 	c.pendingStreams[streamID] = waitCh
 	h.mu.Unlock()
+	go func() {
+		<-bridge.ctx.Done()
+		h.mu.Lock()
+		delete(h.agentStreams, streamID)
+		h.mu.Unlock()
+	}()
+	fail := func(err error) (agent.Stream, error) {
+		bridge.close()
+		return nil, err
+	}
+	defer func() {
+		h.mu.Lock()
+		delete(c.pendingStreams, streamID)
+		h.mu.Unlock()
+	}()
 	defer func() {
 		h.mu.Lock()
 		delete(c.pendingStreams, streamID)
@@ -137,34 +174,19 @@ func (h *Hub) OpenStream(ctx context.Context, kind agent.StreamKind, nodeID int6
 			StreamId: streamID, Kind: string(kind), Target: target,
 		},
 	}}); err != nil {
-		return nil, streamErr("流打开指令未送达: " + err.Error())
+		return fail(streamErr("流打开指令未送达: " + err.Error()))
 	}
 
 	select {
 	case m := <-waitCh:
 		if !m.Ok {
-			return nil, streamErr(m.Message)
+			return fail(streamErr(m.Message))
 		}
 	case <-ctx.Done():
-		return nil, streamErr("打开控制台流超时")
+		return fail(streamErr("打开控制台流超时"))
 	}
 
-	// ok 之后 StreamData RPC 可能已到达（并发赛跑）：先登记 bridge，
-	// handler 无论先后到达都能取到。
-	h.mu.Lock()
-	if h.agentStreams == nil {
-		h.agentStreams = map[string]*streamBridge{}
-	}
-	h.agentStreams[streamID] = bridge
-	h.mu.Unlock()
-	go func() {
-		<-bridge.ctx.Done()
-		h.mu.Lock()
-		delete(h.agentStreams, streamID)
-		h.mu.Unlock()
-	}()
-
-	return controlSide{bridge}, nil
+	return &controlSide{b: bridge}, nil
 }
 
 // takeAgentStream 由 StreamData handler 调用：取走属于自己的桥。

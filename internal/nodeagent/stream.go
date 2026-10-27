@@ -87,7 +87,10 @@ func pumpVNC(stream agentproto.AgentGateway_StreamDataClient, conn io.ReadWriteC
 			break
 		}
 	}
-	// 一侧断开，另一侧的 Read/Write 会随之失败退出。
+	// 控制面侧已断：**立刻关 conn** 再等对侧。VM 空闲时 VNC 无数据可读，
+	// 对侧协程会卡在 conn.Read——只靠 defer 的 Close（排在 <-done 之后）
+	// 会死锁泄漏两个协程加一个 fd（每次空闲会话漏一份）。
+	_ = conn.Close()
 	<-done
 }
 
@@ -116,9 +119,14 @@ func vncAddr(ctx context.Context, vm string) (string, error) {
 	display := strings.TrimSpace(out)
 	host := "127.0.0.1"
 	portStr := display
-	if i := strings.LastIndex(display, ":"); i > 0 {
-		host = display[:i]
+	// virsh vncdisplay 的两种常见输出：裸显示号 ":0"（LastIndex 命中 i=0，
+	// 旧代码的 i>0 条件会跳过剥离，Atoi(":0") 必炸——VNC 对默认配置的
+	// 域直接不可用）与 "host:port"。
+	if i := strings.LastIndex(display, ":"); i >= 0 {
 		portStr = display[i+1:]
+		if i > 0 {
+			host = strings.Trim(display[:i], "[]") // IPv6 字面量去括号
+		}
 	}
 	if host == "" {
 		host = "127.0.0.1"
