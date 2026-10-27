@@ -87,15 +87,8 @@ func vpcSwitchChange(ctx context.Context, op agent.Operation, report Reporter) (
 				}
 			}
 			// NAT：把该网段 MASQUERADE 到上行（幂等，已存在则跳过）。
-			_, _ = sys.Run(ctx, "iptables", "-t", "nat", "-C", "POSTROUTING",
+			iptablesNatAdd(ctx, "POSTROUTING",
 				"-s", spec.CIDR, "!", "-o", bridge, "-j", "MASQUERADE")
-			if _, err := sys.Run(ctx, "iptables", "-t", "nat", "-C", "POSTROUTING",
-				"-s", spec.CIDR, "!", "-o", bridge, "-j", "MASQUERADE"); err == nil {
-				// 已存在。
-			} else {
-				_, _ = sys.Run(ctx, "iptables", "-t", "nat", "-A", "POSTROUTING",
-					"-s", spec.CIDR, "!", "-o", bridge, "-j", "MASQUERADE")
-			}
 		}
 		// 带宽总限（OVS ingress policing 简化实现：仅入向）。
 		if spec.BandwidthIn > 0 {

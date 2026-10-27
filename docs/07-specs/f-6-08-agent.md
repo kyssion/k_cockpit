@@ -36,6 +36,13 @@ hostfirewall 丢规则、DNAT 缺链名）并全部修复复验；VPC 交换机�
 导出落盘。安全组 FORWARD 空转修复（无 IP 兜底不挂）+ 挂载语法真机验证。词表错位族全表见
 [TROUBLESHOOTING §7.4](../04-engineering/TROUBLESHOOTING.md)。
 
+**2026-10-26 三轮深检验收（真机，同一环境）**：安全组兜底+挂载合成验证；端口安全
+**precheck 缺失致功能整体不可用**补实现后 apply→停用流表归零（fake internal 口实态）；
+端口转发 add→remove 全清（remove 不对称残留修复）；双层防火墙带保护规则落链、
+**回滚只清 KC-FW 致 KC-HFW 残留**修复后归零；公网 IP bind 假成功（executor 不发
+vm_ip）改节点解析 + 关机 fail-fast + unbind 形状匹配删除。全部以节点实态
+（iptables -S/-t nat -S、ovs-ofctl dump-flows、ovs-vsctl）对读验证，残留清零。
+
 ## 2. 分期路线（P0~P2 真机验收通过；P3~P5 执行器已全量注册并部署，深化项见各条注记）
 
 | 期 | 内容 | 状态 | 深化项（后续迭代） |

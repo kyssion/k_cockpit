@@ -85,6 +85,15 @@ func (e *SnapshotCreateExecutor) Run(ctx context.Context, t *model.Task) error {
 	if size, ok := result.Data["size_bytes"].(float64); ok {
 		updates["size_bytes"] = int64(size)
 	}
+	// 受理时记录的 kind 是**预测**（含内存/状态推导），agent 会按虚拟化层
+	// 的真实约束执行（如 UEFI 域不支持内部快照，被强制走外部）——按实际
+	// 执行结果回写，否则界面上的种类与磁盘上的 overlay 对不上（真机实测：
+	// 关机 UEFI 建的快照预测 internal、实际 external）。
+	if kind, ok := result.Data["snapshot_kind"].(string); ok && kind != "" {
+		if kind == model.SnapshotKindInternal || kind == model.SnapshotKindExternal {
+			updates["kind"] = kind
+		}
+	}
 
 	if err := e.db.WithContext(ctx).Model(&model.VMSnapshot{}).
 		Where("id = ?", p.SnapshotID).Updates(updates).Error; err != nil {

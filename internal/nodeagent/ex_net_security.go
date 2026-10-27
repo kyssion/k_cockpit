@@ -161,7 +161,11 @@ func securityGroupApply(ctx context.Context, op agent.Operation, report Reporter
 	}}, nil
 }
 
-// vmIP 尽力拿到虚拟机当前 IP（邻居表 + virsh domifaddr 兜底）。
+// vmIP 尽力拿到虚拟机当前 IP（domifaddr → 该机自己的 vnet 口上的邻居）。
+//
+// 邻居兜底必须限定**这台虚拟机自己的网口**：此前返回第一个 vnet 邻居的
+// IP，多虚拟机宿主机上会串号（把别的机器的 IP 当成这台的——安全组与
+// 公网 DNAT 都会绑错对象）。
 func vmIP(ctx context.Context, vm string) string {
 	if out, err := sys.Run(ctx, "virsh", "-r", "-c", "qemu:///system", "domifaddr", vm); err == nil {
 		for _, line := range strings.Split(out, "\n") {
@@ -171,9 +175,17 @@ func vmIP(ctx context.Context, vm string) string {
 			}
 		}
 	}
+	xml, err := sys.DumpXML(ctx, vm, true)
+	if err != nil {
+		return "0.0.0.0/0"
+	}
+	vnets := parseVnetTargets(xml)
+	if len(vnets) == 0 {
+		return "0.0.0.0/0"
+	}
 	entries, _ := sys.ListNeighbors(ctx)
 	for _, e := range entries {
-		if e.Interface != "" && strings.HasPrefix(e.Interface, "vnet") {
+		if vnets[e.Interface] {
 			return e.IP
 		}
 	}
@@ -272,11 +284,15 @@ func firewallApply(ctx context.Context, op agent.Operation, report Reporter) (*a
 // firewallRollback 实现 firewall.rollback：紧急回滚不设门槛也不应失败。
 func firewallRollback(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	report(Stage{Key: "rollback", Name: "紧急回滚", Index: 1, Total: 1})
-	const chain = "KC-FW"
-	_, _ = sys.Run(ctx, "iptables", "-D", "INPUT", "-j", chain)
+	// 两层防火墙（节点 KC-FW / 宿主机 KC-HFW）同挂 INPUT：紧急回滚的
+	// 语义是「恢复全通」，只清一层会让另一层继续过滤（真机实证：宿主机
+	// 回滚后 KC-HFW 六条规则与 INPUT 跳板全部残留）。
+	for _, chain := range []string{"KC-FW", "KC-HFW"} {
+		_, _ = sys.Run(ctx, "iptables", "-D", "INPUT", "-j", chain)
+		_, _ = sys.Run(ctx, "iptables", "-F", chain)
+		_, _ = sys.Run(ctx, "iptables", "-X", chain)
+	}
 	_, _ = sys.Run(ctx, "iptables", "-P", "INPUT", "ACCEPT")
-	_, _ = sys.Run(ctx, "iptables", "-F", chain)
-	_, _ = sys.Run(ctx, "iptables", "-X", chain)
 	return &agent.Result{Success: true, Data: map[string]any{
 		agent.FirewallDataKey: agent.FirewallInfo{Applied: 0, Message: "防火墙已回滚为全通"},
 	}}, nil
@@ -380,8 +396,10 @@ func vmPortForwardChange(ctx context.Context, op agent.Operation, report Reporte
 	// DNAT 在 PREROUTING 上做；此前既缺链名又把 -t nat 放在 iptablesAdd
 	// 的 -C 之后（-C 会把 "-t" 当链名），规则永远加不上（真机同族排查）。
 	dnat := []string{"-p", protocol, "--dport", strconv.Itoa(int(hostPort))}
+	fw := []string{"-p", protocol, "--dport", strconv.Itoa(int(hostPort))}
 	if src, ok := op.Params["allowed_ips"].(string); ok && src != "" {
 		dnat = append(dnat, "-s", src)
+		fw = append(fw, "-s", src)
 	}
 	dnat = append(dnat, "-j", "DNAT", "--to-destination", targetIP+":"+strconv.Itoa(int(targetPort)))
 
@@ -390,14 +408,14 @@ func vmPortForwardChange(ctx context.Context, op agent.Operation, report Reporte
 		iptablesNatAdd(ctx, "PREROUTING", dnat...)
 		// 转发路径放行（filter 表，FORWARD 链——iptablesAdd 的形态对
 		// filter 表成立：-C 后紧跟链名）。
-		fw := []string{"-p", protocol, "--dport", strconv.Itoa(int(hostPort))}
-		if src, ok := op.Params["allowed_ips"].(string); ok && src != "" {
-			fw = append(fw, "-s", src)
-		}
 		iptablesAdd(ctx, append([]string{"FORWARD", "-d", targetIP}, fw...)...)
 		iptablesAdd(ctx, "FORWARD", "-d", targetIP, "-j", "ACCEPT")
 	case "remove":
+		// add/remove 必须对称：remove 只摘 DNAT 会把 add 写入的两条
+		// FORWARD 放行留在宿主机上（真机实证的残留）。
 		iptablesNatDel(ctx, "PREROUTING", dnat...)
+		iptablesDel(ctx, append([]string{"FORWARD", "-d", targetIP}, fw...)...)
+		iptablesDel(ctx, "FORWARD", "-d", targetIP, "-j", "ACCEPT")
 	default:
 		return failResult("未知转发动作: " + action), nil
 	}
@@ -414,31 +432,151 @@ func vmStaticIPChange(ctx context.Context, op agent.Operation, report Reporter) 
 }
 
 // publicIPChange 实现 public.ip.change（bind/unbind/migrate 的 DNAT）。
+//
+// 目标 VM 的 IP 由节点解析：控制面的 executor 只发 vm_name、从不发
+// vm_ip（真机 bind 报成功但 DNAT 0 条——空 --to-destination 的 iptables
+// 报错被吞）。bind/migrate 解析不到 IP 时如实失败；unbind 时 VM 可能已
+// 关机解析不到，按「-d <ip> + DNAT」的形状从规则集匹配删除，不要求重现
+// 完整的 --to-destination。
 func publicIPChange(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	report(Stage{Key: "public_ip", Name: "调整公网 DNAT", Index: 1, Total: 1})
 	action := strParam(op.Params, "action")
 	ip := strParam(op.Params, "ip")
-	vmIP := strParam(op.Params, "vm_ip")
-	// P2/P3 简化：以 1:1 全端口 DNAT 表达绑定（真实的多模式 NAT 随 P3 第三批）。
-	// PREROUTING + iptablesNatAdd：与端口转发同一族修复（缺链名/表参数
-	// 位置错误会让规则静默加不上）。
-	spec := []string{"-d", ip, "-j", "DNAT", "--to-destination", vmIP}
+	vmName := strParam(op.Params, "vm_name")
+
 	switch action {
-	case "bind":
-		iptablesNatAdd(ctx, "PREROUTING", spec...)
+	case "bind", "migrate":
+		target := strParam(op.Params, "vm_ip")
+		if target == "" && vmName != "" {
+			target = vmIP(ctx, vmName)
+		}
+		if target == "" || target == "0.0.0.0/0" {
+			return failResult("虚拟机当前没有可用的 IP（未开机或未获取地址），无法绑定公网地址"), nil
+		}
+		iptablesNatDel(ctx, "PREROUTING", "-d", ip, "-j", "DNAT", "--to-destination", target)
+		iptablesNatAdd(ctx, "PREROUTING", "-d", ip, "-j", "DNAT", "--to-destination", target)
 	case "unbind":
-		iptablesNatDel(ctx, "PREROUTING", spec...)
+		iptablesNatDelMatching(ctx, "PREROUTING", func(fields []string) bool {
+			return fieldsHave(fields, "-d", ip, true) && fieldsHave(fields, "-j", "DNAT", false)
+		})
+	default:
+		return failResult("未知公网地址动作: " + action), nil
 	}
 	return &agent.Result{Success: true, Data: map[string]any{
 		agent.PublicIPDataKey: agent.PublicIPInfo{Message: "公网地址规则已更新"},
 	}}, nil
 }
 
+// iptablesNatDelMatching 从 iptables-save 里找 chain 上满足谓词的规则并
+// 逐条 -D（按字段重建参数——iptables-save 会把地址规范化成 ip/prefix，
+// 子串匹配会漏）。谓词在字段数组上判断，避免 "-d 1.2.3.4" 吃掉 "1.2.3.45"。
+func iptablesNatDelMatching(ctx context.Context, chain string, match func(fields []string) bool) {
+	out, err := sys.Run(ctx, "iptables-save", "-t", "nat")
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, "-A "+chain+" ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if !match(fields) {
+			continue
+		}
+		fields[0] = "-D"
+		_, _ = sys.Run(ctx, "iptables", append([]string{"-t", "nat"}, fields...)...)
+	}
+}
+
+// fieldsHave 报告 fields 里是否存在「flag 后紧跟 value」的对；prefixOK 时
+// value 匹配该前缀（iptables-save 的 ip/32 形态）。
+func fieldsHave(fields []string, flag, value string, prefixOK bool) bool {
+	for i, f := range fields {
+		if f != flag || i+1 >= len(fields) {
+			continue
+		}
+		v := fields[i+1]
+		if v == value || (prefixOK && strings.HasPrefix(v, value+"/")) {
+			return true
+		}
+	}
+	return false
+}
+
+// portSecurityPrecheck 实现 port_security.precheck（只读探测）。
+//
+// 此前 agent 没有实现这个操作，而控制面 Apply 的第一步就是它——整个
+// 端口安全功能经 API 完全不可用（真机抓出）。探测三件事：端口在不在
+// OVS 上、流表工具可用性、将写入的流（人可读）。
+func portSecurityPrecheck(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
+	report(Stage{Key: "probe", Name: "探测端口与流表", Index: 1, Total: 1})
+	portRef := strParam(op.Params, "port_ref")
+	spoofing := boolParam(op.Params, "spoofing_guard")
+	isolation := boolParam(op.Params, "isolation")
+
+	caps := []agent.PortSecurityCapability{}
+	okOVS := false
+	if v, _ := sys.OVSVersion(ctx); v != "" {
+		okOVS = true
+	}
+	caps = append(caps, agent.PortSecurityCapability{
+		Key: "ovs", Label: "Open vSwitch", Required: true, Missing: !okOVS,
+		Reason: "未安装 Open vSwitch", Fix: "安装 openvswitch 并启动 ovs-vswitchd",
+	})
+	bridge := ""
+	if okOVS {
+		if b, err := sys.OVSInterfaceBridge(ctx, portRef); err == nil {
+			bridge = b
+		}
+	}
+	onBridge := bridge != ""
+	caps = append(caps, agent.PortSecurityCapability{
+		Key: "port_on_ovs", Label: "端口已挂载在 OVS 桥上", Required: true, Missing: !onBridge,
+		Reason: "端口不在任何 OVS 桥上", Fix: "把网口接到 OVS 交换机后再启用端口安全",
+	})
+	ofctlOK := sys.RunOK(ctx, "ovs-ofctl", "--version")
+	caps = append(caps, agent.PortSecurityCapability{
+		Key: "ofctl", Label: "ovs-ofctl 流表工具", Required: true, Missing: !ofctlOK,
+		Reason: "ovs-ofctl 不可用", Fix: "安装完整的 openvswitch 工具集",
+	})
+
+	rules := []string{}
+	if onBridge && ofctlOK {
+		if isolation {
+			rules = append(rules, "in_port="+portRef+",action=drop")
+		} else if spoofing {
+			if mac := macOf(ctx, portRef); mac != "" {
+				rules = append(rules, "in_port="+portRef+",dl_src="+mac+",action=normal")
+			} else {
+				rules = append(rules, "# 读不到端口 MAC，防伪造流无法写入")
+			}
+		}
+	}
+	// 已有流会被 del-first 清掉——如实提示而不是事后惊讶。
+	if onBridge && ofctlOK {
+		if out, err := sys.Run(ctx, "ovs-ofctl", "-O", "OpenFlow13", "dump-flows", bridge,
+			"in_port="+portRef); err == nil && strings.TrimSpace(out) != "" {
+			caps[2].Missing = false
+			return precheckResult(caps, rules, []string{
+				"该网口已存在 " + strconv.Itoa(strings.Count(out, "\n")+1) + " 条流，应用时会被先清空再重写",
+			}), nil
+		}
+	}
+	return precheckResult(caps, rules, nil), nil
+}
+
+func precheckResult(caps []agent.PortSecurityCapability, rules, warnings []string) *agent.Result {
+	return &agent.Result{Success: true, Data: map[string]any{
+		agent.PortSecurityPrecheckKey: agent.PortSecurityPrecheck{
+			Capabilities: caps, Rules: rules, Warnings: warnings,
+		},
+	}}
+}
+
 // portSecurityApply 实现 port_security.apply（OVS 流表： spoofing 防护 + 隔离）。
 func portSecurityApply(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	report(Stage{Key: "flows", Name: "写入 OVS 流表", Index: 1, Total: 1})
 	portRef := strParam(op.Params, "port_ref")
-	vm := strParam(op.Params, "vm_name")
 	spoofing := boolParam(op.Params, "spoofing_guard")
 	isolation := boolParam(op.Params, "isolation")
 
@@ -446,18 +584,36 @@ func portSecurityApply(ctx context.Context, op agent.Operation, report Reporter)
 	if err != nil {
 		return failResult("端口不在 OVS 上: " + err.Error()), nil
 	}
-	// in_port=<port> 的流量只允许该端口的 MAC/IP（动态学习由管理面下发）。
-	if _, err := sys.Run(ctx, "ovs-ofctl", "-O", "OpenFlow13", "add-flow", bridge,
-		"in_port="+portRef+",dl_src="+macOf(ctx, portRef)+",action=normal"); err != nil && spoofing {
-		return failResult("写入防伪造流表失败: " + err.Error()), nil
-	}
-	if isolation {
-		_, _ = sys.Run(ctx, "ovs-ofctl", "-O", "OpenFlow13", "add-flow", bridge,
+	// 先清该口上的既有流再按需写入（期望状态语义）：停用（两个开关全关）
+	// 走到这里就是纯清理——此前只会加不会删，控制面「停用」后 OVS 里的
+	// 防伪造/隔离流全部残留（review 抓出）。macOf 读不到 MAC 时报错而不是
+	// 生成 dl_src= 的非法流。
+	_, derr := sys.Run(ctx, "ovs-ofctl", "-O", "OpenFlow13", "del-flows", bridge,
+		"in_port="+portRef)
+	switch {
+	case isolation:
+		_, err := sys.Run(ctx, "ovs-ofctl", "-O", "OpenFlow13", "add-flow", bridge,
 			"in_port="+portRef+",action=drop")
+		if err != nil {
+			return failResult("写入隔离流表失败: " + err.Error()), nil
+		}
+	case spoofing:
+		mac := macOf(ctx, portRef)
+		if mac == "" {
+			return failResult("读不到端口 MAC，无法写入防伪造流表"), nil
+		}
+		if _, err := sys.Run(ctx, "ovs-ofctl", "-O", "OpenFlow13", "add-flow", bridge,
+			"in_port="+portRef+",dl_src="+mac+",action=normal"); err != nil {
+			return failResult("写入防伪造流表失败: " + err.Error()), nil
+		}
+	default:
+		if derr != nil {
+			// 两个开关全关且清流也失败：端口上可能本来就没有 kc 流。
+			// 静默即可——期望状态是「无规则」。
+		}
 	}
-	_ = vm
 	return &agent.Result{Success: true, Data: map[string]any{
-		agent.PortSecurityDataKey: agent.PortSecurityInfo{Applied: true, Message: "端口安全规则已写入"},
+		agent.PortSecurityDataKey: agent.PortSecurityInfo{Applied: true, Message: "端口安全规则已更新"},
 	}}, nil
 }
 
@@ -643,9 +799,12 @@ func networkCapture(ctx context.Context, op agent.Operation, report Reporter) (*
 	}()
 	st, _ := os.Stat(path)
 	report(Stage{Key: "write_file", Name: "落盘", Index: 2, Total: 2})
+	// tcpdump 在后台限时运行：此刻文件还是空的，如实说明「进行中」，
+	// 控制面按 FilePath 稍后取回（报「完成」+0 字节会让用户以为坏了）。
 	return &agent.Result{Success: true, Data: map[string]any{
 		agent.CaptureDataKey: agent.CaptureInfo{
-			FilePath: path, SizeBytes: fileSizeOr0(st), Message: "抓包完成",
+			FilePath: path, SizeBytes: fileSizeOr0(st),
+			Message: fmt.Sprintf("抓包进行中（约 %d 秒后可取回）", duration),
 		},
 	}}, nil
 }

@@ -7,6 +7,7 @@ package nodeagent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -246,10 +247,20 @@ func vmDelete(ctx context.Context, op agent.Operation, report Reporter) (*agent.
 	var transferred []agent.TransferredDisk
 	if diskAction == "delete" || force {
 		report(Stage{Key: "residue_clean", Name: "清理磁盘与运行态残留", Index: 3, Total: 4})
+		// 快照链的 backing 残留：快照/恢复之后域指向的是 overlay，原盘
+		// 不在域 XML 里，下面的清单收集不到（真机实证：删除报成功、
+		// <vm>.qcow2 留在宿主机上）。**先**沿 backing 链收集（原文件还在
+		// 才读得到 backing——先删后探的话链永远为空），再统一删。只收
+		// **以本机名开头**的文件：本产品的命名约定里那是这台机器的快照
+		// overlay/原盘；linked clone 的模板盘不带本机前缀，绝不能顺链误删。
+		residue := backingChainOf(ctx, sysDisk, op.Target+".")
 		for _, path := range append([]string{sysDisk}, dataDiskPaths(dataDisks)...) {
 			if path != "" {
 				_ = os.Remove(path)
 			}
+		}
+		for _, path := range residue {
+			_ = os.Remove(path)
 		}
 	} else if diskAction == "transfer" {
 		report(Stage{Key: "residue_clean", Name: "转移磁盘到我的存储", Index: 3, Total: 4})
@@ -311,6 +322,41 @@ func dataDiskPaths(disks []sys.DiskXML) []string {
 	return out
 }
 
+// backingFileOf 读盘文件的 backing file 路径（无 backing 或读取失败返回空）。
+func backingFileOf(ctx context.Context, path string) string {
+	out, err := sys.Run(ctx, "qemu-img", "info", "--output=json", path)
+	if err != nil {
+		return ""
+	}
+	var info struct {
+		BackingFile string `json:"backing-filename"`
+	}
+	if jsonErr := json.Unmarshal([]byte(out), &info); jsonErr != nil {
+		return ""
+	}
+	return info.BackingFile
+}
+
+// backingChainOf 沿 backing 链收集「可安全删除」的残留盘（不含 path 本身）。
+// 只收文件名以 vmPrefix 开头的：那是本机创建时/快照时生成的盘；模板盘、
+// 外部镜像不带本机前缀，链条在那里自然断掉。
+func backingChainOf(ctx context.Context, path, vmPrefix string) []string {
+	out := []string{}
+	if path == "" {
+		return out
+	}
+	cur := path
+	for i := 0; i < 16; i++ { // 链深上限，防异常环
+		backing := backingFileOf(ctx, cur)
+		if backing == "" || !strings.HasPrefix(filepath.Base(backing), vmPrefix) {
+			break
+		}
+		out = append(out, backing)
+		cur = backing
+	}
+	return out
+}
+
 // ---- 快照（内部快照：virsh snapshot-*）----
 
 func vmSnapshotCreate(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
@@ -328,10 +374,16 @@ func vmSnapshotCreate(ctx context.Context, op agent.Operation, report Reporter) 
 	// '=' after option --quiesce"）；且 quiesce 需要 Guest Agent，关机态
 	// 传它只会让命令失败。
 	state, _ := sys.DomainStateOf(ctx, op.Target)
+	// 实际执行的种类要如实回传：控制面受理时的预测只是初值，UEFI(pflash)
+	// 域不支持内部快照（libvirt 限制），关机 UEFI 域会被这里强制走
+	// --disk-only 外部快照——记录不同步的话界面上 kind 就是错的（真机
+	// 实测：关机 UEFI 建的快照记录成 internal，实际是外部 overlay）。
+	kind := "internal"
 	if state != "running" || !includeMemory {
 		// 关机域或「不含内存」：--disk-only 走外部快照——UEFI(pflash)
 		// 域不支持内部快照（libvirt 限制），--disk-only 是唯一可用路径。
 		args = append(args, "--disk-only")
+		kind = "external"
 		_ = includeMemory
 	}
 	report(Stage{Key: "disk_snapshot", Name: "创建磁盘快照", Index: 2, Total: 3})
@@ -355,7 +407,8 @@ func vmSnapshotCreate(ctx context.Context, op agent.Operation, report Reporter) 
 		}
 	}
 	return &agent.Result{Success: true, Data: map[string]any{
-		"domain_name": name,
+		"domain_name":   name,
+		"snapshot_kind": kind,
 	}}, nil
 }
 

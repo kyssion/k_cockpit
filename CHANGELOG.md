@@ -18,6 +18,20 @@
 ## [Unreleased]
 
 ### Fixed
+- **第三轮收口（2026-10-26 补）**：
+  - **快照 kind 记录错位**：受理时的 kind 是预测值，UEFI 域被 libvirt 强制走外部快照（--disk-only），关机 UEFI 建的快照记录 internal、实际是外部 overlay（真机实证）。agent 改为如实回报实际执行的种类，控制面按结果回写。真机复验：kind=external 且与 overlay 文件一致
+  - **删除虚拟机残留 backing 链（真机实证）**：快照/恢复后域指向 overlay，原盘不在域 XML 里，删除报成功但 <vm>.qcow2 留在宿主机。沿 backing 链补删——**先探链再删**（首版先删后探，qemu-img 对已删文件读不到 backing）；只收文件名以本机名开头的文件，linked clone 的模板盘绝不顺链误删。真机「建→快照→删」零残留复验
+
+### Fixed
+- **第三轮深检（2026-10-26，同环境；安全组/端口安全/端口转发/公网 IP/双层防火墙回滚五链路真机验收）**：
+  - **端口安全整体不可用 + 停用不删流**：控制面 Apply 依赖 agent 的 `port_security.precheck`，agent 从未实现——功能经 API 完全不可用。补实现（OVS/ofctl/端口挂载三项能力探测 + 将写入流预览 + 既有流覆盖提示）；apply 改「先清该口流再按需写入」的期望状态语义（停用=纯清理，此前只加不删，停用后防伪造/隔离流全残留）；隔离与防伪造同优先级双流的歧义改为互斥
+  - **端口转发 add/remove 不对称（真机实证）**：remove 只摘 DNAT，add 写入的两条 FORWARD 放行永久残留——对称删除。真机 add→remove 全清复验
+  - **紧急回滚只清一层（真机实证）**：宿主机防火墙回滚复用节点防火墙的 rollback（只清 KC-FW），KC-HFW 六条规则与 INPUT 跳板全部残留——回滚清两层并恢复 ACCEPT 策略。真机复验归零
+  - **公网 IP 绑定假成功（真机实证）**：控制面 executor 只发 vm_name 从不发 vm_ip，agent 按空 vm_ip 拼 DNAT、iptables 报错被吞——bind 报成功规则 0 条。改为节点侧解析（domifaddr→该机自己的 vnet 邻居），解析不到（关机/无地址）如实报错；unbind 时 VM 可能已关机，按字段级形状匹配从 iptables-save 删除（iptables-save 会把地址规范化成 ip/32，子串匹配会漏）
+  - **vmIP 邻居兜底串号**：返回第一个 vnet 邻居的 IP，多虚拟机宿主机上把别的机器的 IP 当这台的（安全组与公网 DNAT 都会绑错对象）——限定该机自己的 vnet 口
+  - 抓包任务报「抓包完成」+0 字节（实际进行中）——改为「进行中，约 N 秒后可取回」；vswitch create 的重复 -C 冗余清理
+
+### Fixed
 - **第二轮深检 + 真机扩展验证（2026-10-26，同一测试环境；静态深挖 + 快照/看门狗/防火墙/交换机/配置/导出六条链路真机复验）**：
   - **安全组规则空转（高危）**：`KC-SG-*` 链只建不挂，FORWARD 里没有任何跳板——规则全部就位但零流量经过。挂载幂等接入 FORWARD（-d/-s 各一条）；解析不到 VM IP 时**不挂**（兜底网段跳板会把全宿主机转发流量引进带 DROP 链尾的链）。真机验证兜底行为与挂载语法/幂等
   - **防火墙词表/键位错位（高危，真机抓出）**：agent 按 `allow/port/source` 读取而控制面发 `accept/port_start/source_cidr`——「放行 443」落成 `-p tcp -j DROP`（无端口无来源，真机 iptables -S 实证）；`default_action=deny` 只认 `drop` 静默不收紧。按真实下发形状对齐，真机复验规则精确落成
