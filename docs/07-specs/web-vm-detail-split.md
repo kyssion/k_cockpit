@@ -109,7 +109,7 @@
 | 0.1 | `describe` → `web/src/utils/describe.ts`，替换 30 处调用 | `tsc -b` |
 | 0.2 | `ErrorBox` → `web/src/components/common/ErrorBox.tsx`，替换 4 处 | `tsc -b` |
 | 0.3 | `formatMemory` → `web/src/utils/format.ts`（与 `formatBytes` 同文件） | 新增单测（空值 / 0 / 常规值） |
-| 0.4 | **推迟**：`vmKeys.ts` 在批次 2.2 首次出现跨文件 key 时按需建立（只收纳被两个及以上文件使用的 key）。拆分前所有 key 都在同一文件内，此刻建文件属空抽象 | 建立时 `tsc -b` + AC-04 grep 对账 |
+| 0.4 | **取消**：不建立 `vmKeys.ts`（理由见 D-002） | — |
 
 批次 0 结束时**不改变任何组件边界**，`VmDetailPage.tsx` 仅减少被搬走的定义。
 
@@ -130,6 +130,8 @@
 | 2.1 | `EditTab`（含 `FieldControl`、`buildDraft`、`computeChanges`、`toStr`） | `onSaved={refresh}` 由壳传入，语义不变 |
 | 2.2 | `NetworkTab`（三卡） | 壳的 `refresh()` 仍须失效 `['vm-interfaces']`、`['vm-static-ips']`（编辑保存后网卡要重取） |
 | 2.3 | `NetworkModals` / `NetworkSections` | `key` 重挂载留在 `NetworkTab` 调用侧 |
+
+**进度（2026-11-03）**：2.1 `EditTab`、2.2~2.3 `NetworkTab` 组（`NetworkTab` / `NetworkModals` / `NetworkSections`）**已完成**，详情页 2651 → **1282 行**；`NetworkTab` 526 行、`EditTab` 322 行，均 ≤ 600。`NEIGHBOR_STATE_LABEL` 按 R-009 提到文件顶部。0.4 的 `vmKeys.ts` 经评估**取消**（D-002），queryKey 继续以字面量存在，AC-04 保持可 grep 对账。
 
 ### 批次 3：壳瘦身
 
@@ -195,7 +197,7 @@
 | 编号 | 决策 | 理由 |
 |---|---|---|
 | D-001 | `['vm-edit-form']` 的 60s / 默认两种 `staleTime` **原样保留**，不统一 | 统一属于行为变更，需单独评估；重构批次只搬运不改语义 |
-| D-002 | 建立 `web/src/views/vm/vmKeys.ts`，只收纳**跨文件**使用的 key | 解决「壳与页签各自写字符串」的漂移；单文件私有 key 继续内联，避免过早抽象（AGENTS.md：不过度封装） |
+| D-002 | **不建立** `vmKeys.ts`，跨文件 key 继续以字面量写在各文件 | 初稿计划建 key 工厂，落地到批次 2.2 时评估为不划算：工厂会让 **AC-04 的「字面量集合对账」失去自动化能力**（grep 抓不到函数调用），而实际的跨文件 key 只有壳 `refresh()` 与 `NetworkTab` 共用的 `['vm-interfaces', vmID]` / `['vm-static-ips', vmID]` 两条，两处紧邻且都带注释。收益不抵验证能力损失 |
 | D-003 | 不建 `views/vm/` 子目录 | 全仓 `views/` 为扁平结构（60 个文件），新增子目录会让同类文件两套位置 |
 | D-004 | `describe` 放 `utils/` 而非 `views/vm/` | 它是纯错误格式化，与虚拟机域无关，其他域后续可直接复用 |
 | D-005 | 本次不修已发现的两个缺陷（硬编码截图 URL、未使用 `vmID` 字段） | 保持「零行为变更」的可验证性；单独提交便于回滚 |
@@ -210,3 +212,4 @@
 | 2026-11-03 | v0.1 | 初稿：基于对 `VmDetailPage.tsx` 的逐定义测绘（46 个顶层定义、13 个页签、5 条 Query 耦合、3 处超长 JSX）确定产物清单、9 条规则、4 个批次与 8 条验收标准 | AI |
 | 2026-11-03 | v0.2 | 批次 0.1–0.3 落地（`describe` / `ErrorBox` / `formatMemory` 下沉 + 6 个单测）；0.4 修正为**推迟**（拆分前不存在跨文件 key，提前建 `vmKeys.ts` 属空抽象） | AI |
 | 2026-11-03 | v0.3 | 批次 1 完成（5 个页签、5 个提交）：详情页 3971 → 2651 行，最大新文件 494 行；AC-04 每步对账通过 | AI |
+| 2026-11-03 | v0.4 | 批次 2 完成（`EditTab` + `NetworkTab` 组）：详情页 2651 → 1282 行。**D-002 修正**：不建立 `vmKeys.ts`——它会让 AC-04 的字面量对账失效，而跨文件 key 仅两条；`NEIGHBOR_STATE_LABEL` 按 R-009 提前声明 | AI |
