@@ -84,7 +84,6 @@ export function NeighborSection({ vmID }: { vmID: number }) {
   )
 }
 
-
 /**
  * GuestIPSection 来宾里实际配置的公网地址。
  *

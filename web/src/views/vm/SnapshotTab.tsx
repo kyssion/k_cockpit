@@ -491,4 +491,3 @@ function CreateSnapshotModal({
     </Modal>
   )
 }
-

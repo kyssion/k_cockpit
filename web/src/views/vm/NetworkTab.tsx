@@ -110,7 +110,6 @@ export function NetworkTab({ vmID }: { vmID: number }) {
   const ips = staticIPs.data.items
   const pfs = forwards.data.items
 
-
   return (
     <div className="flex flex-col gap-4">
       {notice && (
@@ -523,4 +522,3 @@ function AppliedBadge({ applied, at }: { applied: boolean; at?: string }) {
     </span>
   )
 }
-
