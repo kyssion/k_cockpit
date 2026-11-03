@@ -309,6 +309,9 @@ bin/
 /server
 # 本地数据目录（SQLite 数据文件）
 data/
+# 控制面静态托管目录（web/dist 的拷贝，构建产物不入库）。
+# 前导斜杠锚定根目录：web/public 是前端源码，不能一起忽略。
+/public/
 # SQLite 运行时产物（WAL / 共享内存）
 *.db
 *.db-shm

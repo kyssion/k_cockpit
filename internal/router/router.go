@@ -71,7 +71,10 @@ import (
 // 通过参数传入而非包级变量：路由与 handler 的依赖关系一目了然，
 // 测试也能用替身构造独立的引擎。
 type Deps struct {
-	DB        *gorm.DB
+	DB *gorm.DB
+	// StaticDir 是前端构建产物目录（STATIC_DIR）。为空或目录不存在时不注册
+	// 静态托管，只提供 API（见 static.go）。
+	StaticDir string
 	Auth      *auth.Service
 	Bootstrap *auth.Bootstrap
 	Node      *node.Service
@@ -232,4 +235,7 @@ func Register(h *server.Hertz, deps Deps) {
 	// 靠调用位置表达这条顺序约束。
 	apiDocsHandler := platform.NewAPIDocs(h)
 	v1.GET("/api-endpoints", g.requireAuth, apiDocsHandler.List)
+
+	// 静态托管放在最后：它只接管「以上都没有匹配到」的请求。
+	registerStatic(h, deps.StaticDir)
 }

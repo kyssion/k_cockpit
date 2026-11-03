@@ -221,6 +221,7 @@ func (a *app) registerRoutes(h *server.Hertz) {
 func (a *app) routerDeps() router.Deps {
 	return router.Deps{
 		DB:            a.db,
+		StaticDir:     a.cfg.HTTP.StaticDir,
 		Auth:          a.platform.authSvc,
 		Bootstrap:     a.platform.bootstrap,
 		Node:          a.node.nodeSvc,

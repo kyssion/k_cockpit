@@ -19,6 +19,12 @@
 
 前端构建产物（`web/dist`）由控制面静态托管，**单独部署前端没有意义**。
 
+托管目录由 `STATIC_DIR` 指定（默认 `public`）。启动时该目录下没有 `index.html` 就只提供 API，不会阻断启动（开发期前端跑在 vite dev server 上，这是常态）。行为约定：
+
+- 未匹配的 `/api/*` 始终返回 **JSON 404**，不做 SPA 回退——否则前端会把 HTML 当 JSON 解析，报错位置与真实原因无关；
+- 其余未匹配的 GET/HEAD 回退到 `index.html`（SPA 深链刷新）；
+- `assets/` 下的文件按内容哈希长缓存（`immutable`），`index.html` 等每次回源。
+
 ## 2. 构建与发布物
 
 ```bash

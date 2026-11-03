@@ -17,6 +17,15 @@
 
 ## [Unreleased]
 
+### Added
+- **控制面静态托管前端产物**：`STATIC_DIR`（默认 `public`）指向 `web/dist` 的拷贝，由控制面直接
+  服务前端——此前 `AGENTS.md` 与 `DEPLOYMENT.md` 均声明「由控制面静态托管」，但代码里没有任何
+  静态服务，产物实际无处可放。行为约定：未匹配的 GET/HEAD 回退 `index.html`（SPA 深链刷新）；
+  未匹配的 `/api/*` 始终返回 **JSON 404**（不回退 HTML，否则前端把 HTML 当 JSON 解析，报错位置
+  与真实原因无关）；`assets/` 下按内容哈希长缓存（`immutable`）、`index.html` 每次回源；目录缺失
+  只记日志、不阻断启动（开发期前端跑在 vite dev server 上）。路径经 `path.Clean` + `filepath.Rel`
+  包含性校验，无越界面。
+
 ### Fixed
 - **第五轮深检（VNC 控制台全链 + agent 会话层，真机 WS E2E 验证）**：
   - **VNC 对默认配置的域直接不可用**：`virsh vncdisplay` 的裸显示号输出 `:0` 被旧解析

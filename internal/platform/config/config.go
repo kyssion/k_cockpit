@@ -107,6 +107,10 @@ type Session struct {
 type HTTP struct {
 	Host string
 	Port int
+	// StaticDir 是前端构建产物目录（STATIC_DIR）。部署时通常把 web/dist
+	// 拷成 public 与二进制放在一起；开发期该目录不存在也不影响运行——
+	// 那时前端由 vite dev server 服务，控制面只提供 API。
+	StaticDir string
 }
 
 // Addr 返回监听地址，例如 "0.0.0.0:8080"。
@@ -225,6 +229,8 @@ func Load() (Config, error) {
 		HTTP: HTTP{
 			Host: env("APP_HOST", "0.0.0.0"),
 			Port: envInt("APP_PORT", 8080),
+
+			StaticDir: env("STATIC_DIR", "public"),
 		},
 		DB: DB{
 			Driver: env("DB_DRIVER", DriverSQLite),
