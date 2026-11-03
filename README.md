@@ -1,8 +1,8 @@
 # k_cockpit
 
-> <!-- TODO: 用一句话说明项目定位与目标用户 -->
+> KVM/QEMU 多宿主机虚拟化管理控制台：一个控制面纳管多台宿主机，完成虚拟机的生命周期、模板、网络、存储、用户与配额管理。
 
-[![status](https://img.shields.io/badge/status-pre--alpha-orange)]()
+[![status](https://img.shields.io/badge/status-M5%20in%20progress-orange)]()
 [![go](https://img.shields.io/badge/go-1.27-00ADD8)]()
 [![license](https://img.shields.io/badge/license-TBD-lightgrey)]()
 
@@ -10,69 +10,66 @@
 
 ## 项目简介
 
-<!-- TODO: 3-5 句话说明：解决什么问题、为谁解决、核心价值是什么 -->
+`k_cockpit` 面向需要自建虚拟化平台、又不希望每台宿主机都暴露管理凭据的场景。它把「管理面」与「宿主机」彻底拆开：
+
+- **控制面**（本仓库 `cmd/server`）只持有期望态、配额与任务编排，**不持有任何宿主机登录凭据**；
+- **节点代理**（`cmd/agent`）部署在每台宿主机上，是唯一直接操作 libvirt / OVS / iptables / LVM 的角色，通过**反向** gRPC 长连接 + mTLS 接入，宿主机无需开放入站端口。
+
+能力面对标开源项目 QVMConsole（见 `reference/`，仅作只读参考），不照搬其技术栈。
 
 ## 当前状态
 
-基础框架已可运行：HTTP 服务、双数据库支持、健康检查与示例接口均已就绪。
+| 阶段 | 状态 |
+|---|---|
+| M0 基础设施 / M1 技术选型与骨架 | 已完成 |
+| M2 最小可用（底座 + 单机完整生命周期） | 已完成 |
+| M3 功能完善（模板 / 网络 / 存储 / 配额 / 安全治理） | 已完成 |
+| M4 稳定加固（P2 收尾 / 迁移闭环 / CI / 安全自查） | 控制面部分已完成 |
+| M5 真实 agent 与正式发布 | **进行中**（`feat/agent` 分支：agent 二进制、85 项能力自报、P0–P5 执行器已真机验收） |
 
-- [x] 版本控制与 `.gitignore`
-- [x] AI 协作规范（`AGENTS.md`）
-- [x] 文档体系（`docs/`）
-- [x] 技术栈选型（Go 1.27 + Hertz + GORM；前端见 [ADR-0006](docs/06-decisions/0006-frontend-tech-stack.md)）
-- [x] Go Web 基础框架（健康检查接口）
-- [x] 表结构设计与建库（43 张表，见 `docs/02-architecture/DATA_MODEL.md`）
-- [ ] 业务功能开发
-
-详见 [`docs/01-product/ROADMAP.md`](docs/01-product/ROADMAP.md)。
-
----
+详见 [`docs/01-product/ROADMAP.md`](docs/01-product/ROADMAP.md) 与 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ## 技术栈
 
-| 层 | 选型 | 版本 |
-|---|---|---|
-| 语言 | Go | 1.27 |
-| Web 框架 | CloudWeGo Hertz | v0.10.6 |
-| ORM | GORM | v1.31.2 |
-| 数据库 | PostgreSQL / SQLite | — |
-| SQLite 驱动 | glebarez/sqlite（纯 Go，无需 CGO） | v1.11.0 |
+| 层 | 选型 |
+|---|---|
+| 语言 / Web / ORM | Go 1.27 · CloudWeGo Hertz · GORM |
+| 数据库 | PostgreSQL（生产）· SQLite（本地开发，纯 Go 驱动、无需 CGO） |
+| 控制面 ↔ agent | gRPC 双向流 + Protocol Buffers，mTLS（控制面私有 CA 自举） |
+| 前端 | React 19 · TypeScript · Vite · Tailwind CSS 4 · TanStack Query · Zustand · oxlint |
+| 测试 | 标准库 testing · Vitest · Playwright |
 
-前端（`web/`，规划中）：Vite · React 19 · TypeScript · Tailwind CSS 4 · shadcn/ui · TanStack Query / Zustand · Vitest + Playwright · pnpm（见 [ADR-0006](docs/06-decisions/0006-frontend-tech-stack.md)）。
-
-选型理由见 [`docs/02-architecture/TECH_STACK.md`](docs/02-architecture/TECH_STACK.md)。
+选型理由见 [`docs/02-architecture/TECH_STACK.md`](docs/02-architecture/TECH_STACK.md)，决策历史见 [`docs/06-decisions/`](docs/06-decisions/README.md)。
 
 ---
 
 ## 快速开始
 
-环境要求：**Go 1.27 或更高版本**。默认使用 SQLite，**无需额外安装数据库**。
+环境要求：**Go 1.27+**；前端另需 Node.js LTS + pnpm。默认使用 SQLite，**无需安装数据库**。
 
 ```bash
-# 1. 克隆仓库
-git clone <repo-url>
-cd k_cockpit
-
-# 2. 准备环境变量（默认配置即为 SQLite，可直接运行）
+# 1. 准备环境变量（默认配置即为 SQLite）
 cp .env.example .env
 
-# 3. 安装依赖
+# 2. 安装依赖
 go mod download
+
+# 3. 首次建库（服务启动**不做**自动建表；SQLite 的建库入口是 e2e-init，
+#    按模型建出全套表。SQL 迁移 cmd/migrate 是 PostgreSQL 专用语法）
+go run ./cmd/e2e-init
 
 # 4. 启动服务（默认监听 0.0.0.0:8080）
 go run ./cmd/server
 ```
 
-> 表结构由 `internal/database/migrations/` 下的 SQL 迁移管理，**服务启动不做自动建表**；执行方式见 [`docs/02-architecture/DATA_MODEL.md`](docs/02-architecture/DATA_MODEL.md) 第 6 节。
+服务启动后会打印一次性管理员初始化令牌；首次访问通过 `/setup` 创建管理员（见 [`docs/04-engineering/DEVELOPMENT.md`](docs/04-engineering/DEVELOPMENT.md)）。
 
 ### 验证服务
 
 ```bash
 curl http://127.0.0.1:8080/health
-# {"database":"up","status":"ok"}
+# {"status":"ok","database":"up"}
 ```
-
-> 业务接口尚未实现。第一个业务功能落地后，先在 [`docs/03-api/API.md`](docs/03-api/API.md) 登记接口，再在此补充调用示例。
 
 ### 切换到 PostgreSQL
 
@@ -88,19 +85,52 @@ DB_PASSWORD=your_password
 DB_SSLMODE=disable
 ```
 
-### 常用命令
+自行建库后执行显式迁移（`internal/platform/database/migrations/` 下的 SQL 是**表结构的唯一入口**）：
 
 ```bash
-go build -o bin/server ./cmd/server   # 构建
-gofmt -l .                            # 格式化检查
-go vet ./...                          # 静态检查
-go test ./...                         # 测试
-go test -cover ./...                  # 测试 + 覆盖率
+go run ./cmd/migrate -status   # 只看待应用清单，不改动任何东西
+go run ./cmd/migrate           # 执行
 ```
 
-### 前端（规划中）
+### 节点 agent
 
-前端工程位于 `web/`，技术栈已由 [ADR-0006](docs/06-decisions/0006-frontend-tech-stack.md) 确认（**尚未创建**）。环境要求：Node.js LTS + pnpm；目录结构与命令见 [`docs/02-architecture/FRONTEND.md`](docs/02-architecture/FRONTEND.md) §2 与 [`docs/04-engineering/DEVELOPMENT.md`](docs/04-engineering/DEVELOPMENT.md)。
+```bash
+go build -o bin/agent ./cmd/agent
+bin/agent enroll -server <控制面地址>:8443 -token <一次性令牌>
+bin/agent run
+```
+
+默认身份目录 `/var/lib/k_cockpit-agent` 需要 root 权限，非 root 调试时用 `-state-dir` 指定可写目录。
+
+systemd 单元见 [`deploy/agent/k_cockpit-agent.service`](deploy/agent/k_cockpit-agent.service)。**开发期默认 `AGENT_TRANSPORT=mock`**，不接真实 agent 也能跑通全部流程。
+
+### 前端
+
+```bash
+cd web && pnpm install
+cd web && pnpm dev        # http://localhost:5173，自动代理 /api/v1 到 127.0.0.1:8080
+```
+
+生产构建（`pnpm build`）后把 `web/dist` 拷成控制面的 `public/`（或用 `STATIC_DIR` 指定目录），由控制面直接托管：SPA 深链回退到 `index.html`，未匹配的 `/api/*` 仍返回 JSON 404。
+
+---
+
+## 常用命令
+
+```bash
+# 后端
+go build -o bin/server ./cmd/server
+gofmt -l cmd internal        # 格式化检查
+go vet ./...                 # 静态检查
+go test ./...                # 单元测试
+
+# 前端（在 web/ 下）
+pnpm exec tsc -b             # 类型检查
+pnpm lint                    # oxlint
+pnpm test                    # Vitest
+pnpm test:e2e                # Playwright 冒烟（自拉起 mock 栈）
+pnpm build                   # 产物在 web/dist
+```
 
 ---
 
@@ -108,21 +138,24 @@ go test -cover ./...                  # 测试 + 覆盖率
 
 ```
 k_cockpit/
-├── cmd/server/            # 程序入口
-├── internal/
-│   ├── config/            # 环境变量配置加载与校验
-│   ├── database/          # 数据库连接（PostgreSQL / SQLite 双支持）
-│   │   └── migrations/    # SQL 迁移：表结构的唯一入口
-│   ├── model/             # GORM 数据模型（随功能实现逐步补齐）
-│   ├── handler/           # HTTP 接口实现
-│   └── router/            # 路由注册
-├── web/                   # 前端工程（纯 SPA，规划中，见 docs/02-architecture/FRONTEND.md §2.2）
-├── docs/                  # 项目文档（入口见 docs/README.md）
-├── AGENTS.md              # AI 协作规范（单一事实来源，工具无关）
-├── CONTRIBUTING.md        # 贡献指南
-├── CHANGELOG.md           # 变更日志
-├── SECURITY.md            # 安全策略
-└── .env.example           # 环境变量模板
+├── cmd/
+│   ├── server/           # 控制面入口（装配按域拆在 wire_*.go）
+│   ├── agent/            # 节点代理入口（enroll / run）
+│   └── migrate/          # PostgreSQL 迁移执行器
+├── internal/             # 顶级目录 = 层，二级目录 = 业务域（ADR-0012）
+│   ├── router/           # 路由注册与角色声明
+│   ├── handler/          # HTTP 参数解析与响应
+│   ├── service/          # 业务逻辑（compute / network / storage / ops / node / platform）
+│   ├── repository/       # 数据库访问（分批迁入中）
+│   ├── model/            # 表模型（跨域共享）
+│   ├── platform/         # 基础设施（api / config / database / logging / authz / audit …）
+│   ├── agent/            # 控制面 → 宿主机 的契约与 mock
+│   ├── agentproto/       # gRPC 线上契约（agent.proto）
+│   └── nodeagent/        # agent 侧执行器
+├── web/                  # 前端（纯 SPA）
+├── docs/                 # 全部项目文档（入口 docs/README.md）
+├── reference/            # 只读外部参考项目（git 子模块）
+└── AGENTS.md             # AI 协作规范（单一事实来源）
 ```
 
 ---
@@ -131,16 +164,13 @@ k_cockpit/
 
 | 文档 | 内容 |
 |---|---|
-| [docs/README.md](docs/README.md) | 文档总索引 |
-| [AGENTS.md](AGENTS.md) | AI 协作规范（必读） |
-| [docs/02-architecture/TECH_STACK.md](docs/02-architecture/TECH_STACK.md) | 技术选型与理由 |
-| [docs/02-architecture/ARCHITECTURE.md](docs/02-architecture/ARCHITECTURE.md) | 架构设计 |
-| [docs/03-api/API.md](docs/03-api/API.md) | 接口契约 |
+| [AGENTS.md](AGENTS.md) | 项目规则、技术栈与红线（AI 与人共同必读） |
+| [docs/README.md](docs/README.md) | 文档总索引与阅读路径 |
+| [docs/01-product/PRD.md](docs/01-product/PRD.md) | 功能清单、编号与优先级 |
+| [docs/02-architecture/ARCHITECTURE.md](docs/02-architecture/ARCHITECTURE.md) | 架构设计（控制面 / 节点代理） |
+| [docs/03-api/API.md](docs/03-api/API.md) | 接口契约与清单 |
 | [docs/04-engineering/DEVELOPMENT.md](docs/04-engineering/DEVELOPMENT.md) | 本地开发指南 |
-| [docs/06-decisions/](docs/06-decisions/README.md) | 架构决策记录 |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献指南 |
-
----
+| [docs/06-decisions/](docs/06-decisions/README.md) | 架构决策记录（ADR） |
 
 ## 参与贡献
 

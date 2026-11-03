@@ -606,7 +606,8 @@ erDiagram
 
 - **执行方式**：`go run ./cmd/migrate`（迁移执行器，读取该目录、按 `schema_migration` 去重后执行，单文件单事务）。也可用 `psql "<DSN>" -f <文件>` 手工执行，但**必须自行登记** `schema_migration`，否则执行器会把它当成待应用再跑一遍（虽幂等，但校验和比对会失效）。
 - **执行后登记**：写入 `schema_migration`（`migration_id` = 文件名去扩展名、`checksum` = 文件 sha256、`applied_at`），用于发现"历史迁移被改动"。
-- **双库说明**：本 SQL 为 **PostgreSQL 专用**；本地开发的 SQLite 走 GORM 模型 + `AutoMigrate`（模型须与本文件保持一致，属后续实现项）。
+- **编号撞号的既有例外**：`0018` 与 `0019` 各有两个文件（`0018_bridge_uplink_watchdog` / `0018_drop_unused_security_challenge`、`0019_bridge_detail` / `0019_resource_quota`），源于并行分支。`migration_id` 取**完整文件名**、执行顺序按文件名排序，因此两者都能正常执行、互不覆盖。**但不得改名修复**：`migration_id` 即文件名，改名会让已应用的环境把它当成待应用再跑一遍，校验和比对也随之失效。新增迁移从 `0051` 起继续顺延，保持编号唯一。
+- **双库说明**：本 SQL 为 **PostgreSQL 专用**；本地开发用 SQLite，建表入口是 `go run ./cmd/e2e-init`（`internal/platform/database/testschema.go` 按 GORM 模型 `AutoMigrate` 出全套表），**服务启动不做自动迁移**。
 - **失败处理**：整个脚本在**单事务**内执行，任一句失败即整体回滚，不会留下半成品表结构。
 
 > **前置清理（已实际踩到）**：脚手架阶段的示例模型曾用 GORM `AutoMigrate` 建出一张只有 `id/name/email` 的 `user` 表；
@@ -616,7 +617,7 @@ erDiagram
 ### 6.2 迁移原则
 
 - **建表入口唯一**：结构变更一律走 `internal/platform/database/migrations/` 下的**显式迁移**，执行后写入 `schema_migration`；**服务启动不做自动迁移**。
-- **本地 SQLite（待模型实现）**：GORM 模型落地后，本地开发可由 `AutoMigrate` 建表，模型须与本文件的表与字段保持一致；届时重新引入开关并在 `.env.example` 登记。
+- **本地 SQLite**：由 `cmd/e2e-init`（`BuildTestSchema`）按 GORM 模型 `AutoMigrate` 建表，模型须与本文件的表与字段保持一致；服务启动**不做**自动迁移。模型与迁移脚本的对齐由 `model_alignment_test.go` / `index_alignment_test.go` 静态校验。
 - **必须写显式迁移的场景**（只靠 AutoMigrate 会出错，参考项目已踩过）：
   1. 新增唯一索引前**先去重**（否则建索引直接失败）；
   2. 索引冲突 / 重命名；
@@ -628,7 +629,7 @@ erDiagram
   - 迁移必须**幂等可重入**（重复执行结果一致），失败要么可回滚，要么在文档中明确说明不可回滚的理由。
   - 双库差异：SQLite 不支持直接改列类型 / 删列，需"新建表 → 拷贝 → 改名"；PG 可直接 `ALTER`。**迁移实现按驱动分支**，两条路径都要测。
   - 大表结构变更先评估锁表时间，优先**兼容式变更**（先加列并双写，再切读，最后删旧列）。
-- **命名**：`<时间戳>_<动词>_<对象>`，例如 `20260914_create_vm_table`、`20260920_add_vm_owner_id`。
+- **命名**：`<四位序号>_<动词>_<对象>`，例如 `0051_add_vm_field`；序号连续递增、不复用（既有撞号按 §6.1 的例外说明处理）。
 - **禁止**：直接在生产库手工执行 DDL。任何库结构变化**先有迁移代码，再执行**。
 
 ---

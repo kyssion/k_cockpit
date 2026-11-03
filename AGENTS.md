@@ -40,9 +40,9 @@
 | 测试 | 标准库 testing + Hertz `ut` | — | 用 SQLite 临时文件，不依赖外部服务 |
 | 前端框架 | React | 19 | 纯 SPA；构建产物由控制面静态托管 |
 | 前端语言 | TypeScript（strict） | — | 完整选型见 [ADR-0006](docs/06-decisions/0006-frontend-tech-stack.md) |
-| 前端构建 / 样式 / UI | Vite · Tailwind CSS 4 · shadcn/ui | — | 设计令牌 `--kc-*` 三层桥接，业务代码禁魔法值 |
-| 前端路由 / 状态 | React Router v7（库模式）· TanStack Query · Zustand | — | 服务端状态归 Query，UI 状态归 Zustand |
-| 前端包管理 / 测试 | pnpm · Vitest + Playwright | — | 锁文件 `web/pnpm-lock.yaml`；E2E 覆盖核心链路 |
+| 前端构建 / 样式 / UI | Vite · Tailwind CSS 4（CSS-first）· 自研组件 | — | 组件在 `web/src/components/common/`，**不使用 shadcn/ui / Radix**；设计令牌 `--kc-*` 三层桥接，业务代码禁魔法值 |
+| 前端路由 / 状态 | React Router v8（库模式）· TanStack Query · Zustand | — | 服务端状态归 Query，UI 状态归 Zustand；主版本 v8 与 ADR-0006 记录的 v7 属同库演进（见 [FRONTEND.md](docs/02-architecture/FRONTEND.md) §2） |
+| 前端包管理 / 测试 | pnpm · oxlint · Vitest + Playwright | — | 锁文件 `web/pnpm-lock.yaml`；E2E 覆盖核心链路 |
 
 **AI 注意**：
 - 版本号一律以 `go.mod` 为准，不要凭记忆填写。
