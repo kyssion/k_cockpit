@@ -53,6 +53,18 @@ export function formatBytes(bytes: number | undefined | null): string {
   return `${value.toFixed(digits)} ${units[unit]}`
 }
 
+/**
+ * 把内存容量（MB）格式化为可读值。
+ *
+ * 虚拟化层的内存规格一律以 MB 表示；界面上「2 GB」比「2048 MB」直观，
+ * 但 1536 MB 又不能笼统显示成「2 GB」——所以整 GB 不带小数，非整 GB
+ * 保留一位。与 `formatBytes` 分开：后者的输入是字节，且会一路降到 B。
+ */
+export function formatMemory(mb: number): string {
+  if (mb >= 1024) return `${(mb / 1024).toFixed(mb % 1024 === 0 ? 0 : 1)} GB`
+  return `${mb} MB`
+}
+
 /** 把时间格式化为本地日期时间，用于需要精确值的场景（如详情页）。 */
 export function formatDateTime(iso: string | undefined): string {
   if (!iso) return '—'

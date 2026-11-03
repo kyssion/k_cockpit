@@ -80,13 +80,15 @@ import {
   type VmView,
 } from '@/api/vm'
 import { Button } from '@/components/common/Button'
+import { ErrorBox } from '@/components/common/ErrorBox'
 import { Icon } from '@/components/common/Icon'
 import { Meter } from '@/components/common/Meter'
 import { EmptyState, PageLoading } from '@/components/common/Feedback'
 import { Input } from '@/components/common/Input'
 import { Modal } from '@/components/common/Modal'
 import { StatusBadge } from '@/components/common/StatusBadge'
-import { formatBytes, formatDateTime, relativeTime } from '@/utils/format'
+import { describe } from '@/utils/describe'
+import { formatBytes, formatDateTime, formatMemory, relativeTime } from '@/utils/format'
 import {
   POWER_ACTION_DANGEROUS,
   POWER_ACTION_LABEL,
@@ -3255,14 +3257,6 @@ function toStr(v: unknown): string {
 
 
 
-function ErrorBox({ message }: { message: string }) {
-  return (
-    <p role="alert" className="rounded-card bg-danger/10 px-4 py-3 text-base text-danger">
-      {message}
-    </p>
-  )
-}
-
 function PowerButton({
   action,
   loading,
@@ -3437,11 +3431,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <dd className="text-ink">{children}</dd>
     </div>
   )
-}
-
-function formatMemory(mb: number): string {
-  if (mb >= 1024) return `${(mb / 1024).toFixed(mb % 1024 === 0 ? 0 : 1)} GB`
-  return `${mb} MB`
 }
 
 /**
@@ -3677,11 +3666,6 @@ function GuestIPSection({ vmID }: { vmID: number }) {
       )}
     </section>
   )
-}
-
-function describe(error: unknown): string {
-  if (error instanceof ApiError || error instanceof NetworkError) return error.message
-  return '操作失败，请稍后重试'
 }
 
 /**

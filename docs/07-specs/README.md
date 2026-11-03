@@ -1,7 +1,7 @@
 # 功能规格
 
 > 状态：生效
-> 最后更新：2026-09-15
+> 最后更新：2026-11-03
 > 关联：[`../01-product/PRD.md`](../01-product/PRD.md)（功能编号与优先级）· [`../01-product/ROADMAP.md`](../01-product/ROADMAP.md)（阶段与里程碑）· [`../01-product/CAPABILITY_MAP.md`](../01-product/CAPABILITY_MAP.md)（能力依赖）
 
 本目录存放**单个功能的详细规格**。一份规格对应一个可独立开发与验证的功能单元。
@@ -96,6 +96,7 @@ docs/06-decisions/             不得违背既有 ADR
 | [`f-2-08-vnc-console.md`](f-2-08-vnc-console.md) | 虚拟机 VNC 控制台 | F-2-08 | **Ready**（10 项决策见 §9） | <!-- TODO --> |
 | [`f-10-01-high-risk-verification.md`](f-10-01-high-risk-verification.md) | 高风险操作二次验证 | F-10-01、F-10-02 | **Ready**（10 项决策见 §9） | <!-- TODO --> |
 | [`f-9-01-system-settings.md`](f-9-01-system-settings.md) | 系统设置 | F-9-01 | **Ready**（10 项决策见 §9） | <!-- TODO --> |
+| [`web-vm-detail-split.md`](web-vm-detail-split.md) | 虚拟机详情页拆分重构（**重构规格，无行为变更**） | F-2-03（行为口径见 `f-2-01`） | **Ready**（6 项决策见 §9；1 项待确认见 §8） | <!-- TODO --> |
 
 **M2 规划规格已全部创建完毕（11 / 11，均 `Ready`）**，逐项覆盖核对见 §6.2 末。
 
