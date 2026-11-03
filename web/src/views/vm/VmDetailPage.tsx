@@ -23,8 +23,11 @@ import { TagEditor } from './TagEditor'
 import { ShareTab } from './ShareTab'
 import { CDROMTab } from './CDROMTab'
 import { ConsoleTab } from './ConsoleTab'
+import { CredentialSection } from './CredentialSection'
 import { DiskTab } from './DiskTab'
 import { EventTab } from './EventTab'
+import { PCIeInfoBlock } from './PCIeInfoBlock'
+import { SystemTab } from './SystemTab'
 import { XMLTab } from './XMLTab'
 import { VMMetricsPanel } from '@/views/monitor/MetricsPanel'
 
@@ -58,7 +61,7 @@ import {
   type ScheduleType,
   type VMSchedule,
 } from '@/api/schedule'
-import { isActive, taskApi, type TaskView } from '@/api/task'
+import { isActive, taskApi } from '@/api/task'
 import { platformCheckApi } from '@/api/platformcheck'
 import {
   NIC_MODEL_OPTIONS,
@@ -94,13 +97,9 @@ import { formatBytes, formatDateTime, formatMemory, relativeTime } from '@/utils
 import {
   POWER_ACTION_DANGEROUS,
   POWER_ACTION_LABEL,
-  TASK_STATUS_LABEL,
-  TASK_STATUS_PULSE,
-  TASK_STATUS_TONE,
   VM_STATUS_PULSE,
   VM_STATUS_LABEL,
   VM_STATUS_TONE,
-  taskTypeLabel,
 } from '@/utils/labels'
 
 /** 详情页的页签。取值与 FRONTEND.md §5.3.3 的表格一一对应。 */
@@ -1066,98 +1065,6 @@ function TabBar({ value, onChange }: { value: TabKey; onChange: (k: TabKey) => v
         )
       })}
     </div>
-  )
-}
-
-/** SystemTab 汇总系统信息与最近任务。 */
-function SystemTab({
-  vm,
-  nodeName,
-  tasks,
-}: {
-  vm: VmView
-  nodeName?: string
-  tasks: TaskView[]
-}) {
-  const [resizeOpen, setResizeOpen] = useState(false)
-  return (
-    <>
-      <section className="rounded-card border border-line">
-        <h2 className="border-b border-line px-4 py-2.5 text-sm font-medium text-ink-2">配置</h2>
-        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 px-4 py-3.5 text-base sm:grid-cols-3">
-          <Field label="CPU">{vm.vcpu} 核</Field>
-          <Field label="内存">{formatMemory(vm.memory_mb)}</Field>
-          <Field label="磁盘">
-            <span className="flex items-baseline gap-2">
-              {vm.disk_gb} GB
-              {/* **只能扩不能缩**：缩容会丢数据，因此那个方向根本不给入口
-                  ——给一个点了会被拒的按钮，等于让用户去试一次不可逆的操作。 */}
-              <button
-                className="text-xs text-primary hover:underline"
-                onClick={() => setResizeOpen(true)}
-              >
-                扩容
-              </button>
-            </span>
-          </Field>
-          <Field label="IP">{vm.ip_summary || '—'}</Field>
-          <Field label="所属节点">{nodeName ?? `#${vm.node_id}`}</Field>
-          <Field label="分组">{vm.group_name || '—'}</Field>
-          <Field label="UUID">
-            <span className="kc-mono text-sm">{vm.uuid || '—'}</span>
-          </Field>
-          <Field label="归属">{vm.owner_id ? `用户 #${vm.owner_id}` : '—'}</Field>
-          <Field label="创建时间">{formatDateTime(vm.created_at)}</Field>
-          <Field label="备注">{vm.remark || '—'}</Field>
-          <Field label="最近对账">{formatDateTime(vm.last_synced_at)}</Field>
-          <Field label="控制台">
-            {vm.has_console ? '可用' : '无（display=none）'}
-          </Field>
-        </dl>
-      </section>
-
-      <section className="rounded-card border border-line">
-        <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
-          <h2 className="text-sm font-medium text-ink-2">最近任务</h2>
-          <Link to="/task" className="text-sm text-brand hover:underline">
-            全部任务 →
-          </Link>
-        </div>
-
-        {tasks.length === 0 && (
-          <EmptyState title="没有相关任务" description="对该虚拟机的操作会记录在这里。" />
-        )}
-
-        {tasks.length > 0 && (
-          <table className="w-full border-collapse text-base">
-            <tbody>
-              {tasks.map((t) => (
-                <tr key={t.id} className="border-t border-line first:border-t-0">
-                  <td className="kc-mono px-4 py-2.5 text-ink-3">#{t.id}</td>
-                  <td className="px-4 py-2.5 text-ink">{taskTypeLabel(t.type)}</td>
-                  <td className="px-4 py-2.5">
-                    <StatusBadge tone={TASK_STATUS_TONE[t.status]} pulse={TASK_STATUS_PULSE[t.status]}>
-                      {TASK_STATUS_LABEL[t.status]}
-                    </StatusBadge>
-                  </td>
-                  <td className="px-4 py-2.5 text-ink-2">{relativeTime(t.created_at)}</td>
-                  <td className="px-4 py-2.5 text-xs text-danger">{t.error || ''}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
-
-      {/* 弹窗挂在 Tab 内容的末尾，而不是嵌进上面那张卡的标题栏里——
-          混在标题栏里读起来像是「最近任务」的一部分，而且一旦弹窗改成
-          内联渲染（非 portal），它就会真的出现在那一行里。 */}
-      <ResizeDiskModal
-        open={resizeOpen}
-        vm={vm}
-        onClose={() => setResizeOpen(false)}
-      />
-    </>
   )
 }
 
@@ -3359,56 +3266,6 @@ function DeleteVmModal({
   )
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <dt className="text-xs text-ink-3">{label}</dt>
-      <dd className="text-ink">{children}</dd>
-    </div>
-  )
-}
-
-/**
- * PCIeInfoBlock PCIe 根端口余量。
- *
- * 它回答的是"还能再热插几块设备"。热插一块盘或网卡需要一个空闲的 PCIe
- * 根端口，槽位用完的表现是"挂载命令成功、设备却没出现"——而那个报错里
- * 不会提到槽位，因此值不值得单独占一块地方：那是排查时唯一能想到原因的
- * 地方。
- *
- * 「不支持热插拔」与「槽位用完」必须分开显示：前者要换机型，后者只是扩容。
- */
-function PCIeInfoBlock({ vmID }: { vmID: number }) {
-  const info = useQuery({
-    queryKey: ['vm', vmID, 'pcie'],
-    queryFn: () => vmApi.pcieInfo(vmID),
-    // 按需加载（切到该页才取）：它是一次向节点的请求。
-    staleTime: 30000,
-  })
-
-  if (!info.data) return null
-  const d = info.data
-
-  return (
-    <div className="flex flex-col gap-1.5 rounded-card border border-line px-4 py-3">
-      <div className="flex items-baseline justify-between">
-        <h3 className="text-base font-medium text-ink-2">PCIe 热插槽</h3>
-        <StatusBadge tone={d.hotplug_supported ? (d.free > 0 ? 'success' : 'warning') : 'idle'}>
-          {d.hotplug_supported ? `可用 ${d.free}` : '不支持热插拔'}
-        </StatusBadge>
-      </div>
-      {d.unavailable ? (
-        <p className="text-sm text-ink-3">{d.unavailable}</p>
-      ) : (
-        <p className="kc-nums text-sm text-ink-3">
-          共 {d.total} 个，已用 {d.used} 个，剩 {d.free} 个 · 机型 {d.machine_type}
-          {d.reason && <span className="block">{d.reason}</span>}
-        </p>
-      )}
-    </div>
-  )
-}
-
 /**
  * NeighborSection 邻居表（ARP / NDP）。
  *
@@ -3564,128 +3421,6 @@ function GuestIPSection({ vmID }: { vmID: number }) {
 }
 
 /**
- * ResizeDiskModal 关机状态下的磁盘扩容。
- *
- * 几处必须在按下按钮**之前**说清的事：
- *
- *   - **只能扩，不能缩**。缩容会丢数据——镜像变小后文件系统里超出新边界的
- *     块还在原地，而文件系统不再知道自己拥有它们。因此界面上只给扩容入口，
- *     不给一个点了会被拒的缩容框。
- *   - **运行中的机器请走「来宾自动化」**。那条路会顺带在来宾里扩好文件系统；
- *     这条只扩宿主机侧，**来宾里的分区要自己扩**。
- */
-function ResizeDiskModal({
-  open,
-  vm,
-  onClose,
-}: {
-  open: boolean
-  vm: VmView
-  onClose: () => void
-}) {
-  const queryClient = useQueryClient()
-  const [size, setSize] = useState('')
-  const [error, setError] = useState('')
-  const [result, setResult] = useState<{ old_gb: number; new_gb: number } | null>(null)
-
-  const running = vm.status === 'running'
-  const newGB = Number(size) || 0
-  // 只接受**扩大**：小于等于当前容量时禁用提交，而不是等后端拒绝——
-  // 那种报错会让人以为是自己填错了格式。
-  const valid = newGB > vm.disk_gb && newGB <= 65536
-
-  const resize = useMutation({
-    mutationFn: () => vmApi.resizeDisk(vm.id, newGB),
-    onSuccess: (r) => {
-      setResult({ old_gb: r.old_gb, new_gb: r.new_gb })
-      setError('')
-      void queryClient.invalidateQueries({ queryKey: ['vm', vm.id] })
-      void queryClient.invalidateQueries({ queryKey: ['tasks'] })
-    },
-    onError: (e) => setError(describe(e)),
-  })
-
-  const close = () => {
-    setSize('')
-    setResult(null)
-    setError('')
-    onClose()
-  }
-
-  return (
-    <Modal
-      open={open}
-      title="扩容磁盘"
-      description="把系统盘扩大。宿主机侧扩完之后，来宾里还需要扩分区与文件系统。"
-      onClose={close}
-      footer={
-        result ? (
-          <Button size="sm" onClick={close}>
-            知道了
-          </Button>
-        ) : (
-          <>
-            <Button variant="secondary" size="sm" onClick={close}>
-              取消
-            </Button>
-            <Button
-              size="sm"
-              disabled={!valid || running}
-              loading={resize.isPending}
-              onClick={() => resize.mutate()}
-            >
-              扩容
-            </Button>
-          </>
-        )
-      }
-    >
-      {result ? (
-        <div className="flex flex-col gap-2">
-          <p className="text-base text-ink">
-            宿主机侧已从 {result.old_gb} GB 扩到 {result.new_gb} GB。
-          </p>
-          {/* **这一步不能省**：宿主机侧扩完只是「盘子变大了」，而操作系统
-              看到的仍然是原来的分区。不提醒的话，用户会以为扩容失败。 */}
-          <p className="rounded-control border border-warning/40 bg-warning/5 px-3 py-2 text-sm text-warning">
-            来宾里还需要扩分区与文件系统，否则系统看到的仍是原来的容量。
-            启动虚拟机后在来宾里执行：
-            <span className="kc-mono mt-1 block">growpart /dev/vda 1</span>
-            <span className="kc-mono block">resize2fs /dev/vda1</span>
-            Windows 用「磁盘管理」里的「扩展卷」。
-          </p>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-3">
-          <Input
-            label="新容量（GB）"
-            value={size}
-            onChange={(e) => setSize(e.target.value)}
-            hint={`当前 ${vm.disk_gb} GB。只能扩大——缩容会让文件系统里超出新边界的块失去归属，而它自己不知道，下一次写入就可能覆盖别的内容。需要更小的盘请新建一台再迁移过去。`}
-          />
-
-          {/* 运行中**直接禁用并指向另一个入口**，而不是等后端拒绝：
-              那种报错会让人以为是自己填错了什么。 */}
-          {running && (
-            <p className="rounded-control border border-warning/40 bg-warning/5 px-3 py-2 text-sm text-warning">
-              这台虚拟机正在运行。运行中的扩容请用「来宾自动化」页签里的
-              「扩容磁盘」——它会**顺带在来宾里扩好文件系统**，一步到位。
-              这里的入口用于关机状态的机器。
-            </p>
-          )}
-
-          {error && (
-            <p className="rounded-control border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
-              {error}
-            </p>
-          )}
-        </div>
-      )}
-    </Modal>
-  )
-}
-
-/**
  * MakeIndependentModal 把链接克隆的磁盘合并为独立盘。
  *
  * 这个操作**本身没有可选项**（不像扩容要填数字），因此弹窗的职责只有两件：
@@ -3765,102 +3500,5 @@ function MakeIndependentModal({
         )}
       </div>
     </Modal>
-  )
-}
-
-/**
- * CredentialSection 登录凭据（G-30）。
- *
- * 明文**只读一次、显示一次**：每次刷新页面都要重新点「显示」才会再取——
- * 后端对每次读取都写审计，界面上「主动取一下」的动作与审计条目一一对应，
- * 而不是页面一打开密码就躺在那里。
- */
-function CredentialSection({ vmID }: { vmID: number }) {
-  const [revealed, setRevealed] = useState(false)
-  const [copied, setCopied] = useState<'user' | 'pass' | null>(null)
-
-  // 凭据的读取是**用户动作驱动**而不是页面加载驱动：
-  // staleTime 为 0 + 手动 refetch 都不如「enabled 由 revealed 控制」直白——
-  // 没点「显示」就永远不发请求，审计里也就没有多余的读取记录。
-  const cred = useQuery({
-    queryKey: ['vm-initial-credential', vmID],
-    queryFn: () => vmApi.initialCredential(vmID),
-    enabled: revealed,
-    staleTime: 0,
-    gcTime: 0,
-  })
-
-  const copy = async (text: string, which: 'user' | 'pass') => {
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopied(which)
-      setTimeout(() => setCopied(null), 2000)
-    } catch {
-      // 剪贴板不可用时用户仍可手动选中，不打断。
-    }
-  }
-
-  return (
-    <section className="rounded-card border border-line bg-surface p-4">
-      <div className="flex items-baseline justify-between gap-2">
-        <h3 className="text-sm text-ink-3">登录凭据</h3>
-        <span className="text-xs text-ink-3">每次读取都会记录到审计</span>
-      </div>
-
-      {!revealed ? (
-        <div className="mt-2.5 flex flex-wrap items-center gap-2">
-          <Button variant="secondary" size="sm" onClick={() => setRevealed(true)}>
-            显示登录凭据
-          </Button>
-          <span className="text-sm text-ink-3">
-            创建时注入的初始密码；改过密码后请以来宾自动化里的重设结果为准。
-          </span>
-        </div>
-      ) : cred.isLoading ? (
-        <p className="mt-2.5 text-sm text-ink-3">读取中…</p>
-      ) : cred.isError ? (
-        <p className="mt-2.5 rounded-control border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
-          {describe(cred.error)}
-        </p>
-      ) : !cred.data?.has ? (
-        <p className="mt-2.5 text-sm text-ink-3">
-          这台机器创建时没有设置初始密码。可在下方「来宾自动化」里为它重设一个。
-        </p>
-      ) : (
-        <dl className="mt-2.5 grid gap-2 sm:grid-cols-2">
-          <div className="flex items-center justify-between gap-2 rounded-control border border-line px-3 py-2">
-            <div className="min-w-0">
-              <dt className="text-xs text-ink-3">用户名</dt>
-              <dd className="truncate font-mono text-base text-ink">{cred.data.username}</dd>
-            </div>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => copy(cred.data?.username ?? '', 'user')}
-            >
-              {copied === 'user' ? '已复制' : '复制'}
-            </Button>
-          </div>
-          <div className="flex items-center justify-between gap-2 rounded-control border border-line px-3 py-2">
-            <div className="min-w-0">
-              <dt className="text-xs text-ink-3">密码</dt>
-              <dd className="truncate font-mono text-base text-ink">{cred.data.password}</dd>
-            </div>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => copy(cred.data?.password ?? '', 'pass')}
-            >
-              {copied === 'pass' ? '已复制' : '复制'}
-            </Button>
-          </div>
-          {cred.data.created_at && (
-            <p className="text-xs text-ink-3 sm:col-span-2">
-              设置于 {cred.data.created_at}
-            </p>
-          )}
-        </dl>
-      )}
-    </section>
   )
 }
