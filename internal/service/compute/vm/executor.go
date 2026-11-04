@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"strconv"
 	"strings"
@@ -591,21 +592,40 @@ func (e *CreateExecutor) attachPassthrough(
 // 哪些可移动介质"这个问题有两个答案，而且 vm_cdrom 的 bus 里也没有
 // "floppy"——硬加进去等于让一个字段同时表达设备和总线两件事。
 func (e *CreateExecutor) attachFloppy(ctx context.Context, vm *model.VM, fileID int64) error {
+	var file model.StorageFile
+	if err := e.db.WithContext(ctx).
+		Where("id = ? AND node_id = ?", fileID, vm.NodeID).
+		First(&file).Error; err != nil {
+		return fmt.Errorf("软盘镜像不存在或不属于该节点: %w", err)
+	}
 	fid := fileID
+	result, err := e.agent.Execute(ctx, agent.Operation{
+		Kind:   agent.OpVMFloppyApply,
+		NodeID: vm.NodeID,
+		Target: vm.Name,
+		Params: map[string]any{
+			"action": "attach", "vm_id": vm.ID, "vm_name": vm.Name,
+			"file_id": fid, "rel_path": file.RelPath,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if result == nil || !result.Success {
+		msg := "节点未返回结果"
+		if result != nil {
+			msg = result.Message
+		}
+		return fmt.Errorf("挂载软盘失败: %s", msg)
+	}
+	// 节点成功后才写记录：反过来的话，一次失败的挂载会留下
+	// floppy_file_id，详情页会显示一块实际不存在的软盘。
 	if err := e.db.WithContext(ctx).Model(&model.VM{}).
 		Where("id = ?", vm.ID).
 		Updates(map[string]any{"floppy_file_id": fid, "updated_at": time.Now()}).Error; err != nil {
 		return err
 	}
-	_, err := e.agent.Execute(ctx, agent.Operation{
-		Kind:   agent.OpVMFloppyApply,
-		NodeID: vm.NodeID,
-		Target: vm.Name,
-		Params: map[string]any{
-			"action": "attach", "vm_id": vm.ID, "vm_name": vm.Name, "file_id": fid,
-		},
-	})
-	return err
+	return nil
 }
 
 // orDefault 在值为空时取默认值。

@@ -139,6 +139,8 @@ export function BindIPModal({
   const [ip, setIP] = useState('')
   const [order, setOrder] = useState(nics[0] ? String(nics[0].order) : '')
   const [dhcp, setDHCP] = useState(true)
+  // DHCP 静态租约需要具体的网卡 MAC；未指定网卡时只能手工配置。
+  const dhcpAvailable = nics.length > 0 && order !== ''
 
   return (
     <Modal
@@ -158,7 +160,7 @@ export function BindIPModal({
               onSubmit({
                 ip: ip.trim(),
                 interface_order: order === '' ? undefined : Number(order),
-                is_dhcp_reservation: dhcp,
+                is_dhcp_reservation: dhcp && dhcpAvailable,
               })
             }
           >
@@ -197,13 +199,16 @@ export function BindIPModal({
           <input
             type="checkbox"
             className="mt-0.5"
-            checked={dhcp}
+            checked={dhcp && dhcpAvailable}
+            disabled={!dhcpAvailable}
             onChange={(e) => setDHCP(e.target.checked)}
           />
           <span>
             <span className="block text-base text-ink">通过 DHCP 静态租约下发</span>
             <span className="block text-sm text-ink-3">
-              关闭时只记录分配关系，需要你在来宾系统里手工配置地址。
+              {dhcpAvailable
+                ? '关闭时只记录分配关系，需要你在来宾系统里手工配置地址。'
+                : '请先选择一块网卡；未指定网卡时只能手工配置地址。'}
             </span>
           </span>
         </label>

@@ -1,9 +1,7 @@
 // ex_net_extra.go：网络治理的长尾动作（ACL / 交换机维护 / 计数 / 带宽 /
 // IPv6 策略 / 公网 IP 运维 / 抓包取回）。
 //
-// 这些动作在 P3 时只接了控制面与 mock；节点侧从未实现，导致真实节点上
-// 全部返回「未实现」。本文件按控制面已有的参数形状接通真实的 iptables /
-// OVS / ip / tc 操作。
+// 本文件按控制面参数形状接通真实的 iptables / OVS / ip / tc 操作。
 package nodeagent
 
 import (
@@ -11,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"os"
@@ -184,6 +183,7 @@ func vmVPCSwitchMigrate(ctx context.Context, op agent.Operation, report Reporter
 	bridge := op.Target
 	spec := mapParam(op.Params, "spec")
 	uplink := strings.TrimSpace(strOf(spec["uplink_if"]))
+	oldUplink := strings.TrimSpace(strOf(spec["old_uplink_if"]))
 	vlan, _ := paramInt(spec, "vlan_id")
 	if bridge == "" || uplink == "" {
 		return failResult("缺少目标网桥或上行网卡"), nil
@@ -196,6 +196,12 @@ func vmVPCSwitchMigrate(ctx context.Context, op agent.Operation, report Reporter
 	moved := 0
 	ovsBridge := sys.RunOK(ctx, "ovs-vsctl", "br-exists", bridge)
 	if ovsBridge {
+		if cur, err := sys.Run(ctx, "ovs-vsctl", "port-to-br", uplink); err == nil {
+			cur = strings.TrimSpace(cur)
+			if cur != "" && cur != bridge {
+				return failResult("目标上行口已属于另一个 OVS 网桥: " + cur), nil
+			}
+		}
 		if _, err := sys.Run(ctx, "ovs-vsctl", "--may-exist", "add-port", bridge, uplink); err != nil {
 			return failResult("上行口接入 OVS 失败: " + err.Error()), nil
 		}
@@ -223,6 +229,15 @@ func vmVPCSwitchMigrate(ctx context.Context, op agent.Operation, report Reporter
 	}
 
 	report(Stage{Key: "reconnect", Name: "恢复端口", Index: 2, Total: 3})
+	// 迁移必须把旧上行摘掉。只 add 不 del 会让新旧上行同时挂在桥上，
+	// 轻则双出口，重则环路。
+	if oldUplink != "" && oldUplink != uplink {
+		if ovsBridge {
+			_, _ = sys.Run(ctx, "ovs-vsctl", "--if-exists", "del-port", bridge, oldUplink)
+		} else {
+			_, _ = sys.Run(ctx, "ip", "link", "set", oldUplink, "nomaster")
+		}
+	}
 	_, _ = sys.Run(ctx, "ip", "link", "set", bridge, "up")
 	report(Stage{Key: "verify", Name: "校验迁移结果", Index: 3, Total: 3})
 	return &agent.Result{
@@ -425,7 +440,8 @@ func vmPublicIPPreview(ctx context.Context, op agent.Operation, report Reporter)
 	vmName := strParam(op.Params, "vm_name")
 	report(Stage{Key: "inspect", Name: "检查现有规则", Index: 1, Total: 2})
 	out := agent.PublicIPPreview{}
-	if mode == "" || mode == "nat" {
+	switch mode {
+	case "", "nat", "nat_1to1":
 		target := ""
 		if vmName != "" {
 			target = vmIP(ctx, vmName)
@@ -436,8 +452,29 @@ func vmPublicIPPreview(ctx context.Context, op agent.Operation, report Reporter)
 			out.Added = append(out.Added,
 				fmt.Sprintf("iptables -t nat -A PREROUTING -d %s -j DNAT --to-destination %s", ip, target))
 		}
-	} else {
-		out.Warnings = append(out.Warnings, "该模式由节点路由/桥接配置承载，预览仅展示 NAT 部分")
+	case "routed":
+		target := ""
+		if vmName != "" {
+			target = vmIP(ctx, vmName)
+		}
+		if target == "" || target == "0.0.0.0/0" {
+			out.Warnings = append(out.Warnings, "经典路由要求来宾已配置该地址且能被节点解析到 IP")
+			break
+		}
+		if strings.Contains(ip, ":") {
+			out.Added = append(out.Added,
+				fmt.Sprintf("ip -6 route replace %s/128 via %s", ip, target),
+				fmt.Sprintf("ip -6 neigh replace proxy %s dev <uplink>", ip))
+		} else {
+			out.Added = append(out.Added,
+				fmt.Sprintf("ip route replace %s/32 via %s", ip, target),
+				fmt.Sprintf("ip neigh replace proxy %s dev <uplink>", ip))
+		}
+	case "bridged":
+		out.Warnings = append(out.Warnings,
+			"经典桥接不做宿主机 NAT/路由：来宾必须把该地址配在网卡上，且与宿主机处于同一二层网络")
+	default:
+		out.Warnings = append(out.Warnings, "未知的公网地址模式: "+mode)
 	}
 	report(Stage{Key: "render", Name: "生成预览", Index: 2, Total: 2})
 	return &agent.Result{
@@ -462,6 +499,7 @@ func vmPublicIPReload(ctx context.Context, op agent.Operation, report Reporter) 
 				"action":  "bind",
 				"ip":      strOf(b["public_ip"]),
 				"vm_name": strOf(b["vm_name"]),
+				"mode":    strOf(b["mode"]),
 			},
 		}, func(Stage) {})
 		if err != nil || res == nil || !res.Success {
@@ -602,20 +640,42 @@ func vmCaptureFetch(ctx context.Context, op agent.Operation, report Reporter) (*
 	if err != nil {
 		return failResult("抓包文件不存在: " + err.Error()), nil
 	}
-	if st.Size() > 32<<20 {
-		return failResult("抓包文件超过 32 MiB，当前下载通道不支持分片，请缩短抓包时长后重试"), nil
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return failResult("读取抓包文件失败: " + err.Error()), nil
-	}
+	offset, hasOff := paramInt64(op.Params, "offset")
+	length, hasLen := paramInt64(op.Params, "length")
 	report(Stage{Key: "stream_back", Name: "回传文件内容", Index: 2, Total: 2})
-	return &agent.Result{
-		Success: true,
-		Data: map[string]any{agent.CaptureContentKey: agent.ExportContent{
-			Data: data, MIME: "application/vnd.tcpdump.pcap",
-		}},
-	}, nil
+	if !hasOff || !hasLen {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return failResult("读取抓包文件失败: " + err.Error()), nil
+		}
+		return &agent.Result{Success: true, Data: map[string]any{
+			agent.CaptureContentKey: agent.ExportContent{
+				Data: data, MIME: "application/vnd.tcpdump.pcap",
+			},
+			"total_size": st.Size(),
+		}}, nil
+	}
+	if offset < 0 || offset > st.Size() || length <= 0 {
+		return failResult("抓包分片范围非法"), nil
+	}
+	if offset+length > st.Size() {
+		length = st.Size() - offset
+	}
+	buf := make([]byte, length)
+	f, err := os.Open(path)
+	if err != nil {
+		return failResult("打开抓包文件失败: " + err.Error()), nil
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := f.ReadAt(buf, offset); err != nil && err != io.EOF {
+		return failResult("读取抓包分片失败: " + err.Error()), nil
+	}
+	return &agent.Result{Success: true, Data: map[string]any{
+		agent.CaptureContentKey: agent.ExportContent{
+			Data: buf, MIME: "application/vnd.tcpdump.pcap",
+		},
+		"total_size": st.Size(),
+	}}, nil
 }
 
 // vmNetworkCaptureDelete 实现 network.capture.delete。

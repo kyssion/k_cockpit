@@ -60,7 +60,7 @@ cleanup 波及目标侧定义与 NVRAM。跨节点分片中转（relay 循环）
 | P2 生命周期+控制台 | create/clone/delete、电源、快照、光驱、截帧、VNC 流 | ✅ 真机验收通过（aarch64 UEFI+ramfb 建→开→截帧→删；10-22 复验：多数据盘创建/删除、光驱挂载） | 槽位记账精化；克隆 E2E |
 | P3 网络 | vpc.switch（OVS+dnsmasq+NAT）、桥/上行口（看门狗）、安全组（per-VM 链）、双层防火墙、端口转发 DNAT、公网 IP DNAT、端口安全（OVS 流表）、镜像、抓包（tcpdump）、收敛修复、ACL/交换机迁移/计数/带宽/IPv6 | ✅ 执行器真机部署（10-22 镜像全链路验收）；长尾 14 项 2026-11-04 接通、单测通过 | OVS 原生流表口径深化；交换机迁移真机验收 |
 | P4 存储与模板 | 池格式化挂载/删除/配置/卸载/trim、分区、LVM 卷、文件提交与读取、9p 共享、模板制备/维护/导入导出/预处理、镜像导入 | ✅ 执行器部署（10-22 分片上传→文件落盘真机验证）；模板/镜像 14 项 2026-11-04 接通、单测通过 | 模板包大文件真机验收；virt-customize 环境验收 |
-| P5 长尾 | 冷迁移、重装（备份→重建→失败还原）、救援（配置快照）、导出、口令审计（读 shadow+crypt 比对）、SSH 开关（DenyUsers drop-in+踢会话）、配额处置（FORWARD 链）、平台修复 | ✅ 执行器部署（真机口令审计 36 账号验证；10-22 SSH 开关双向 reload 真机验收通过） | 热迁移/脏页采样、来宾自动化（需 guest-agent）、takeover 完整重建 |
+| P5 长尾 | 冷迁移、重装（备份→重建→失败还原）、救援（配置快照 + CDROM 启动顺序）、导出（qcow2/raw/OVA）、口令审计（读 shadow+crypt 比对）、SSH 开关（DenyUsers drop-in+踢会话）、配额处置（FORWARD 链）、平台修复 | ✅ 执行器部署（真机口令审计 36 账号验证；10-22 SSH 开关双向 reload 真机验收通过） | live 热迁移（架构边界阻断）、来宾自动化（需 guest-agent）、takeover 完整重建 |
 
 ### 2.1 mock 兜底项补齐（2026-11-04 完成）
 
@@ -80,6 +80,32 @@ cleanup 波及目标侧定义与 NVRAM。跨节点分片中转（relay 循环）
 - `public_ip.reload` 增补 `bindings` 列表（节点不知道控制面的绑定关系）。
 
 **2026-11-04 同时删除**：`agent.MockClient`、`AGENT_TRANSPORT`、`internal/devdata`、模拟节点、`/api/v1/dev/agent-register`、前端模拟标记（见 [ADR-0013](../06-decisions/0013-remove-mock-transport.md)）。测试改为每包自写 stub。
+
+### 2.2 第一轮复审后的补强（2026-11-04）
+
+第一轮“注册即接通”之后，逐项对照真实命令路径，又修了以下问题：
+
+- **长耗时命令超时**：`vm.create` 完整克隆、`vm.reinstall`、`vm.export`、`vm.migrate` 的 `qemu-img convert` / `cp` 原先仍用 10s 探测超时；已改用 `RunTimeout`。
+- **OVA 导出**：控制面允许 `ova`，但 `qemu-img` 没有 ova 输出格式。现改为 VMDK（streamOptimized）+ OVF + SHA1 清单打 tar，`export.fetch` 的 MIME 为 `application/ovf`。
+- **假成功**：
+  - `vm.floppy.apply` 从“返回成功但什么都没做”改为真实 attach/detach，控制面补 `rel_path`（创建时从 `storage_file` 解析）。
+  - `vm.staticip.change` 改为写 dnsmasq `dhcp-host`；控制面补 `mac / bridge_name / dhcp_start / dhcp_end`。
+  - `platform.repair` 改为按控制面下发的完整 `items`（端口安全 / 公网 IP / 端口镜像）重新下发，不再固定返回 `repaired: 0`。
+  - `vm.nvram.repair` 改为备份并用固件模板重置 NVRAM。
+- **公网 IP 模式**：`nat_1to1` 走 DNAT；`routed` 添加路由与 proxy ARP；`bridged` 不做宿主侧 NAT/路由，并要求来宾自行配置地址。
+- **交换机迁移**：控制面补 `old_uplink_if`，节点在接入新上行后摘掉旧上行，并校验目标口不属于其它 OVS 桥。
+- **任务恢复**：启动时把遗留 `running` 转为 `unknown`，宽限期后落 `failed` 并释放资源锁；新增 `recoverStale / sweepUnknown`。
+- **运行态对账**：指标采集器每轮先读 `OpNodeDomains`，把 VM 的 `status / present / last_synced_at` 校正到真实域列表。
+- **抓包下载**：`capture.fetch` 改为 offset/length 分片，控制面与 handler 流式转发，不再有 32 MiB 上限。
+- **端口安全 PPS**：`port_security.apply` 写 OVS meter，不再忽略 `pps_limit`。
+- **救援模式**：进入救援时把 CDROM 放到 boot 顺序第一位，退出时校验还原结果。
+
+**仍未完成 / 有意的边界**：
+- live 热迁移仍被 ADR-0005 的节点间互信边界阻断（offline/warm 可用）。
+- `vm.migrate.assess` 的**带宽**仍按源节点默认路由网卡协商速率估算；跨节点真实测速需要双端协同。热迁移评估的脏页已改为触发 `domdirtyrate-calc` 后采样。
+- `template.preprocess` 的 `install_agent / inject_ssh_key` 依赖节点 `virt-customize` 与来宾网络，缺工具链时返回 `Unavailable`。
+- 模板/镜像/救援等新路径只做了单测与命令边界验证，**仍需 Linux + libvirt 真机验收**。
+- `repository` 分层、单实例队列/实时总线、agent root 运行属于架构级待办，未在本次功能修复中改动。
 
 ## 3. 实现约束（继承既有决策）
 

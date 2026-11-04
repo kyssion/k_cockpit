@@ -16,9 +16,11 @@
 package capture
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"strings"
 	"time"
@@ -447,9 +449,11 @@ func derefStr(p *string) string {
 // ——抓包文件里是完整的流量内容（明文密码、会话令牌），它比导出产物更
 // 不适合暴露任何绕过权限判断的访问方式。归属校验与 List/Delete 同一条
 // 规则：租户只能取自己发起的。
+const captureChunkSize = 4 << 20
+
 func (s *Service) File(
 	ctx context.Context, id int64, v authz.Viewer, operatorName, clientIP string,
-) (fileName string, data []byte, mime string, err error) {
+) (fileName string, data io.Reader, mime string, err error) {
 	var row model.NetworkCapture
 	if err := s.db.WithContext(ctx).First(&row, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -466,20 +470,11 @@ func (s *Service) File(
 		return "", nil, "", api.ValidationFailed("该抓包尚未完成或文件已不在节点上")
 	}
 
-	result, err := s.agent.Execute(ctx, agent.Operation{
-		Kind:   agent.OpCaptureFetch,
-		NodeID: row.NodeID,
-		Target: derefStr(row.Interface),
-		Params: map[string]any{"file_path": derefStr(row.FilePath)},
-	})
-	if err != nil {
-		return "", nil, "", api.Unavailable("节点不可达，无法获取抓包文件")
+	first, total, ferr := s.fetchCaptureChunk(ctx, row, 0, captureChunkSize)
+	if ferr != nil {
+		return "", nil, "", ferr
 	}
-	if !result.Success {
-		return "", nil, "", api.ValidationFailed(result.Message)
-	}
-	content, ok := result.Data[agent.CaptureContentKey].(agent.ExportContent)
-	if !ok || len(content.Data) == 0 {
+	if len(first.Data) == 0 {
 		return "", nil, "", api.Unavailable("节点未返回抓包文件内容")
 	}
 
@@ -493,9 +488,85 @@ func (s *Service) File(
 	})
 
 	name := fmt.Sprintf("capture-%d-%s.pcap", row.ID, s.now().Format("20060102-150405"))
-	mime = content.MIME
+	mime = first.MIME
 	if mime == "" {
 		mime = "application/vnd.tcpdump.pcap"
 	}
-	return name, content.Data, mime, nil
+	if total <= int64(len(first.Data)) {
+		return name, bytes.NewReader(first.Data), mime, nil
+	}
+	return name, &captureChunkReader{
+		svc: s, row: row, offset: int64(len(first.Data)),
+		total: total, buf: first.Data,
+	}, mime, nil
+}
+
+// fetchCaptureChunk 从节点取一段抓包文件。
+func (s *Service) fetchCaptureChunk(
+	ctx context.Context, row model.NetworkCapture, offset, length int64,
+) (agent.ExportContent, int64, error) {
+	result, err := s.agent.Execute(ctx, agent.Operation{
+		Kind:   agent.OpCaptureFetch,
+		NodeID: row.NodeID,
+		Target: derefStr(row.Interface),
+		Params: map[string]any{
+			"file_path": derefStr(row.FilePath),
+			"offset":    offset, "length": length,
+		},
+	})
+	if err != nil {
+		return agent.ExportContent{}, 0, api.Unavailable("节点不可达，无法获取抓包文件")
+	}
+	if !result.Success {
+		return agent.ExportContent{}, 0, api.ValidationFailed(result.Message)
+	}
+	content, ok := result.Data[agent.CaptureContentKey].(agent.ExportContent)
+	if !ok {
+		return agent.ExportContent{}, 0, api.Unavailable("节点未返回抓包文件内容")
+	}
+	total := int64(len(content.Data))
+	switch v := result.Data["total_size"].(type) {
+	case float64:
+		total = int64(v)
+	case int64:
+		total = v
+	case int:
+		total = int64(v)
+	}
+	return content, total, nil
+}
+
+// captureChunkReader 按 4 MiB 分片从节点拉取抓包文件，避免整文件进内存。
+type captureChunkReader struct {
+	svc    *Service
+	row    model.NetworkCapture
+	offset int64
+	total  int64
+	buf    []byte
+}
+
+func (r *captureChunkReader) Read(p []byte) (int, error) {
+	for len(r.buf) == 0 {
+		if r.offset >= r.total {
+			return 0, io.EOF
+		}
+		n := int64(captureChunkSize)
+		if r.offset+n > r.total {
+			n = r.total - r.offset
+		}
+		// 请求 ctx 在 handler 返回后可能已被取消；下载流的后续分片
+		// 必须独立于它，否则大文件只能下出第一片。
+		chunk, _, err := r.svc.fetchCaptureChunk(context.Background(), r.row, r.offset, n)
+		if err != nil {
+			return 0, err
+		}
+		if len(chunk.Data) == 0 {
+			return 0, io.EOF
+		}
+		r.buf = chunk.Data
+		r.offset += int64(len(chunk.Data))
+	}
+	n := copy(p, r.buf)
+	r.buf = r.buf[n:]
+	return n, nil
 }

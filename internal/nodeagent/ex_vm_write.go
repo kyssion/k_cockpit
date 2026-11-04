@@ -69,8 +69,9 @@ func vmCreate(ctx context.Context, op agent.Operation, report Reporter) (*agent.
 			_, err = sys.Run(ctx, "qemu-img", "create", "-f", "qcow2",
 				"-b", spec.TemplateDiskPath, "-F", "qcow2", diskPath)
 		} else {
-			_, err = sys.Run(ctx, "qemu-img", "convert", "-O", extOf(spec.DiskFormat),
-				spec.TemplateDiskPath, diskPath)
+			// 完整克隆要读整块模板盘；10s 的探测超时会让稍大的模板必然失败。
+			_, err = sys.RunTimeout(ctx, qemuConvertTimeout, "qemu-img", "convert",
+				"-O", extOf(spec.DiskFormat), spec.TemplateDiskPath, diskPath)
 		}
 		if err != nil {
 			return failResult("克隆系统盘失败: " + err.Error()), nil
@@ -707,25 +708,190 @@ func getStdinXML(vm, dev, bus string, isoPath ...string) string {
 
 // vmNVRAMRepair 实现 vm.nvram.repair（UEFI 启动项修复）。
 //
-// 最常见的修复路径：删除固件变量里的过期启动项后重启重新枚举。libvirt
-// 没有直接接口，用 qemu monitor 的 boot_set 不可行——真正可行的是重建
-// NVRAM 模板（受保护操作，P2 只处理最安全的「标记需要重启重枚举」）。
+// 做法是**把 NVRAM 变量文件重置为固件模板**：保留当前文件为 .bak，
+// 用域定义里 `<nvram template='...'>` 指向的模板覆盖它。下次开机固件
+// 会重新枚举启动项；这是比直接删文件更安全的路径（目标路径始终存在）。
+// 必须关机操作：运行中的域仍持有旧 NVRAM 文件。
 func vmNVRAMRepair(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	report(Stage{Key: "nvram", Name: "修复 UEFI 启动项", Index: 1, Total: 1})
+	if running, err := vmRunning(ctx, op.Target); err != nil {
+		return failResult("无法确认虚拟机状态: " + err.Error()), nil
+	} else if running {
+		return failResult("NVRAM 修复需要先关机：运行中的域仍持有旧变量文件"), nil
+	}
+	xmlText, err := sys.DumpXML(ctx, op.Target, false)
+	if err != nil {
+		return failResult("读取域定义失败: " + err.Error()), nil
+	}
+	target, template, ok := nvramPathAndTemplate(xmlText)
+	if !ok {
+		return failResult("该虚拟机没有 NVRAM（不是 UEFI 域），无需修复"), nil
+	}
+	if template == "" {
+		return failResult("域定义没有记录固件模板路径，无法安全重建 NVRAM"), nil
+	}
+	if st, err := os.Stat(template); err != nil || st.IsDir() {
+		return failResult("固件模板不可用: " + template), nil
+	}
+	if st, err := os.Stat(target); err == nil && !st.IsDir() {
+		backup := target + ".bak-" + strconv.FormatInt(time.Now().Unix(), 10)
+		if err := copyFile(ctx, target, backup); err != nil {
+			return failResult("备份 NVRAM 失败: " + err.Error()), nil
+		}
+	}
+	tmp := target + ".kc-repair-tmp"
+	_ = os.Remove(tmp)
+	if err := copyFile(ctx, template, tmp); err != nil {
+		return failResult("重置 NVRAM 失败: " + err.Error()), nil
+	}
+	if err := os.Rename(tmp, target); err != nil {
+		_ = os.Remove(tmp)
+		return failResult("替换 NVRAM 失败: " + err.Error()), nil
+	}
+	if err := ensureQemuReadable(target); err != nil {
+		return failResult("设置 NVRAM 属主失败: " + err.Error()), nil
+	}
 	return &agent.Result{Success: true, Data: map[string]any{
 		agent.NVRAMDataKey: agent.NVRAMRepairInfo{
-			Message:      "NVRAM 修复将在下次重启时重新枚举启动项（重启虚拟机以生效）",
+			Message:      "NVRAM 已重置为固件模板；下次启动会重新枚举启动项",
 			RebootNeeded: true,
 		},
 	}}, nil
 }
 
+// nvramPathAndTemplate 从域定义取 NVRAM 目标路径与固件模板路径。
+func nvramPathAndTemplate(xmlText string) (target, template string, ok bool) {
+	i := strings.Index(xmlText, "<nvram")
+	if i < 0 {
+		return "", "", false
+	}
+	end := strings.Index(xmlText[i:], "</nvram>")
+	if end < 0 {
+		return "", "", false
+	}
+	block := xmlText[i : i+end+len("</nvram>")]
+	template = attrValue(block, "template")
+	if j := strings.Index(block, ">"); j >= 0 {
+		body := block[j+1:]
+		if k := strings.Index(body, "</nvram>"); k >= 0 {
+			target = strings.TrimSpace(body[:k])
+		}
+	}
+	return target, template, target != ""
+}
+
 // vmFloppyApply 实现 vm.floppy.apply（挂载/弹出软盘）。
+//
+// 软盘不支持热插拔：libvirt 对 fdc 设备的 attach 只在关机态可靠。
+// 创建流程在开机前调用，因此正常路径满足；运行中调用如实拒绝。
 func vmFloppyApply(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	report(Stage{Key: "floppy", Name: "调整软驱", Index: 1, Total: 1})
 	action := strParam(op.Params, "action")
-	_ = action // 挂载路径解析依赖我的存储接入（P4），P2 先保证操作不悬空
-	return &agent.Result{Success: true, Message: "软驱操作待我的存储节点侧路径接入（P4）"}, nil
+	xmlText, err := sys.DumpXML(ctx, op.Target, false)
+	if err != nil {
+		return failResult("读取域定义失败: " + err.Error()), nil
+	}
+
+	switch action {
+	case "attach":
+		rel := strParam(op.Params, "rel_path")
+		if rel == "" {
+			return failResult("缺少 rel_path：控制面必须把存储文件解析为节点相对路径"), nil
+		}
+		if filepath.IsAbs(rel) {
+			return failResult("rel_path 必须是相对于用户存储根的路径"), nil
+		}
+		source := filepath.Join(userdataRoot, rel)
+		if source != userdataRoot && !strings.HasPrefix(source, userdataRoot+"/") {
+			return failResult("软盘路径越出用户存储根: " + source), nil
+		}
+		if st, err := os.Stat(source); err != nil || st.IsDir() {
+			return failResult("软盘镜像不存在: " + source), nil
+		}
+		if running, err := vmRunning(ctx, op.Target); err != nil {
+			return failResult("无法确认虚拟机状态: " + err.Error()), nil
+		} else if running {
+			return failResult("软盘不支持热插拔：请先关机再挂载"), nil
+		}
+		if block, ok := floppyBlockOf(xmlText); ok {
+			// 已经有一块软盘：同一路径视为幂等成功，不同路径要求先弹出。
+			if strings.Contains(block, xmlEsc(source)) {
+				return &agent.Result{Success: true, Message: "软盘已挂载"}, nil
+			}
+			return failResult("虚拟机已有一块软盘，请先弹出"), nil
+		}
+		if err := ensureQemuReadable(source); err != nil {
+			return failResult("设置软盘镜像属主失败: " + err.Error()), nil
+		}
+		ensureAppArmorAllowsImages(userdataRoot)
+		if !hasFDCController(xmlText) {
+			xmlText = addFDCController(xmlText)
+			if err := defineXML(ctx, xmlText); err != nil {
+				return failResult("添加软驱控制器失败: " + err.Error()), nil
+			}
+		}
+		frag := floppyFragment(source)
+		path, cleanup, err := writeTempXML("floppy-"+op.Target, frag)
+		if err != nil {
+			return failResult("写入软盘定义失败: " + err.Error()), nil
+		}
+		defer cleanup()
+		if _, err := virshWrite(ctx, "attach-device", "--config", op.Target, path); err != nil {
+			return failResult("挂载软盘失败: " + err.Error()), nil
+		}
+		if !floppyExists(ctx, op.Target) {
+			return failResult("libvirt 接受了挂载命令，但域定义里没有软盘设备"), nil
+		}
+		return &agent.Result{Success: true, Message: "软盘已挂载"}, nil
+
+	case "eject", "remove":
+		block, ok := floppyBlockOf(xmlText)
+		if !ok {
+			return &agent.Result{Success: true, Message: "软盘已不存在（幂等成功）"}, nil
+		}
+		path, cleanup, err := writeTempXML("floppy-old-"+op.Target, block)
+		if err != nil {
+			return failResult("写入软盘定义失败: " + err.Error()), nil
+		}
+		defer cleanup()
+		if _, err := virshWrite(ctx, "detach-device", "--config", op.Target, path); err != nil {
+			return failResult("弹出软盘失败: " + err.Error()), nil
+		}
+		return &agent.Result{Success: true, Message: "软盘已弹出"}, nil
+
+	default:
+		return failResult("未知软盘动作: " + action), nil
+	}
+}
+
+// floppyFragment 渲染一块软盘设备。
+func floppyFragment(source string) string {
+	return "<disk type='file' device='floppy'>\n" +
+		"      <driver name='qemu' type='raw'/>\n" +
+		"      <source file='" + xmlEsc(source) + "'/>\n" +
+		"      <target dev='fda' bus='fdc'/>\n" +
+		"    </disk>"
+}
+
+// floppyBlockOf 返回域定义里的软盘设备块。
+func floppyBlockOf(xmlText string) (string, bool) {
+	for _, block := range xmlBlocks(xmlText, "<disk ", "</disk>") {
+		disks := sys.ParseDomainDisks(block)
+		if len(disks) > 0 && disks[0].IsFloppy {
+			return block, true
+		}
+	}
+	return "", false
+}
+
+// floppyExists 报告持久定义里是否有软盘。
+func floppyExists(ctx context.Context, vm string) bool {
+	xmlText, err := sys.DumpXML(ctx, vm, false)
+	if err != nil {
+		return false
+	}
+	_, ok := floppyBlockOf(xmlText)
+	return ok
 }
 
 // waitLibvirtdUp 轮询等待 libvirtd 可服务（最多 ~10s）。

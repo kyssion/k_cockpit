@@ -271,6 +271,43 @@ func (s *Service) nicSpec(ctx context.Context, nic model.VMInterface) map[string
 	return spec
 }
 
+// interfaceMACAndBridge 按网卡序号取 MAC、所在交换机网桥与 DHCP 范围。
+//
+// 静态地址的节点侧动作需要这些值：dnsmasq 的静态租约是
+// `dhcp-host=<MAC>,<IP>`，而该 dnsmasq 绑定在交换机网桥上；若节点上
+// 还没有配置文件（交换机在旧版本创建），范围用于补建配置。
+func (s *Service) interfaceMACAndBridge(
+	ctx context.Context, vmID int64, order *int,
+) (mac, bridge, dhcpStart, dhcpEnd string) {
+	if order == nil {
+		return "", "", "", ""
+	}
+	var nic model.VMInterface
+	if err := s.db.WithContext(ctx).
+		Where("vm_id = ? AND \"order\" = ?", vmID, *order).
+		First(&nic).Error; err != nil {
+		return "", "", "", ""
+	}
+	if nic.MAC != nil {
+		mac = *nic.MAC
+	}
+	if nic.SwitchID != nil {
+		var sw model.VpcSwitch
+		if err := s.db.WithContext(ctx).
+			Select("bridge_name", "dhcp_start", "dhcp_end").
+			First(&sw, *nic.SwitchID).Error; err == nil {
+			bridge = sw.BridgeName
+			if sw.DHCPStart != nil {
+				dhcpStart = *sw.DHCPStart
+			}
+			if sw.DHCPEnd != nil {
+				dhcpEnd = *sw.DHCPEnd
+			}
+		}
+	}
+	return mac, bridge, dhcpStart, dhcpEnd
+}
+
 // loadInterface 读取属于该虚拟机的网卡。
 func (s *Service) loadInterface(
 	ctx context.Context, vmID, nicID int64,
@@ -364,6 +401,9 @@ func (s *Service) BindStaticIP(
 	if err := validateIP(ip); err != nil {
 		return nil, err
 	}
+	if req.IsDHCPReservation && strings.Contains(ip, ":") {
+		return nil, api.ValidationFailed("DHCP 静态租约当前只支持 IPv4；IPv6 地址请选择手工配置")
+	}
 
 	// 地址在**节点内**唯一：同一个地址分配给两台虚拟机，只有一台能真正
 	// 用上它，而另一台会表现为「网络时通时断」——这类问题极难排查。
@@ -379,6 +419,10 @@ func (s *Service) BindStaticIP(
 		return nil, api.Conflict("该地址已被同一节点上的其它虚拟机占用")
 	}
 
+	mac, bridge, dhcpStart, dhcpEnd := s.interfaceMACAndBridge(ctx, vm.ID, req.InterfaceOrder)
+	if req.IsDHCPReservation && (mac == "" || bridge == "") {
+		return nil, api.ValidationFailed("该网卡没有可用的 MAC 或交换机网桥，无法配置 DHCP 静态租约")
+	}
 	row := model.StaticIP{
 		NodeID:            vm.NodeID,
 		VMID:              &vm.ID,
@@ -386,6 +430,9 @@ func (s *Service) BindStaticIP(
 		AddressFamily:     addressFamilyOf(ip),
 		InterfaceOrder:    req.InterfaceOrder,
 		IsDHCPReservation: req.IsDHCPReservation,
+	}
+	if mac != "" {
+		row.MAC = &mac
 	}
 
 	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
@@ -404,6 +451,10 @@ func (s *Service) BindStaticIP(
 			"address_family":      row.AddressFamily,
 			"interface_order":     req.InterfaceOrder,
 			"is_dhcp_reservation": row.IsDHCPReservation,
+			"mac":                 mac,
+			"bridge_name":         bridge,
+			"dhcp_start":          dhcpStart,
+			"dhcp_end":            dhcpEnd,
 		})
 }
 
@@ -432,12 +483,20 @@ func (s *Service) UnbindStaticIP(
 		return nil, api.Internal()
 	}
 
+	mac, bridge, dhcpStart, dhcpEnd := s.interfaceMACAndBridge(ctx, vm.ID, row.InterfaceOrder)
+	if mac == "" && row.MAC != nil {
+		mac = *row.MAC
+	}
 	spec := map[string]any{
 		"action":              NetActionUnbind,
 		"static_ip_id":        row.ID,
 		"ip":                  row.IP,
 		"interface_order":     row.InterfaceOrder,
 		"is_dhcp_reservation": row.IsDHCPReservation,
+		"mac":                 mac,
+		"bridge_name":         bridge,
+		"dhcp_start":          dhcpStart,
+		"dhcp_end":            dhcpEnd,
 	}
 
 	// 先删记录再入队，与网卡删除同理：解绑是幂等的。

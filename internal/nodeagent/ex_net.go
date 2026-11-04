@@ -4,6 +4,7 @@ package nodeagent
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -209,18 +210,32 @@ func decodeExpectations(raw any, out *[]agent.PlatformExpectation) error {
 // 需要两节点协同与对运行中机器的额外开销，随 P5 迁移功能一起接入——
 // 控制面对 Bandwidth=0 的处理路径就是「回落到按链路规格估算」，语义完备。
 func migrateAssess(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
-	report(Stage{Key: "assess", Name: "线路评估", Index: 1, Total: 1})
+	report(Stage{Key: "assess", Name: "线路评估", Index: 1, Total: 2})
 	info := agent.MigrateAssessInfo{
-		Source:  "estimate",
-		Message: "链路实测与脏页采样随迁移功能（P5）接入，当前为估算口径",
+		Source:  agent.AssessSourceEstimate,
+		Message: "按源节点默认路由网卡的协商速率估算；跨节点实测需双端协同",
 	}
-	// 运行中的机器顺带读一次脏页（domstats 的 dirtyrate 键只在触发过计算
-	// 后有值，读不到就是 0，控制面按「未测得」处理）。
+	// 源侧上行速率是一个可用的估算上限；读不到时 Bandwidth=0，控制面
+	// 会回落到自己的链路规格估算。
+	if iface := defaultRouteIface(ctx); iface != "" {
+		if b, err := osReadFile("/sys/class/net/" + iface + "/speed"); err == nil {
+			if mbps, err := strconv.ParseInt(strings.TrimSpace(b), 10, 64); err == nil && mbps > 0 {
+				info.BandwidthMbps = mbps
+				info.Message = "按源节点 " + iface + " 的协商速率 " + strconv.FormatInt(mbps, 10) + " Mbps 估算"
+			}
+		}
+	}
+
+	// 热迁移评估：触发一次脏页计算后再读 domstats，否则 dirtyrate
+	// 永远是 0（Libvirt 只在计算过之后才给值）。
 	live := false
 	if v, ok := op.Params["live"].(bool); ok {
 		live = v
 	}
 	if live {
+		report(Stage{Key: "dirty_rate", Name: "采样脏页速率", Index: 2, Total: 2})
+		_, _ = sys.Run(ctx, "virsh", "-c", "qemu:///system", "domdirtyrate-calc", op.Target, "1")
+		time.Sleep(1100 * time.Millisecond)
 		if s, err := sys.DomainStats(ctx, op.Target); err == nil && s.DirtyRateMBps > 0 {
 			info.DirtyRateMBps = int64(s.DirtyRateMBps)
 		}

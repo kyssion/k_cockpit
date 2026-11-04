@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -224,6 +225,99 @@ func (s *Service) expectations(
 	return out, nil
 }
 
+// repairItems 把选中类别的完整期望状态查出来，随任务下发。
+func (s *Service) repairItems(
+	ctx context.Context, nodeID int64, kinds []string,
+) ([]agent.PlatformRepairItem, error) {
+	want := map[string]bool{}
+	for _, k := range kinds {
+		want[k] = true
+	}
+	out := []agent.PlatformRepairItem{}
+
+	if want["port_security"] {
+		var rows []model.PortSecurityPolicy
+		if err := s.db.WithContext(ctx).
+			Where("node_id = ? AND status = ?", nodeID, model.PortSecurityActive).
+			Find(&rows).Error; err != nil {
+			log.Printf("[platformcheck] 查询端口安全失败: %v", err)
+			return nil, api.Internal()
+		}
+		for i := range rows {
+			out = append(out, agent.PlatformRepairItem{
+				ID: rows[i].ID, Kind: "port_security", PortRef: rows[i].PortRef,
+				SpoofingGuard: rows[i].SpoofingGuard, Isolation: rows[i].Isolation,
+				PPSLimit: rows[i].PPSLimit,
+			})
+		}
+	}
+
+	if want["public_ip"] {
+		var rows []model.PublicIPBinding
+		if err := s.db.WithContext(ctx).
+			Where("node_id = ? AND released_at IS NULL", nodeID).
+			Find(&rows).Error; err != nil {
+			log.Printf("[platformcheck] 查询公网绑定失败: %v", err)
+			return nil, api.Internal()
+		}
+		for i := range rows {
+			if rows[i].VMID == nil {
+				continue
+			}
+			var ip model.PublicIP
+			if err := s.db.WithContext(ctx).Select("ip").First(&ip, rows[i].PublicIPID).Error; err != nil {
+				continue
+			}
+			var vm model.VM
+			if err := s.db.WithContext(ctx).Select("name").First(&vm, *rows[i].VMID).Error; err != nil {
+				continue
+			}
+			out = append(out, agent.PlatformRepairItem{
+				ID: rows[i].ID, Kind: "public_ip",
+				PublicIP: ip.IP, VMName: vm.Name, Mode: rows[i].Mode,
+			})
+		}
+	}
+
+	if want["port_mirror"] {
+		var rows []model.PortMirror
+		if err := s.db.WithContext(ctx).
+			Where("node_id = ? AND enabled = ?", nodeID, true).Find(&rows).Error; err != nil {
+			log.Printf("[platformcheck] 查询端口镜像失败: %v", err)
+			return nil, api.Internal()
+		}
+		for i := range rows {
+			name := ""
+			if rows[i].Name != nil {
+				name = strings.TrimSpace(*rows[i].Name)
+			}
+			if name == "" {
+				continue
+			}
+			out = append(out, agent.PlatformRepairItem{
+				ID: rows[i].ID, Kind: "port_mirror", MirrorName: name,
+				SourcePorts:    splitLines(rows[i].SourcePorts),
+				TargetSwitches: splitLines(rows[i].TargetSwitches),
+				Direction:      rows[i].Direction, VlanPreserve: rows[i].VlanPreserve,
+			})
+		}
+	}
+	return out, nil
+}
+
+func splitLines(s *string) []string {
+	if s == nil {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(*s, "\n") {
+		if v := strings.TrimSpace(line); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 func ovsItems(st *agent.OVSStatus) []agent.CheckItem {
 	if !st.Available {
 		return []agent.CheckItem{{
@@ -339,13 +433,17 @@ func (s *Service) Repair(
 	if len(kinds) == 0 {
 		kinds = []string{"port_security", "public_ip", "port_mirror"}
 	}
+	items, err := s.repairItems(ctx, nodeID, kinds)
+	if err != nil {
+		return nil, err
+	}
 	t, err := s.queue.Enqueue(ctx, task.Spec{
 		Type:         model.TaskPlatformRepair,
 		NodeID:       nodeID,
 		ResourceType: "platform",
 		ResourceID:   nodeID,
 		OwnerID:      v.UserID, CreatedBy: v.UserID,
-		Params: map[string]any{"kinds": kinds},
+		Params: map[string]any{"kinds": kinds, "items": items},
 	})
 	if err != nil {
 		return nil, api.Internal()

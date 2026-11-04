@@ -262,3 +262,39 @@ func TestDisabledNodeIsSkipped(t *testing.T) {
 		t.Error("被禁用的节点不该被采集")
 	}
 }
+
+// domainAgent 在普通 stub 之上补一个域列表，用于验证运行态对账。
+type domainAgent struct {
+	*stubClient
+	domains []agent.DomainInfo
+}
+
+func (d *domainAgent) Execute(ctx context.Context, op agent.Operation) (*agent.Result, error) {
+	if op.Kind == agent.OpNodeDomains {
+		return &agent.Result{Success: true, Data: map[string]any{
+			agent.NodeDomainsDataKey: d.domains,
+		}}, nil
+	}
+	return d.stubClient.Execute(ctx, op)
+}
+
+func TestSyncRuntimeUpdatesProjection(t *testing.T) {
+	db, c := newTestEnv(t, &domainAgent{
+		stubClient: newStubClient(),
+		domains:    []agent.DomainInfo{{Name: "vm-1", State: model.VMStatusStopped}},
+	})
+	vm := seedVM(t, db, "vm-1", model.VMStatusRunning)
+
+	c.Tick(context.Background())
+
+	var got model.VM
+	if err := db.First(&got, vm.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != model.VMStatusStopped {
+		t.Fatalf("投影状态 = %q, 期望 stopped", got.Status)
+	}
+	if got.LastSyncedAt == nil {
+		t.Fatal("对账后应写 last_synced_at")
+	}
+}

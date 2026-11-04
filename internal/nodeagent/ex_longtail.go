@@ -6,7 +6,7 @@
 //     （关机 → 磁盘 rsync → 目标侧定义），热迁移与 takeover 随第二批；
 //   - 重装：备份原盘 → 从模板重建；purge 删备份；
 //   - 救援：换 SATA 盘型 + 挂救援 ISO + 保存配置快照；
-//   - 导出：qemu-img convert 出镜像（tar/ova 随第二批）；
+//   - 导出：qcow2/raw 由 qemu-img convert 生成；OVA 走 VMDK + OVF + tar；
 //   - 来宾自动化：依赖来宾内 qemu-guest-agent，未装时给明确失败。
 package nodeagent
 
@@ -98,8 +98,8 @@ func vmMigrate(ctx context.Context, op agent.Operation, report Reporter) (*agent
 		if name == "" || name == "." || name == string(filepath.Separator) {
 			return false
 		}
-		if _, err := sys.Run(ctx, "cp", "--reflink=auto", "--sparse=always",
-			src, migrateStagePath(op.Target, name)); err != nil {
+		if _, err := sys.RunTimeout(ctx, qemuConvertTimeout, "cp",
+			"--reflink=auto", "--sparse=always", src, migrateStagePath(op.Target, name)); err != nil {
 			return false
 		}
 		size := int64(0)
@@ -419,7 +419,8 @@ func vmReinstall(ctx context.Context, op agent.Operation, report Reporter) (*age
 
 	report(Stage{Key: "rebuild", Name: "从模板重建", Index: 2, Total: 3})
 	if templatePath != "" {
-		if _, err := sys.Run(ctx, "qemu-img", "convert", "-O", "qcow2", templatePath, sourcePath); err != nil {
+		if _, err := sys.RunTimeout(ctx, qemuConvertTimeout,
+			"qemu-img", "convert", "-O", "qcow2", templatePath, sourcePath); err != nil {
 			// 重建失败必须把备份还原——那是用户数据的最后一份。
 			_ = osRename(backupPath, sourcePath)
 			return failResult("从模板重建失败: " + err.Error()), nil
@@ -497,64 +498,111 @@ func vmReinstallPurge(ctx context.Context, op agent.Operation, report Reporter) 
 
 // vmRescue 实现 vm.rescue.enter / exit（救援模式）。
 //
-// enter：保存当前配置快照（dumpxml）→ 关机 → 挂救援 ISO 并开机。
-// **引导顺序不改写**：域定义的 boot 顺序保持原样，原盘可引导时需要在
-// 来宾固件里手动选光驱启动（盘型/网卡改写与 boot 顺序调整随 P5 的 XML
-// 通道深化）；exit：按保存的定义还原。
+// enter：保存当前配置快照（dumpxml）→ 关机 → 把 CDROM 放到启动顺序
+// 第一位 → 挂救援 ISO 并开机；exit：按保存的定义还原。
 func vmRescueEnter(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	snapshotXML := strParam(op.Params, "snapshot")
 	rescueISO := strParam(op.Params, "rescue_iso")
 	report(Stage{Key: "save_config", Name: "保存配置", Index: 1, Total: 2})
 	if snapshotXML == "" {
-		if xml, err := sys.DumpXML(ctx, op.Target, false); err == nil {
-			snapshotXML = xml
-			_ = osWriteFile("/var/lib/k_cockpit/rescue-"+op.Target+".xml", []byte(xml), 0o600)
+		xml, err := sys.DumpXML(ctx, op.Target, false)
+		if err != nil {
+			return failResult("读取当前配置失败: " + err.Error()), nil
 		}
+		snapshotXML = xml
 	}
-	_ = snapshotXML
+	if err := osWriteFile("/var/lib/k_cockpit/rescue-"+op.Target+".xml", []byte(snapshotXML), 0o600); err != nil {
+		return failResult("保存救援配置失败: " + err.Error()), nil
+	}
 	report(Stage{Key: "boot_rescue", Name: "从救援介质引导", Index: 2, Total: 2})
 	if rescueISO != "" {
 		state, _ := sys.DomainStateOf(ctx, op.Target)
 		if state == "running" {
 			_, _ = sys.Run(ctx, "virsh", "destroy", op.Target)
 		}
+		// 先把 CDROM 放到启动顺序第一位，再挂介质。只挂介质不改 boot
+		// order 时，原盘可引导的机器仍会进原系统——救援介质形同没挂。
+		if err := defineXML(ctx, bootFromCDROMFirst(snapshotXML)); err != nil {
+			return failResult("写入救援启动顺序失败: " + err.Error()), nil
+		}
 		frag := cdromFragment("sdc", "scsi", rescueISO)
 		f := "/tmp/kc-rescue-" + op.Target + ".xml"
 		if werr := osWriteFile(f, []byte("<device>"+frag+"</device>"), 0o600); werr != nil {
+			_ = defineXML(ctx, snapshotXML)
 			return failResult("写救援设备片段失败: " + werr.Error()), nil
 		}
 		// 挂载失败/启动失败都必须如实报（此前全吞、恒报成功——救援
 		// 是救砖场景，假成功会让人以为已经能进系统；review 抓出）。
 		if _, aerr := sys.Run(ctx, "virsh", "attach-device", "--config", op.Target, f); aerr != nil {
+			_ = defineXML(ctx, snapshotXML)
 			return failResult("挂载救援介质失败: " + aerr.Error()), nil
 		}
 		if _, serr := sys.Run(ctx, "virsh", "start", op.Target); serr != nil {
+			_ = defineXML(ctx, snapshotXML)
 			return failResult("从救援介质启动失败: " + serr.Error()), nil
 		}
 	}
 	return &agent.Result{Success: true}, nil
 }
 
+// bootFromCDROMFirst 在 <os> 的第一位插入 CDROM 启动项。
+func bootFromCDROMFirst(xmlText string) string {
+	i := strings.Index(xmlText, "<os")
+	if i < 0 {
+		return xmlText
+	}
+	end := strings.IndexByte(xmlText[i:], '>')
+	if end < 0 {
+		return xmlText
+	}
+	insert := i + end + 1
+	// libvirt 的 <os> 子元素顺序是 type → boot；插在 <type> 之前
+	// 会被 schema 校验拒绝，因此优先插在 </type> 之后。
+	if j := strings.Index(xmlText[i:], "</type>"); j >= 0 {
+		insert = i + j + len("</type>")
+	}
+	osEnd := strings.Index(xmlText[i:], "</os>")
+	if osEnd > 0 && strings.Contains(xmlText[i:i+osEnd], "boot dev='cdrom'") {
+		return xmlText
+	}
+	return xmlText[:insert] + "\n    <boot dev='cdrom'/>" + xmlText[insert:]
+}
+
 // vmRescueExit 实现 vm.rescue.exit：按保存的定义还原并重启。
 func vmRescueExit(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	report(Stage{Key: "restore", Name: "还原配置", Index: 1, Total: 1})
 	saved := "/var/lib/k_cockpit/rescue-" + op.Target + ".xml"
-	if b, err := osReadFile(saved); err == nil {
-		state, _ := sys.DomainStateOf(ctx, op.Target)
-		if state == "running" {
-			_, _ = sys.Run(ctx, "virsh", "destroy", op.Target)
-		}
-		_, _ = sys.Run(ctx, "virsh", "define", xmlFileOf(string(b), op.Target))
-		_ = osRemove(saved)
+	b, err := osReadFile(saved)
+	if err != nil {
+		return failResult("没有可还原的救援配置: " + err.Error()), nil
 	}
+	state, _ := sys.DomainStateOf(ctx, op.Target)
+	if state == "running" {
+		_, _ = sys.Run(ctx, "virsh", "destroy", op.Target)
+	}
+	if _, err := sys.Run(ctx, "virsh", "define", xmlFileOf(string(b), op.Target)); err != nil {
+		return failResult("还原救援前配置失败: " + err.Error()), nil
+	}
+	_ = osRemove(saved)
 	return &agent.Result{Success: true}, nil
 }
 
-// vmExport 实现 vm.export：导出系统盘为 qcow2 镜像（要求关机）。
+// vmExport 实现 vm.export：导出系统盘为 qcow2 / raw / OVA（要求关机）。
 func vmExport(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
-	format := strParam(op.Params, "format")
+	format := strings.ToLower(strParam(op.Params, "format"))
 	if format == "" {
 		format = "qcow2"
+	}
+	if format == "ova" {
+		return vmExportOVA(ctx, op, report)
+	}
+	if format != "qcow2" && format != "raw" {
+		return failResult("不支持的导出格式: " + format), nil
+	}
+	if running, err := vmRunning(ctx, op.Target); err != nil {
+		return failResult("无法确认虚拟机状态: " + err.Error()), nil
+	} else if running {
+		return failResult("导出需要先关机：运行中的磁盘写入会让镜像不一致"), nil
 	}
 	report(Stage{Key: "convert", Name: "导出磁盘", Index: 1, Total: 1})
 	sysDev := sysDiskDev(ctx, op.Target)
@@ -563,10 +611,10 @@ func vmExport(ctx context.Context, op agent.Operation, report Reporter) (*agent.
 	if sourcePath == "" {
 		return failResult("找不到系统盘"), nil
 	}
-	exportDir := "/var/lib/k_cockpit/exports"
 	_ = osMkdirAllErr(exportDir)
 	out := filepath.Join(exportDir, op.Target+"."+format)
-	if _, err := sys.Run(ctx, "qemu-img", "convert", "-O", format, sourcePath, out); err != nil {
+	if _, err := sys.RunTimeout(ctx, qemuConvertTimeout,
+		"qemu-img", "convert", "-O", format, sourcePath, out); err != nil {
 		return failResult("导出失败: " + err.Error()), nil
 	}
 	st, _ := os.Stat(out)
@@ -617,7 +665,7 @@ func vmExportFetch(ctx context.Context, op agent.Operation, report Reporter) (*a
 			return failResult("读取导出文件失败: " + rerr.Error()), nil
 		}
 		return &agent.Result{Success: true, Data: map[string]any{
-			"content":    agent.ExportContent{Data: b, MIME: "application/octet-stream"},
+			"content":    agent.ExportContent{Data: b, MIME: exportMIME(path)},
 			"total_size": float64(st.Size()),
 		}}, nil
 	}
@@ -637,9 +685,21 @@ func vmExportFetch(ctx context.Context, op agent.Operation, report Reporter) (*a
 		return failResult("读取导出分片失败: " + rerr.Error()), nil
 	}
 	return &agent.Result{Success: true, Data: map[string]any{
-		"content":    agent.ExportContent{Data: buf, MIME: "application/octet-stream"},
+		"content":    agent.ExportContent{Data: buf, MIME: exportMIME(path)},
 		"total_size": float64(st.Size()),
 	}}, nil
+}
+
+// exportMIME 按扩展名给出下载类型；OVA 用 OVF 的媒体类型。
+func exportMIME(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".ova":
+		return "application/ovf"
+	case ".qcow2":
+		return "application/x-qemu-disk"
+	default:
+		return "application/octet-stream"
+	}
 }
 
 // vmGuest 实现 vm.guest（来宾自动化，P5 第二批真实实现）。
@@ -1035,12 +1095,72 @@ func quotaEnforce(ctx context.Context, op agent.Operation, report Reporter) (*ag
 	}}, nil
 }
 
-// platformRepair 实现 platform.repair（按期望重下发）。
+// platformRepair 实现 platform.repair（按控制面下发的完整期望重下发）。
 func platformRepair(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	report(Stage{Key: "repair", Name: "重新下发期望状态", Index: 1, Total: 1})
+	var items []agent.PlatformRepairItem
+	if raw, ok := op.Params["items"]; ok {
+		blob, _ := jsonMarshal(raw)
+		_ = jsonUnmarshalTo(blob, &items)
+	}
+	if len(items) == 0 {
+		return &agent.Result{Success: true, Data: map[string]any{
+			"repaired": 0, "failed": []string{},
+			"message": "没有需要重下发的完整期望状态",
+		}}, nil
+	}
+
+	repaired := 0
+	var failed []string
+	for _, it := range items {
+		var res *agent.Result
+		switch it.Kind {
+		case "port_security":
+			res, _ = portSecurityApply(ctx, agent.Operation{Params: map[string]any{
+				"port_ref": it.PortRef, "spoofing_guard": it.SpoofingGuard,
+				"isolation": it.Isolation, "pps_limit": it.PPSLimit,
+			}}, func(Stage) {})
+		case "public_ip":
+			res, _ = publicIPChange(ctx, agent.Operation{Params: map[string]any{
+				"action": "bind", "ip": it.PublicIP,
+				"vm_name": it.VMName, "mode": it.Mode,
+			}}, func(Stage) {})
+		case "port_mirror":
+			sources := make([]any, 0, len(it.SourcePorts))
+			for _, s := range it.SourcePorts {
+				sources = append(sources, s)
+			}
+			targets := make([]any, 0, len(it.TargetSwitches))
+			for _, s := range it.TargetSwitches {
+				targets = append(targets, s)
+			}
+			res, _ = portMirrorEnable(ctx, agent.Operation{
+				Target: it.MirrorName,
+				Params: map[string]any{
+					"name": it.MirrorName, "source_ports": sources,
+					"target_switches": targets, "direction": it.Direction,
+					"vlan_preserve": it.VlanPreserve, "watchdog_seconds": -1,
+				},
+			}, func(Stage) {})
+		default:
+			failed = append(failed, "未知修复类别: "+it.Kind)
+			continue
+		}
+		if res == nil || !res.Success {
+			msg := "节点未返回结果"
+			if res != nil {
+				msg = res.Message
+			}
+			failed = append(failed, it.Kind+": "+msg)
+			continue
+		}
+		repaired++
+	}
+	msg := "已按期望状态重新下发"
+	if len(failed) > 0 {
+		msg = "部分项修复失败"
+	}
 	return &agent.Result{Success: true, Data: map[string]any{
-		"repaired": 0,
-		"failed":   []string{},
-		"message":  "各能力的重下发随对应分期接入（当前无未完成项可修）",
+		"repaired": repaired, "failed": failed, "message": msg,
 	}}, nil
 }

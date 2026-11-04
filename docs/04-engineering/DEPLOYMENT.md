@@ -159,7 +159,7 @@ systemctl enable --now k_cockpit-agent
 ## 9. 当前边界
 
 - live 热迁移因需要节点间 libvirt 互信凭据、与 ADR-0005 冲突而**诚实阻断**（已交付 offline / warm）；
-- 跨节点迁移 relay、模板 tar 包通道、agent 自动升级与遥测仍待后续批次；
+- 跨节点迁移 relay、agent 自动升级与遥测仍待后续批次；模板 tar 包通道已接通，待真机验收；
 - 单控制面实例；多实例需先外部化会话、任务队列与实时总线。
 
 ## 变更记录

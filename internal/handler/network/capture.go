@@ -110,5 +110,5 @@ func (h *Capture) Download(ctx context.Context, c *app.RequestContext) {
 	c.Header("Content-Disposition", api.ContentDisposition(name))
 	c.Header("Cache-Control", "no-store")
 	c.SetContentType(mime)
-	c.Response.SetBody(data)
+	c.Response.SetBodyStream(data, -1)
 }

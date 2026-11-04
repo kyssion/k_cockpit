@@ -55,6 +55,9 @@ func (s *Service) MigrateSwitch(
 	}
 
 	spec := map[string]any{"uplink_if": strings.TrimSpace(req.UplinkIf)}
+	if sw.UplinkIf != nil && strings.TrimSpace(*sw.UplinkIf) != "" {
+		spec["old_uplink_if"] = strings.TrimSpace(*sw.UplinkIf)
+	}
 	if req.VlanID != nil {
 		spec["vlan_id"] = *req.VlanID
 	}

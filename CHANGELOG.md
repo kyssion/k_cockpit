@@ -44,6 +44,13 @@
   控制面只保留 gRPC 反向长连接。测试改为每个包自写最小 stub，不再共享全局 mock。
 
 ### Fixed
+- **agent 第一轮复审补强（2026-11-04）**：
+  - 完整克隆 / 重装 / 导出 / 冷迁移的 `qemu-img convert` 与 `cp` 改用 `RunTimeout`，不再被 10s 探测超时截断。
+  - OVA 导出改为 VMDK + OVF + SHA1 清单打 tar（`qemu-img` 无 ova 输出格式，旧实现必然失败）。
+  - `vm.floppy.apply` / `vm.staticip.change` / `platform.repair` / `vm.nvram.repair` 从假成功改为真实节点动作；控制面补 `rel_path`、`mac`、`bridge_name`、`dhcp_start/end` 与完整修复项。
+  - 公网 IP 按 `nat_1to1 / routed / bridged` 分流；交换机迁移补旧上行摘除与目标口冲突校验。
+  - 启动恢复遗留 `running → unknown → failed`，指标采集每轮用 `OpNodeDomains` 校正 VM 投影。
+  - `capture.fetch` 改为 offset/length 分片流式下载；端口安全补 OVS meter；救援模式修正 boot 顺序。
 - **第五轮深检（VNC 控制台全链 + agent 会话层，真机 WS E2E 验证）**：
   - **VNC 对默认配置的域直接不可用**：`virsh vncdisplay` 的裸显示号输出 `:0` 被旧解析
     （`LastIndex > 0` 条件跳过剥离）送进 `Atoi` 必炸——剥离逻辑重写（兼容 `host:N`/`:N`/

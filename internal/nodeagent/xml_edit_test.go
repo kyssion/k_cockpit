@@ -156,3 +156,16 @@ func TestElementText(t *testing.T) {
 		t.Errorf("不存在的元素应为空，got %q", got)
 	}
 }
+
+func TestAddFDCControllerIdempotent(t *testing.T) {
+	if hasFDCController(testDomainXML) {
+		t.Fatal("测试域不应已有软驱控制器")
+	}
+	out := addFDCController(testDomainXML)
+	if !hasFDCController(out) || strings.Count(out, "controller type='fdc'") != 1 {
+		t.Fatalf("软驱控制器插入不对:\n%s", out)
+	}
+	if again := addFDCController(out); again != out {
+		t.Fatal("已有控制器时不应再插入")
+	}
+}

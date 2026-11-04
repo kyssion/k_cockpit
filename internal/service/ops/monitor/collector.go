@@ -65,6 +65,9 @@ type Collector struct {
 	done  chan struct{}
 	once  sync.Once
 	now   func() time.Time
+	// runtimeTick 控制运行态对账频率：域扫描会读每个域的 XML 与磁盘
+	// 容量，比指标采集重，默认每 5 分钟一次。
+	runtimeTick int
 
 	// obs 是调度事件的记录器；为 nil 时不做任何记录。
 	//
@@ -143,8 +146,15 @@ func (c *Collector) tick(ctx context.Context) {
 		log.Printf("[monitor] 查询节点失败: %v", err)
 		return
 	}
+	c.runtimeTick++
+	syncRuntime := c.runtimeTick == 1 || c.runtimeTick%5 == 0
 	var hostCount, vmCount int
 	for i := range nodes {
+		// 先对齐 VM 运行态，再采指标：否则一台在面板外被 virsh 关掉的
+		// 机器仍会被当成 running 去读指标，得到一串失败日志。
+		if syncRuntime {
+			c.syncRuntime(ctx, &nodes[i])
+		}
 		hostOK, vms := c.collectNode(ctx, &nodes[i])
 		if hostOK {
 			hostCount++
@@ -169,6 +179,54 @@ func (c *Collector) tick(ctx context.Context) {
 			Scope:   strconv.Itoa(vmCount) + " 台虚拟机",
 			Message: "采集运行中虚拟机的指标，并累计运行时长与流量",
 		})
+	}
+}
+
+// syncRuntime 用节点的域列表校正 VM 投影状态。
+//
+// 控制面只缓存运行态；面板外通过 virsh 启停/删除不会经过任何写接口。
+// 没有这一步时，投影会一直停留在上一次写操作时刻，直到用户手动刷新或
+// 下一次操作 probe。每分钟一次 `virsh list --all` 的代价可以接受。
+func (c *Collector) syncRuntime(ctx context.Context, node *model.Node) {
+	result, err := c.agent.Execute(ctx, agent.Operation{
+		Kind: agent.OpNodeDomains, NodeID: node.ID,
+	})
+	if err != nil || result == nil || !result.Success {
+		return
+	}
+	raw, ok := result.Data[agent.NodeDomainsDataKey]
+	if !ok {
+		// 旧版 agent / 测试替身没有这个键：不要据此把所有 VM 误判为 unknown。
+		return
+	}
+	domains, _ := raw.([]agent.DomainInfo)
+	byName := make(map[string]agent.DomainInfo, len(domains))
+	for _, d := range domains {
+		byName[d.Name] = d
+	}
+
+	var vms []model.VM
+	if err := c.db.WithContext(ctx).
+		Where("node_id = ?", node.ID).Find(&vms).Error; err != nil {
+		log.Printf("[monitor] 同步运行态查询 VM 失败 node=%d: %v", node.ID, err)
+		return
+	}
+	now := c.now().UTC()
+	for i := range vms {
+		state := model.VMStatusUnknown
+		d, exists := byName[vms[i].Name]
+		if exists && d.State != "" {
+			state = d.State
+		}
+		if err := c.db.WithContext(ctx).Model(&model.VM{}).
+			Where("id = ?", vms[i].ID).
+			Updates(map[string]any{
+				"status":         state,
+				"present":        exists,
+				"last_synced_at": now,
+			}).Error; err != nil {
+			log.Printf("[monitor] 同步 VM %d 状态失败: %v", vms[i].ID, err)
+		}
 	}
 }
 

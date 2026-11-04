@@ -166,6 +166,34 @@ type PlatformExpectation struct {
 	Target string
 }
 
+// PlatformRepairItem 是修复一项偏差所需的完整期望状态。
+//
+// 只下发 kind 是不够的：节点不知道控制面记录里的 spoofing_guard、绑定的
+// 公网地址、镜像源/目标端口。把完整状态带下来，节点才能“重新下发”而不是
+// 回一句“已修复”。
+type PlatformRepairItem struct {
+	ID   int64
+	Kind string
+
+	// port_security
+	PortRef       string
+	SpoofingGuard bool
+	Isolation     bool
+	PPSLimit      int
+
+	// public_ip
+	PublicIP string
+	VMName   string
+	Mode     string
+
+	// port_mirror
+	MirrorName     string
+	SourcePorts    []string
+	TargetSwitches []string
+	Direction      string
+	VlanPreserve   bool
+}
+
 // PlatformCheckResult 是一条期望的实际状态。
 type PlatformCheckResult struct {
 	ID int64

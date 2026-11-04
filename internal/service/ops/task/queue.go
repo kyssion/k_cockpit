@@ -111,8 +111,19 @@ func (q *Queue) publish(t *model.Task, status string) {
 	})
 }
 
+// unknownGrace 是「结果未知」任务保留多久后转为失败。
+//
+// unknown 仍占用资源锁（不能让同一资源上的新操作与一个可能还在跑的
+// 节点操作并发），但它必须有一个终点，否则控制面崩溃一次就会永久
+// 锁死那台虚拟机。
+const unknownGrace = 2 * time.Minute
+
 // Start 启动调度循环。
 func (q *Queue) Start(ctx context.Context) {
+	// 上一次进程退出时仍在 running 的任务，结果已经不可判定：先转
+	// unknown，给节点侧操作一个短暂的收尾窗口，再在 sweep 中落为失败。
+	q.recoverStale(ctx)
+
 	q.wg.Add(1)
 	go func() {
 		defer q.wg.Done()
@@ -126,9 +137,67 @@ func (q *Queue) Start(ctx context.Context) {
 			case <-ticker.C:
 			case <-q.wake:
 			}
+			q.sweepUnknown(ctx)
 			q.dispatch(ctx)
 		}
 	}()
+}
+
+// recoverStale 把重启前遗留的 running 任务转为 unknown。
+func (q *Queue) recoverStale(ctx context.Context) {
+	var stale []model.Task
+	if err := q.db.WithContext(ctx).
+		Where("status = ?", model.TaskRunning).Find(&stale).Error; err != nil {
+		log.Printf("[task] 查询遗留运行中任务失败: %v", err)
+		return
+	}
+	now := time.Now()
+	for i := range stale {
+		t := &stale[i]
+		err := q.db.WithContext(ctx).Model(&model.Task{}).
+			Where("id = ? AND status = ?", t.ID, model.TaskRunning).
+			Updates(map[string]any{
+				"status":           model.TaskUnknown,
+				"error":            "控制面重启，任务结果未知；请检查资源实际状态",
+				"last_reported_at": now,
+			}).Error
+		if err != nil {
+			log.Printf("[task] 恢复任务 %d 失败: %v", t.ID, err)
+			continue
+		}
+		q.failOpenStages(ctx, t.ID, "控制面重启，阶段结果未知")
+		q.publish(t, model.TaskUnknown)
+	}
+}
+
+// failOpenStages 收尾一个任务所有仍处于 running 的阶段。
+func (q *Queue) failOpenStages(ctx context.Context, taskID int64, message string) {
+	now := time.Now()
+	if err := q.db.WithContext(ctx).Model(&model.TaskStage{}).
+		Where("task_id = ? AND status = ?", taskID, model.StageRunning).
+		Updates(map[string]any{
+			"status": model.StageFailed, "finished_at": now, "message": message,
+		}).Error; err != nil {
+		log.Printf("[task] 收尾任务 %d 阶段失败: %v", taskID, err)
+	}
+}
+
+// sweepUnknown 把超过宽限期的 unknown 任务落为失败，释放资源锁。
+func (q *Queue) sweepUnknown(ctx context.Context) {
+	cutoff := time.Now().Add(-unknownGrace)
+	var stale []model.Task
+	if err := q.db.WithContext(ctx).
+		Where("status = ? AND (last_reported_at IS NULL OR last_reported_at < ?)",
+			model.TaskUnknown, cutoff).
+		Find(&stale).Error; err != nil {
+		log.Printf("[task] 查询超时 unknown 任务失败: %v", err)
+		return
+	}
+	for i := range stale {
+		q.failOpenStages(ctx, stale[i].ID, "任务结果未知，阶段已中止")
+		q.finish(ctx, &stale[i], model.TaskFailed,
+			"任务结果未知且超过收敛窗口，已标记失败；请检查资源实际状态")
+	}
 }
 
 // Stop 等待在途任务结束。

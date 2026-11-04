@@ -261,6 +261,24 @@ func addSCSIController(xml string) string {
 	return xml[:i] + "    <controller type='scsi' index='0' model='virtio-scsi'/>\n  " + xml[i:]
 }
 
+// hasFDCController 报告域里是否已有软驱控制器。
+func hasFDCController(xml string) bool {
+	return strings.Contains(xml, "<controller type='fdc'") ||
+		strings.Contains(xml, `<controller type="fdc"`)
+}
+
+// addFDCController 在 </devices> 前补一个软驱控制器。
+func addFDCController(xml string) string {
+	if hasFDCController(xml) {
+		return xml
+	}
+	i := strings.LastIndex(xml, "</devices>")
+	if i < 0 {
+		return xml
+	}
+	return xml[:i] + "    <controller type='fdc' index='0'/>\n  " + xml[i:]
+}
+
 // nextFreeDevForBus 按总线类型找第一个空闲的数据盘设备名。
 //
 // 从 b 开始：a 留给系统盘/光驱（创建时的第一块设备），从 a 开始会让新盘

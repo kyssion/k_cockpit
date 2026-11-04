@@ -2,7 +2,8 @@
 // 网桥（Linux 桥）、上行口入桥（带节点侧看门狗）、网络收敛修复）。
 //
 // 实现口径与真机环境对齐：OVS 3.3（ovs-vsctl/ovs-ofctl）、iproute2、
-// dnsmasq。安全组/防火墙/公网 IP/端口安全/镜像/抓包随 P3 第二批。
+// dnsmasq。安全组/防火墙/公网 IP/端口安全/镜像/抓包在 ex_net_security.go
+// 与 ex_net_extra.go。
 package nodeagent
 
 import (
@@ -99,6 +100,7 @@ func vpcSwitchChange(ctx context.Context, op agent.Operation, report Reporter) (
 	case "delete":
 		report(Stage{Key: "destroy", Name: "拆除交换机", Index: 1, Total: 1})
 		stopDnsmasqForBridge(bridge)
+		_ = osRemove(dnsmasqConfPath(bridge))
 		// NAT 的 MASQUERADE 随桥一起拆（真机验证抓出：此前只删桥，
 		// POSTROUTING 里的规则残留——交换机没了规则还在，地址段被下一个
 		// 交换机复用时会叠出双份规则）。
@@ -117,33 +119,55 @@ func vpcSwitchChange(ctx context.Context, op agent.Operation, report Reporter) (
 	return &agent.Result{Success: true}, nil
 }
 
-// vpcSwitchAction 实现 migrate / reconfigure / release_port。
-func vpcSwitchAction(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
-	action := strParam(op.Params, "action")
-	switch action {
-	case "reconfigure":
-		// 幂等收敛：按 spec 重新走一遍 create 路径（OVS/dnsmasq 全部幂等）。
-		return vpcSwitchChange(ctx, agent.Operation{
-			Kind: agent.OpVPCSwitchChange, Target: op.Target, Params: map[string]any{
-				"action": "create", "spec": op.Params["spec"],
-			},
-		}, report)
-	case "migrate":
-		return failResult("交换机迁移（换物理口）需要无上行口冲突校验，随 P3 第二批"), nil
-	case "release_port":
-		port := strParam(op.Params, "port")
-		if port != "" {
-			_, _ = sys.Run(ctx, "ovs-vsctl", "--if-exists", "del-port", op.Target, port)
-		}
-		return &agent.Result{Success: true, Data: map[string]any{
-			agent.PortReleaseDataKey: agent.PortReleaseInfo{Released: port != "", Message: "端口已释放"},
-		}}, nil
-	}
-	return failResult("未知交换机动作: " + action), nil
-}
-
 // runDnsmasqForBridge 在桥上启动独立 dnsmasq（pid 文件幂等：已跑则先停）。
 func runDnsmasqForBridge(_ context.Context, bridge, start, end string) error {
+	// 保留已有静态租约：重配置交换机不能把用户绑定的静态地址清掉。
+	hosts := readDnsmasqHosts(bridge)
+	if err := writeDnsmasqConf(bridge, start, end, hosts); err != nil {
+		return err
+	}
+	return startDnsmasqForBridge(bridge)
+}
+
+func dnsmasqConfPath(bridge string) string {
+	return "/var/lib/k_cockpit/dnsmasq/" + bridge + ".conf"
+}
+
+// writeDnsmasqConf 写基础配置与静态租约。
+func writeDnsmasqConf(bridge, start, end string, hosts []string) error {
+	_ = osMkdirAllErr("/var/lib/k_cockpit/dnsmasq")
+	var b strings.Builder
+	fmt.Fprintf(&b, "interface=%s\n", bridge)
+	b.WriteString("bind-dynamic\n")
+	fmt.Fprintf(&b, "dhcp-range=%s,%s,12h\n", start, end)
+	fmt.Fprintf(&b, "dhcp-option=option:router,%s\n", gatewayGuess(start))
+	b.WriteString("no-hosts\nno-resolv\nlog-facility=/dev/null\n")
+	for _, h := range hosts {
+		if strings.TrimSpace(h) != "" {
+			b.WriteString(strings.TrimSpace(h) + "\n")
+		}
+	}
+	return osWriteFile(dnsmasqConfPath(bridge), []byte(b.String()), 0o600)
+}
+
+// readDnsmasqHosts 取配置里已有的 dhcp-host 行。
+func readDnsmasqHosts(bridge string) []string {
+	b, err := osReadFile(dnsmasqConfPath(bridge))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(b, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "dhcp-host=") {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// startDnsmasqForBridge 用配置文件启动 dnsmasq。
+func startDnsmasqForBridge(bridge string) error {
 	pidFile := "/run/kc-dnsmasq-" + bridge + ".pid"
 	stopDnsmasqForBridge(bridge)
 	// **刻意不用请求 ctx**：此前绑定在 gRPC 会话 ctx 上——agent 一断流
@@ -152,16 +176,120 @@ func runDnsmasqForBridge(_ context.Context, bridge, start, end string) error {
 	// （删除/重配置交换机的路径）负责。
 	// 不给 dnsmasq 传 --pid-file：前台模式（--no-daemon）实测**不写 pid
 	// 文件**（真机验证），靠它写等于没有——pid 由 agent 自己落盘。
-	cmd := exec.Command("dnsmasq", "--no-daemon",
-		"--interface="+bridge, "--bind-dynamic", /* 只服务该桥上的请求 */
-		"--dhcp-range="+start+","+end+",12h", "--dhcp-option=option:router,"+gatewayGuess(start),
-		"--no-hosts", "--no-resolv", "--log-facility=/dev/null")
+	cmd := exec.Command("dnsmasq", "--no-daemon", "--conf-file="+dnsmasqConfPath(bridge))
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 	_ = osWriteFile(pidFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0o600)
 	go func() { _ = cmd.Wait() }()
 	return nil
+}
+
+// upsertDHCPHost 增加/替换一条 DHCP 静态租约并重启该桥的 dnsmasq。
+//
+// 配置文件不存在时用控制面下发的范围补建：交换机可能是旧版本 agent
+// 创建的，当时还没有 conf 文件。
+func upsertDHCPHost(ctx context.Context, bridge, mac, ip, start, end string) error {
+	path := dnsmasqConfPath(bridge)
+	b, err := osReadFile(path)
+	if err != nil {
+		if start == "" || end == "" {
+			return fmt.Errorf("网桥 %s 没有由平台管理的 DHCP 配置: %w", bridge, err)
+		}
+		if err := writeDnsmasqConf(bridge, start, end, nil); err != nil {
+			return err
+		}
+		b, err = osReadFile(path)
+		if err != nil {
+			return err
+		}
+	}
+	want := "dhcp-host=" + strings.ToLower(mac) + "," + ip
+	var lines []string
+	for _, line := range strings.Split(b, "\n") {
+		trim := strings.TrimSpace(line)
+		if trim == "" {
+			continue
+		}
+		if strings.HasPrefix(trim, "dhcp-host=") &&
+			(strings.Contains(strings.ToLower(trim), strings.ToLower(mac)+",") ||
+				strings.HasSuffix(trim, ","+ip)) {
+			continue
+		}
+		lines = append(lines, trim)
+	}
+	lines = append(lines, want)
+	// 用原有的 dhcp-range 重写：从配置文本里取，避免再问控制面。
+	rangeStart, rangeEnd := dhcpRangeOf(lines)
+	if rangeStart == "" || rangeEnd == "" {
+		return fmt.Errorf("网桥 %s 的 DHCP 配置缺少 dhcp-range", bridge)
+	}
+	if err := writeDnsmasqConf(bridge, rangeStart, rangeEnd, filterHostLines(lines)); err != nil {
+		return err
+	}
+	return startDnsmasqForBridge(bridge)
+}
+
+// removeDHCPHost 删除一条静态租约；配置不存在时按幂等成功处理。
+func removeDHCPHost(_ context.Context, bridge, mac string) error {
+	path := dnsmasqConfPath(bridge)
+	b, err := osReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var kept []string
+	start, end := "", ""
+	for _, line := range strings.Split(b, "\n") {
+		trim := strings.TrimSpace(line)
+		if trim == "" {
+			continue
+		}
+		if strings.HasPrefix(trim, "dhcp-range=") {
+			start, end = parseDHCPRange(trim)
+			kept = append(kept, trim)
+			continue
+		}
+		if strings.HasPrefix(trim, "dhcp-host=") &&
+			strings.Contains(strings.ToLower(trim), strings.ToLower(mac)+",") {
+			continue
+		}
+		kept = append(kept, trim)
+	}
+	if start == "" || end == "" {
+		return nil
+	}
+	if err := writeDnsmasqConf(bridge, start, end, filterHostLines(kept)); err != nil {
+		return err
+	}
+	return startDnsmasqForBridge(bridge)
+}
+
+func filterHostLines(lines []string) []string {
+	var out []string
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "dhcp-host=") {
+			out = append(out, strings.TrimSpace(line))
+		}
+	}
+	return out
+}
+
+func parseDHCPRange(line string) (string, string) {
+	v := strings.TrimPrefix(line, "dhcp-range=")
+	parts := strings.Split(v, ",")
+	if len(parts) < 2 {
+		return "", ""
+	}
+	return parts[0], parts[1]
+}
+
+func dhcpRangeOf(lines []string) (string, string) {
+	for _, line := range lines {
+		if strings.HasPrefix(line, "dhcp-range=") {
+			return parseDHCPRange(line)
+		}
+	}
+	return "", ""
 }
 
 // stopDnsmasqForBridge 停掉桥对应的 dnsmasq。

@@ -7,6 +7,7 @@ package nodeagent
 import (
 	"context"
 	"fmt"
+	"hash/crc32"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -425,10 +426,39 @@ func vmPortForwardChange(ctx context.Context, op agent.Operation, report Reporte
 // vmStaticIPChange 实现 vm.staticip.change（dnsmasq host 条目）。
 func vmStaticIPChange(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	report(Stage{Key: "static", Name: "登记静态地址", Index: 1, Total: 1})
-	// 静态地址的权威记录在控制面（static_ip 表）；节点侧在 DHCP 里做
-	// MAC→IP 绑定需要 MAC（params 无 mac 字段——该参数形状为控制面记账
-	// 为主，dnsmasq 绑定随 P3 第三批的交换机接入补齐）。
-	return &agent.Result{Success: true, Message: "静态地址已在控制面登记（节点侧 DHCP 绑定随交换机接入补齐）"}, nil
+	action := strParam(op.Params, "action")
+	// 手工配置的地址只存在于来宾内部，控制面记录即可，节点无需动作。
+	if !boolParam(op.Params, "is_dhcp_reservation") {
+		return &agent.Result{Success: true, Message: "手工配置的静态地址无需节点侧 DHCP 动作"}, nil
+	}
+	mac := strings.TrimSpace(strParam(op.Params, "mac"))
+	bridge := strings.TrimSpace(strParam(op.Params, "bridge_name"))
+	ip := strings.TrimSpace(strParam(op.Params, "ip"))
+	start := strings.TrimSpace(strParam(op.Params, "dhcp_start"))
+	end := strings.TrimSpace(strParam(op.Params, "dhcp_end"))
+	switch action {
+	case "bind":
+		if mac == "" || bridge == "" || ip == "" {
+			return failResult("DHCP 静态租约缺少 MAC、网桥或地址"), nil
+		}
+		if strings.Contains(ip, ":") {
+			return failResult("DHCP 静态租约当前只支持 IPv4；IPv6 地址应走手工配置"), nil
+		}
+		if err := upsertDHCPHost(ctx, bridge, mac, ip, start, end); err != nil {
+			return failResult("写入 DHCP 静态租约失败: " + err.Error()), nil
+		}
+		return &agent.Result{Success: true, Message: "DHCP 静态租约已生效"}, nil
+	case "unbind":
+		if mac == "" || bridge == "" {
+			return &agent.Result{Success: true, Message: "静态地址已解绑（无需节点侧动作）"}, nil
+		}
+		if err := removeDHCPHost(ctx, bridge, mac); err != nil {
+			return failResult("删除 DHCP 静态租约失败: " + err.Error()), nil
+		}
+		return &agent.Result{Success: true, Message: "DHCP 静态租约已删除"}, nil
+	default:
+		return failResult("未知静态地址动作: " + action), nil
+	}
 }
 
 // publicIPChange 实现 public.ip.change（bind/unbind/migrate 的 DNAT）。
@@ -439,32 +469,113 @@ func vmStaticIPChange(ctx context.Context, op agent.Operation, report Reporter) 
 // 关机解析不到，按「-d <ip> + DNAT」的形状从规则集匹配删除，不要求重现
 // 完整的 --to-destination。
 func publicIPChange(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
-	report(Stage{Key: "public_ip", Name: "调整公网 DNAT", Index: 1, Total: 1})
+	report(Stage{Key: "public_ip", Name: "调整公网地址", Index: 1, Total: 1})
 	action := strParam(op.Params, "action")
 	ip := strParam(op.Params, "ip")
 	vmName := strParam(op.Params, "vm_name")
+	mode := strParam(op.Params, "mode")
+	if mode == "" {
+		mode = "nat_1to1"
+	}
+
+	target := strParam(op.Params, "vm_ip")
+	if target == "" && vmName != "" {
+		target = vmIP(ctx, vmName)
+	}
+	uplink := defaultRouteIface(ctx)
+	isV6 := strings.Contains(ip, ":")
+
+	if isV6 {
+		// IPv6 没有 1:1 NAT：地址足够多，控制面只应提供 routed/bridged。
+		switch action {
+		case "bind", "migrate":
+			if mode == "nat_1to1" || mode == "nat" || mode == "" {
+				return failResult("IPv6 公网地址不支持 1:1 NAT，请使用 routed 或 bridged 模式"), nil
+			}
+			if mode == "routed" {
+				if target == "" {
+					return failResult("经典路由要求来宾已配置公网地址且能被节点解析到 IP"), nil
+				}
+				if _, err := sys.Run(ctx, "ip", "-6", "route", "replace", ip+"/128", "via", target); err != nil {
+					return failResult("添加 IPv6 路由失败: " + err.Error()), nil
+				}
+				if uplink != "" {
+					_, _ = sys.Run(ctx, "ip", "-6", "neigh", "replace", "proxy", ip, "dev", uplink)
+				}
+			}
+		case "unbind":
+			removeRoutedPublicIP(ctx, ip, uplink)
+		default:
+			return failResult("未知公网地址动作: " + action), nil
+		}
+		return &agent.Result{Success: true, Data: map[string]any{
+			agent.PublicIPDataKey: agent.PublicIPInfo{Message: "IPv6 公网地址规则已更新"},
+		}}, nil
+	}
 
 	switch action {
 	case "bind", "migrate":
-		target := strParam(op.Params, "vm_ip")
-		if target == "" && vmName != "" {
-			target = vmIP(ctx, vmName)
+		switch mode {
+		case "nat_1to1", "nat":
+			if target == "" || target == "0.0.0.0/0" {
+				return failResult("虚拟机当前没有可用的 IP（未开机或未获取地址），无法绑定公网地址"), nil
+			}
+			// 切模式时先清掉另一种模式可能留下的规则。
+			removeRoutedPublicIP(ctx, ip, uplink)
+			iptablesNatDel(ctx, "PREROUTING", "-d", ip, "-j", "DNAT", "--to-destination", target)
+			iptablesNatAdd(ctx, "PREROUTING", "-d", ip, "-j", "DNAT", "--to-destination", target)
+		case "routed":
+			if target == "" || target == "0.0.0.0/0" {
+				return failResult("经典路由要求来宾已配置公网地址且能被节点解析到 IP"), nil
+			}
+			// 路由模式不做地址转换，只把公网地址路由到来宾，并让上行
+			// 网卡代答 ARP。
+			iptablesNatDelMatching(ctx, "PREROUTING", func(fields []string) bool {
+				return fieldsHave(fields, "-d", ip, true) && fieldsHave(fields, "-j", "DNAT", false)
+			})
+			_, _ = sys.Run(ctx, "sysctl", "-w", "net.ipv4.ip_forward=1")
+			if _, err := sys.Run(ctx, "ip", "route", "replace", ip+"/32", "via", target); err != nil {
+				return failResult("添加路由失败: " + err.Error()), nil
+			}
+			if uplink != "" {
+				_, _ = sys.Run(ctx, "ip", "neigh", "replace", "proxy", ip, "dev", uplink)
+			}
+		case "bridged":
+			// 桥接模式的地址直接出现在来宾网卡上，宿主机不做 NAT/路由。
+			// 能走到这里说明该 VM 的网卡已经接在同一二层网络（控制面前置）。
+			iptablesNatDelMatching(ctx, "PREROUTING", func(fields []string) bool {
+				return fieldsHave(fields, "-d", ip, true) && fieldsHave(fields, "-j", "DNAT", false)
+			})
+			removeRoutedPublicIP(ctx, ip, uplink)
+		default:
+			return failResult("不支持的公网地址模式: " + mode), nil
 		}
-		if target == "" || target == "0.0.0.0/0" {
-			return failResult("虚拟机当前没有可用的 IP（未开机或未获取地址），无法绑定公网地址"), nil
-		}
-		iptablesNatDel(ctx, "PREROUTING", "-d", ip, "-j", "DNAT", "--to-destination", target)
-		iptablesNatAdd(ctx, "PREROUTING", "-d", ip, "-j", "DNAT", "--to-destination", target)
 	case "unbind":
 		iptablesNatDelMatching(ctx, "PREROUTING", func(fields []string) bool {
 			return fieldsHave(fields, "-d", ip, true) && fieldsHave(fields, "-j", "DNAT", false)
 		})
+		removeRoutedPublicIP(ctx, ip, uplink)
 	default:
 		return failResult("未知公网地址动作: " + action), nil
 	}
 	return &agent.Result{Success: true, Data: map[string]any{
 		agent.PublicIPDataKey: agent.PublicIPInfo{Message: "公网地址规则已更新"},
 	}}, nil
+}
+
+// removeRoutedPublicIP 清掉 routed 模式留下的路由与 proxy ARP/NDP。
+func removeRoutedPublicIP(ctx context.Context, ip, uplink string) {
+	if strings.Contains(ip, ":") {
+		_, _ = sys.Run(ctx, "ip", "-6", "route", "del", ip+"/128")
+		if uplink != "" {
+			_, _ = sys.Run(ctx, "ip", "-6", "neigh", "del", "proxy", ip, "dev", uplink)
+		}
+		return
+	}
+	_, _ = sys.Run(ctx, "ip", "route", "del", ip+"/32")
+	if uplink != "" {
+		_, _ = sys.Run(ctx, "ip", "neigh", "del", "proxy", ip, "dev", uplink)
+	}
 }
 
 // iptablesNatDelMatching 从 iptables-save 里找 chain 上满足谓词的规则并
@@ -579,6 +690,7 @@ func portSecurityApply(ctx context.Context, op agent.Operation, report Reporter)
 	portRef := strParam(op.Params, "port_ref")
 	spoofing := boolParam(op.Params, "spoofing_guard")
 	isolation := boolParam(op.Params, "isolation")
+	pps, _ := paramInt(op.Params, "pps_limit")
 
 	bridge, err := sys.OVSInterfaceBridge(ctx, portRef)
 	if err != nil {
@@ -590,11 +702,26 @@ func portSecurityApply(ctx context.Context, op agent.Operation, report Reporter)
 	// 生成 dl_src= 的非法流。
 	_, derr := sys.Run(ctx, "ovs-ofctl", "-O", "OpenFlow13", "del-flows", bridge,
 		"in_port="+portRef)
+	meterAction := ""
+	if pps > 0 {
+		// 每个端口一个稳定 meter id；crc32 碰撞概率足够低，且即使碰撞
+		// 也只是两个端口共用同一个速率上限。
+		id := crc32.ChecksumIEEE([]byte(portRef))%60000 + 1
+		// 先删同 id 的旧 meter：只 add 时已存在的 meter 会让新 rate
+		// 静默不生效。
+		_, _ = sys.Run(ctx, "ovs-ofctl", "-O", "OpenFlow13", "del-meter", bridge,
+			fmt.Sprintf("meter=%d", id))
+		_, merr := sys.Run(ctx, "ovs-ofctl", "-O", "OpenFlow13", "add-meter", bridge,
+			fmt.Sprintf("meter=%d,pktps,band=type=drop,rate=%d", id, pps))
+		if merr != nil && !strings.Contains(strings.ToLower(merr.Error()), "exist") {
+			return failResult("写入 PPS 限速 meter 失败: " + merr.Error()), nil
+		}
+		meterAction = fmt.Sprintf("meter:%d,", id)
+	}
 	switch {
 	case isolation:
-		_, err := sys.Run(ctx, "ovs-ofctl", "-O", "OpenFlow13", "add-flow", bridge,
-			"in_port="+portRef+",action=drop")
-		if err != nil {
+		if _, err := sys.Run(ctx, "ovs-ofctl", "-O", "OpenFlow13", "add-flow", bridge,
+			"in_port="+portRef+",priority=200,actions=drop"); err != nil {
 			return failResult("写入隔离流表失败: " + err.Error()), nil
 		}
 	case spoofing:
@@ -602,9 +729,18 @@ func portSecurityApply(ctx context.Context, op agent.Operation, report Reporter)
 		if mac == "" {
 			return failResult("读不到端口 MAC，无法写入防伪造流表"), nil
 		}
+		action := "normal"
+		if meterAction != "" {
+			action = meterAction + "normal"
+		}
 		if _, err := sys.Run(ctx, "ovs-ofctl", "-O", "OpenFlow13", "add-flow", bridge,
-			"in_port="+portRef+",dl_src="+mac+",action=normal"); err != nil {
+			"in_port="+portRef+",dl_src="+mac+",priority=100,actions="+action); err != nil {
 			return failResult("写入防伪造流表失败: " + err.Error()), nil
+		}
+	case pps > 0:
+		if _, err := sys.Run(ctx, "ovs-ofctl", "-O", "OpenFlow13", "add-flow", bridge,
+			"in_port="+portRef+",priority=50,actions="+meterAction+"normal"); err != nil {
+			return failResult("写入 PPS 限速流表失败: " + err.Error()), nil
 		}
 	default:
 		if derr != nil {
@@ -674,12 +810,19 @@ func portMirrorEnable(ctx context.Context, op agent.Operation, report Reporter) 
 
 	report(Stage{Key: "watch_arm", Name: "布防看门狗", Index: 2, Total: 2})
 	wd := 120
-	if v, ok := op.Params["watchdog_seconds"].(float64); ok && int(v) > 0 {
+	switch v := op.Params["watchdog_seconds"].(type) {
+	case float64:
 		wd = int(v)
+	case int:
+		wd = v
 	}
 	confirmFile := "/run/kc-mirror-confirm-" + name
 	_ = osRemove(confirmFile)
-	armMirrorWatchdog(name, mirrorName, wd)
+	// 负数表示“修复重下发”，不布防看门狗：修复的目标是恢复持续状态，
+	// 而不是重新进入等待用户确认的窗口。
+	if wd > 0 {
+		armMirrorWatchdog(name, mirrorName, wd)
+	}
 
 	return &agent.Result{Success: true, Data: map[string]any{
 		agent.PortMirrorDataKey: agent.PortMirrorInfo{
