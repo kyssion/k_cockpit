@@ -31,7 +31,7 @@ const (
 // 需要它的理由与 vm 包的 probeClient 相同：mock 返回固定清单，而本包要
 // 验证的恰恰是「不同状态的盘被区别对待」——系统盘、已挂载、已有数据。
 type diskClient struct {
-	*agent.MockClient
+	*stubClient
 	disks []agent.Disk
 	// volumes 是 scan 返回的池内磁盘，用于覆盖删除前的占用检查。
 	volumes []string
@@ -64,7 +64,7 @@ func (c *diskClient) Execute(ctx context.Context, op agent.Operation) (*agent.Re
 			},
 		}, nil
 	}
-	return c.MockClient.Execute(ctx, op)
+	return c.stubClient.Execute(ctx, op)
 }
 
 func defaultDisks() []agent.Disk {
@@ -108,7 +108,7 @@ func newTestEnv(t *testing.T) (*pool.Service, *task.Queue, *gorm.DB, *diskClient
 		MaxConcurrent: 2,
 		PollInterval:  20 * time.Millisecond,
 	})
-	client := &diskClient{MockClient: agent.NewMockClient(), disks: defaultDisks()}
+	client := &diskClient{stubClient: newStubClient(), disks: defaultDisks()}
 	queue.Register(pool.NewCreateExecutor(db, client))
 	queue.Register(pool.NewDeleteExecutor(db, client))
 

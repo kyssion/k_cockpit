@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"k_cockpit/internal/agent"
 	"testing"
 	"time"
 
@@ -25,7 +24,7 @@ func validSwitch() vswitch.SwitchRequest {
 }
 
 func TestCreateSwitchWritesRecordAfterNodeSucceeds(t *testing.T) {
-	svc, db := newTestEnv(t, agent.NewMockClient())
+	svc, db := newTestEnv(t, newStubClient())
 	ctx := context.Background()
 
 	tk, err := svc.CreateSwitch(ctx, 1, validSwitch(), 7, "admin", "10.0.0.1")
@@ -73,7 +72,7 @@ func TestBridgeNameDoesNotCollide(t *testing.T) {
 	for _, name := range []string{
 		"production-network-a", "production-network-b", "prod", "prod-2",
 	} {
-		svc, db := newTestEnv(t, agent.NewMockClient())
+		svc, db := newTestEnv(t, newStubClient())
 		req := validSwitch()
 		req.Name = name
 		if _, err := svc.CreateSwitch(context.Background(), 1, req, 7, "admin", ""); err != nil {
@@ -95,7 +94,7 @@ func TestBridgeNameDoesNotCollide(t *testing.T) {
 }
 
 func TestSwitchRejectsInvalidNetwork(t *testing.T) {
-	svc, _ := newTestEnv(t, agent.NewMockClient())
+	svc, _ := newTestEnv(t, newStubClient())
 	ctx := context.Background()
 
 	cases := []struct {
@@ -143,7 +142,7 @@ func TestSwitchRejectsInvalidNetwork(t *testing.T) {
 }
 
 func TestSystemSwitchIsProtected(t *testing.T) {
-	svc, db := newTestEnv(t, agent.NewMockClient())
+	svc, db := newTestEnv(t, newStubClient())
 	ctx := context.Background()
 
 	// 系统基础网络在首次列出网络时**幂等**建立，因此用读接口把它触发出来，
@@ -168,7 +167,7 @@ func TestSystemSwitchIsProtected(t *testing.T) {
 }
 
 func TestDeleteSwitchRejectsAttachedInterfaces(t *testing.T) {
-	svc, db := newTestEnv(t, agent.NewMockClient())
+	svc, db := newTestEnv(t, newStubClient())
 	ctx := context.Background()
 
 	if _, err := svc.CreateSwitch(ctx, 1, validSwitch(), 7, "admin", ""); err != nil {
@@ -195,7 +194,7 @@ func TestDeleteSwitchRejectsAttachedInterfaces(t *testing.T) {
 }
 
 func TestSwitchUniquePerNode(t *testing.T) {
-	svc, db := newTestEnv(t, agent.NewMockClient())
+	svc, db := newTestEnv(t, newStubClient())
 	ctx := context.Background()
 
 	if _, err := svc.CreateSwitch(ctx, 1, validSwitch(), 7, "admin", ""); err != nil {

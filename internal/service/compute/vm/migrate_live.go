@@ -34,7 +34,7 @@ type liveAssessment struct {
 
 // AssessLive 按"脏页速率 ÷ 链路带宽"的比值给出热迁移结论（F-2-15）。
 //
-// 导出供测试钉住阈值规则：mock 的评估读数固定，端到端构造不出"追不上"
+// 导出供测试钉住阈值规则：测试替身的评估读数固定，端到端构造不出"追不上"
 // 的场景，而阈值规则（阻断 / 限流 / 放行）恰恰是本功能最需要钉住的部分。
 func AssessLive(info agent.MigrateAssessInfo) liveAssessment {
 	out := liveAssessment{

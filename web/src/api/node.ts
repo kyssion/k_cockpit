@@ -49,10 +49,8 @@ export interface EnrollTokenResult {
   token: string
   expires_at: string
   node: NodeView
-  /** agent 安装命令；agent 尚未实现，接入后填充。 */
+  /** agent 注册命令（在目标宿主机上执行）。 */
   install_command: string
-  /** 开发期的模拟注册命令（仅 AGENT_TRANSPORT=mock 时返回）。 */
-  simulate_command?: string
 }
 
 export const nodeApi = {

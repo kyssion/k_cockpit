@@ -102,7 +102,7 @@ bin/agent run
 
 默认身份目录 `/var/lib/k_cockpit-agent` 需要 root 权限，非 root 调试时用 `-state-dir` 指定可写目录。
 
-systemd 单元见 [`deploy/agent/k_cockpit-agent.service`](deploy/agent/k_cockpit-agent.service)。**开发期默认 `AGENT_TRANSPORT=mock`**，不接真实 agent 也能跑通全部流程。
+systemd 单元见 [`deploy/agent/k_cockpit-agent.service`](deploy/agent/k_cockpit-agent.service)。控制面启动后监听 `:8443`（mTLS），agent 主动拨入；不接 agent 时节点列表为空，所有节点操作会明确返回「节点不在线」。
 
 ### 前端
 
@@ -128,7 +128,7 @@ go test ./...                # 单元测试
 pnpm exec tsc -b             # 类型检查
 pnpm lint                    # oxlint
 pnpm test                    # Vitest
-pnpm test:e2e                # Playwright 冒烟（自拉起 mock 栈）
+pnpm test:e2e                # Playwright 冒烟（自拉起独立控制面与 vite）
 pnpm build                   # 产物在 web/dist
 ```
 
@@ -149,7 +149,7 @@ k_cockpit/
 │   ├── repository/       # 数据库访问（分批迁入中）
 │   ├── model/            # 表模型（跨域共享）
 │   ├── platform/         # 基础设施（api / config / database / logging / authz / audit …）
-│   ├── agent/            # 控制面 → 宿主机 的契约与 mock
+│   ├── agent/            # 控制面 → 宿主机 的领域操作契约
 │   ├── agentproto/       # gRPC 线上契约（agent.proto）
 │   └── nodeagent/        # agent 侧执行器
 ├── web/                  # 前端（纯 SPA）

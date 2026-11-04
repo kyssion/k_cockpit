@@ -2,13 +2,10 @@
 //
 // 控制面不直连宿主机（[ADR-0005]）：全部宿主侧动作都经本包下达。
 //
-// 本包只定义契约，运输层由 AGENT_TRANSPORT 选择：
-//   - mock（默认）：直接返回结果，用于演示与测试（[ADR-0007]）；
-//   - gRPC：经 internal/agent/hub 的反向长连接下发到节点上的
-//     internal/nodeagent（二进制见 cmd/agent）。
+// 本包只定义契约；唯一的运输层是 gRPC：经 internal/agent/hub 的反向长连接
+// 下发到节点上的 internal/nodeagent（二进制见 cmd/agent）。
 //
-// 业务代码只依赖 Client，不知道背后是 mock 还是 gRPC，因此切换运输层时
-// 调用方无需改动。
+// 业务代码只依赖 Client，不感知运输层实现（2026-11-04 起移除 mock 传输）。
 //
 // 接口**按需扩展**：实现每个业务能力时，才向 Client 添加该能力所需的方法，
 // 不为尚未实现的能力臆测协议形态。相关决策见 docs/06-decisions/ 的 ADR-0005

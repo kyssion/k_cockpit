@@ -72,7 +72,7 @@ func seedVM(t *testing.T, db *gorm.DB, name, status string) *model.VM {
 
 // TestTickCollectsHost 覆盖最基本的采集。
 func TestTickCollectsHost(t *testing.T) {
-	db, c := newTestEnv(t, agent.NewMockClient())
+	db, c := newTestEnv(t, newStubClient())
 	seedVM(t, db, "vm-1", model.VMStatusRunning)
 
 	c.Tick(context.Background())
@@ -114,7 +114,7 @@ func TestFailureWritesNoRecord(t *testing.T) {
 // 停机机器没有指标可读，而给它们写记录会让图表上出现一条贴着 0 的线——
 // 那看起来像"这台机器很闲"，而不是"它没在跑"。
 func TestOnlyRunningVMsAreCollected(t *testing.T) {
-	db, c := newTestEnv(t, agent.NewMockClient())
+	db, c := newTestEnv(t, newStubClient())
 	seedVM(t, db, "running", model.VMStatusRunning)
 	seedVM(t, db, "stopped", model.VMStatusStopped)
 
@@ -140,7 +140,7 @@ func TestOnlyRunningVMsAreCollected(t *testing.T) {
 // **累加而不是覆盖**：每一次采样代表"这台机器又跑了 interval 秒"，而配额
 // 与超限处置要的正是这个总量。
 func TestRuntimeAccumulatesAcrossTicks(t *testing.T) {
-	db, c := newTestEnv(t, agent.NewMockClient())
+	db, c := newTestEnv(t, newStubClient())
 	vm := seedVM(t, db, "vm-1", model.VMStatusRunning)
 
 	for i := 0; i < 3; i++ {
@@ -165,7 +165,7 @@ func TestRuntimeAccumulatesAcrossTicks(t *testing.T) {
 
 // TestTrafficAccumulates 覆盖流量累计。
 func TestTrafficAccumulates(t *testing.T) {
-	db, c := newTestEnv(t, agent.NewMockClient())
+	db, c := newTestEnv(t, newStubClient())
 	vm := seedVM(t, db, "vm-1", model.VMStatusRunning)
 
 	c.Tick(context.Background())
@@ -194,7 +194,7 @@ func TestTrafficAccumulates(t *testing.T) {
 // 按天一行（一台机器一年才 365 行），它们才是长期要留的东西——配额按月算、
 // 运行时长要能回溯。而明细只在排查最近几天时有用。
 func TestCleanupRemovesOnlyDetail(t *testing.T) {
-	db, c := newTestEnv(t, agent.NewMockClient())
+	db, c := newTestEnv(t, newStubClient())
 	vm := seedVM(t, db, "vm-1", model.VMStatusRunning)
 
 	c.Tick(context.Background())
@@ -227,7 +227,7 @@ func TestCleanupRemovesOnlyDetail(t *testing.T) {
 // Kbps 是**千比特每秒**，换算成字节要先乘 1000、再除 8、再乘秒数。
 // 三处里任何一处写错都会得到一个数量级错误的数字，而它看起来完全正常。
 func TestIntervalBytesConversion(t *testing.T) {
-	db, c := newTestEnv(t, agent.NewMockClient())
+	db, c := newTestEnv(t, newStubClient())
 	seedVM(t, db, "vm-1", model.VMStatusRunning)
 
 	c.Tick(context.Background())
@@ -247,7 +247,7 @@ func TestIntervalBytesConversion(t *testing.T) {
 
 // TestDisabledNodeIsSkipped 覆盖采集范围。
 func TestDisabledNodeIsSkipped(t *testing.T) {
-	db, c := newTestEnv(t, agent.NewMockClient())
+	db, c := newTestEnv(t, newStubClient())
 	seedVM(t, db, "vm-1", model.VMStatusRunning)
 
 	if err := db.Model(&model.Node{}).Where("id = ?", 1).

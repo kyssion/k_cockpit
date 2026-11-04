@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/authz"
@@ -18,7 +17,7 @@ import (
 // requires_shutdown，没有这份信息的话，打开热添加的机器在运行中
 // 也改不了——开关就成了摆设。
 func TestEditFormReportsHotAddition(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusRunning})
 	ctx := context.Background()
 
 	// 预置一台运行中、未开热添加的机器。
@@ -59,7 +58,7 @@ func TestEditFormReportsHotAddition(t *testing.T) {
 // TestUpdateConfigHotAdditionRules 覆盖热改的受理校验（G-33）：
 // 开关未开拒绝；只能增加；混合提交里含需关机项时仍拒绝。
 func TestUpdateConfigHotAdditionRules(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusRunning})
 	ctx := context.Background()
 
 	row := &model.VM{

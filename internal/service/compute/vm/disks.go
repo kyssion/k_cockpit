@@ -591,7 +591,7 @@ func (s *Service) probePCIeSlots(ctx context.Context, vm *model.VM) (agent.PCIeI
 
 // SlotFallbackFor 判定是否需要槽位降级，返回降级后的总线。
 //
-// 导出供测试钉住规则：mock 的 PCIe 读数是固定的，端到端构造不出
+// 导出供测试钉住规则：测试替身的 PCIe 读数是固定的，端到端构造不出
 // "槽位耗尽"的场景，而判定规则本身值得被钉住。
 func SlotFallbackFor(info agent.PCIeInfo) (string, bool) {
 	// 机型不支持热插拔（i440FX）不是槽位问题：换总线救不了它，该提示

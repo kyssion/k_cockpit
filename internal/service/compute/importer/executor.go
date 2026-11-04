@@ -25,6 +25,8 @@ type importParams struct {
 	SourceFilename  string `json:"source_filename"`
 	SourceFormat    string `json:"source_format"`
 	SourceSizeBytes int64  `json:"source_size_bytes"`
+	// SourceRelPath 是「我的存储」相对路径；节点只认路径，不认文件名。
+	SourceRelPath string `json:"source_rel_path"`
 
 	VCPU      int    `json:"vcpu"`
 	MemoryMB  int    `json:"memory_mb"`
@@ -73,6 +75,7 @@ func (e *ImportExecutor) Run(ctx context.Context, t *model.Task) error {
 			"name":          p.Name,
 			"source_format": p.SourceFormat,
 			"size_bytes":    p.SourceSizeBytes,
+			"rel_path":      p.SourceRelPath,
 		},
 	})
 	if err != nil {

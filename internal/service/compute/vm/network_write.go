@@ -121,7 +121,7 @@ func (s *Service) AddInterface(
 	}
 
 	return s.enqueueNetChange(ctx, vm, v, operatorName, clientIP,
-		model.TaskVMInterfaceChange, "vm.interface.add.request", NicSpec(nic))
+		model.TaskVMInterfaceChange, "vm.interface.add.request", s.nicSpec(ctx, nic))
 }
 
 // UpdateInterface 受理一次网卡修改。
@@ -180,7 +180,7 @@ func (s *Service) UpdateInterface(
 		return nil, err
 	}
 	return s.enqueueNetChange(ctx, vm, v, operatorName, clientIP,
-		model.TaskVMInterfaceChange, "vm.interface.update.request", NicSpec(*updated))
+		model.TaskVMInterfaceChange, "vm.interface.update.request", s.nicSpec(ctx, *updated))
 }
 
 // RemoveInterface 受理一次网卡删除。
@@ -216,7 +216,7 @@ func (s *Service) RemoveInterface(
 		return nil, api.Internal()
 	}
 
-	spec := NicSpec(*nic)
+	spec := s.nicSpec(ctx, *nic)
 	spec["action"] = NetActionRemove
 	return s.enqueueNetChange(ctx, vm, v, operatorName, clientIP,
 		model.TaskVMInterfaceChange, "vm.interface.remove.request", spec)
@@ -243,6 +243,30 @@ func NicSpec(nic model.VMInterface) map[string]any {
 	}
 	if nic.AllowedAddresses != nil {
 		spec["allowed_addresses"] = *nic.AllowedAddresses
+	}
+	return spec
+}
+
+// nicSpec 在 NicSpec 之上补上交换机对应的宿主机网桥名。
+//
+// 节点只知道网桥名，不知道控制面的 switch_id；桥名由交换机创建时生成
+// （bridgeNameFor），因此必须由控制面带下去，节点无法自己推导。
+func (s *Service) nicSpec(ctx context.Context, nic model.VMInterface) map[string]any {
+	spec := NicSpec(nic)
+	if nic.SwitchID == nil {
+		return spec
+	}
+	var sw model.VpcSwitch
+	if err := s.db.WithContext(ctx).
+		Select("bridge_name").
+		First(&sw, *nic.SwitchID).Error; err != nil {
+		// 交换机记录不在了：不阻断下发，按默认网络处理，并在下发给节点
+		// 的描述里不带 bridge_name（节点会走 user 模式）。
+		log.Printf("[vm] 查询网卡对应交换机失败 switch=%d: %v", *nic.SwitchID, err)
+		return spec
+	}
+	if sw.BridgeName != "" {
+		spec["bridge_name"] = sw.BridgeName
 	}
 	return spec
 }

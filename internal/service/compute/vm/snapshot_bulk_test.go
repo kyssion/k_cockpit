@@ -7,7 +7,6 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/service/compute/vm"
@@ -32,8 +31,8 @@ func seedSnapshot(t *testing.T, db *gorm.DB, vmID int64, name string, status str
 // 虚拟机正运行在这个快照上时删掉它，会让 libvirt 的"当前状态"失去参照；
 // 这与"删除一个历史还原点"完全是两件事，因此默认要区分。
 func TestDeleteAllSnapshotsSkipsCurrent(t *testing.T) {
-	svc, queue, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
-	queue.Register(vm.NewSnapshotDeleteAllExecutor(db, agent.NewMockClient()))
+	svc, queue, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
+	queue.Register(vm.NewSnapshotDeleteAllExecutor(db, newStubClient()))
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-snap", OwnerID: ptr(int64(7)), Present: true}
@@ -60,7 +59,7 @@ func TestDeleteAllSnapshotsSkipsCurrent(t *testing.T) {
 // 返回冲突而不是"成功删了 0 个"：后者会让用户以为清理过了，而实际上
 // 一个都没删。
 func TestDeleteAllSnapshotsRejectsWhenNothingToDelete(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-empty", OwnerID: ptr(int64(7)), Present: true}
@@ -78,8 +77,8 @@ func TestDeleteAllSnapshotsRejectsWhenNothingToDelete(t *testing.T) {
 // 快照链上后建的挂在先建的下游，从旧的开始删会在第一个上撞到
 // "存在子快照"而被拒——整批失败在第一个上，是最难看懂的一种结果。
 func TestDeleteAllSnapshotsDeletesNewestFirst(t *testing.T) {
-	svc, queue, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
-	queue.Register(vm.NewSnapshotDeleteAllExecutor(db, agent.NewMockClient()))
+	svc, queue, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
+	queue.Register(vm.NewSnapshotDeleteAllExecutor(db, newStubClient()))
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-chain", OwnerID: ptr(int64(7)), Present: true}
@@ -108,7 +107,7 @@ func TestDeleteAllSnapshotsDeletesNewestFirst(t *testing.T) {
 //
 // 让操作可用但什么也不做，是最容易让人误判"已经修好了"的一类行为。
 func TestRepairNVRAMRequiresUEFI(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	bios := model.VM{NodeID: 1, Name: "vm-bios", OwnerID: ptr(int64(7)),
@@ -125,8 +124,8 @@ func TestRepairNVRAMRequiresUEFI(t *testing.T) {
 }
 
 func TestRepairNVRAMEnqueuesForUEFI(t *testing.T) {
-	svc, queue, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
-	queue.Register(vm.NewNVRAMRepairExecutor(agent.NewMockClient()))
+	svc, queue, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
+	queue.Register(vm.NewNVRAMRepairExecutor(newStubClient()))
 	ctx := context.Background()
 
 	uefi := model.VM{NodeID: 1, Name: "vm-uefi", OwnerID: ptr(int64(7)),

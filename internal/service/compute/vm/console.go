@@ -547,7 +547,7 @@ func (s *Service) OpenConsole(ctx context.Context, id int64, viewerID int64, v a
 	if err != nil {
 		s.consoleSessions().close(session.ID)
 		if errors.Is(err, agent.ErrStreamUnsupported) {
-			return nil, nil, api.Unavailable("当前 agent 为模拟模式，不提供控制台数据流")
+			return nil, nil, api.Unavailable("当前节点的 agent 不支持控制台数据流")
 		}
 		return nil, nil, api.Unavailable("无法建立控制台通道")
 	}

@@ -170,9 +170,6 @@ type Deps struct {
 	Maintenance *maintenance.Service
 
 	SecureCookie bool
-	// SimulateAgent 为 true 时注册开发期的模拟注册入口。
-	// 仅在 AGENT_TRANSPORT=mock 时开启；该开关为 mock 专用。
-	SimulateAgent bool
 	// InputFilterEnabled 返回输入侧防护（请求过滤）是否开启；nil 时恒开。
 	// 做成函数而不是布尔：开关来自系统设置，需要每次请求现读。
 	InputFilterEnabled func() bool

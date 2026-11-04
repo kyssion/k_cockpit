@@ -10,7 +10,6 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
@@ -51,7 +50,7 @@ func newTestEnv(t *testing.T) (*importer.Service, *gorm.DB) {
 		t.Fatalf("创建节点失败: %v", err)
 	}
 
-	client := agent.NewMockClient()
+	client := newStubClient()
 	recorder := audit.NewRecorder(db)
 	queue := task.NewQueue(db, recorder, task.Options{
 		MaxConcurrent: 1,

@@ -1214,6 +1214,7 @@ function PreprocessModal({
 }) {
   const [installAgent, setInstallAgent] = useState(true)
   const [injectSSHKey, setInjectSSHKey] = useState(false)
+  const [sshPublicKey, setSSHPublicKey] = useState('')
   const [resetMachineID, setResetMachineID] = useState(true)
   const [removeCloudInit, setRemoveCloudInit] = useState(false)
   const [acknowledged, setAcknowledged] = useState(false)
@@ -1223,6 +1224,7 @@ function PreprocessModal({
     setSeeded(template?.id ?? null)
     setInstallAgent(true)
     setInjectSSHKey(false)
+    setSSHPublicKey('')
     setResetMachineID(true)
     setRemoveCloudInit(false)
     setAcknowledged(false)
@@ -1233,6 +1235,7 @@ function PreprocessModal({
       templatePreprocessApi.run(template?.id ?? 0, {
         install_agent: installAgent,
         inject_ssh_key: injectSSHKey,
+        ssh_public_key: sshPublicKey.trim() || undefined,
         reset_machine_id: resetMachineID,
         remove_cloud_init: removeCloudInit,
         acknowledge: acknowledged,
@@ -1257,7 +1260,7 @@ function PreprocessModal({
           <Button
             size="sm"
             loading={run.isPending}
-            disabled={!anyStep || !acknowledged}
+            disabled={!anyStep || !acknowledged || (injectSSHKey && !sshPublicKey.trim())}
             onClick={() => run.mutate()}
           >
             提交
@@ -1285,6 +1288,15 @@ function PreprocessModal({
           />
           <span>注入 SSH 公钥</span>
         </label>
+        {injectSSHKey && (
+          <textarea
+            value={sshPublicKey}
+            onChange={(e) => setSSHPublicKey(e.target.value)}
+            placeholder="ssh-ed25519 AAAA... user@example"
+            aria-label="SSH 公钥"
+            className="min-h-24 w-full rounded-control border border-line-strong bg-sunken p-2 font-mono text-xs text-ink"
+          />
+        )}
 
         <label className="flex cursor-pointer items-start gap-2 text-sm text-ink-2">
           <input

@@ -1,7 +1,7 @@
 # 功能规格
 
 > 状态：生效
-> 最后更新：2026-11-03
+> 最后更新：2026-11-04
 > 关联：[`../01-product/PRD.md`](../01-product/PRD.md)（功能编号与优先级）· [`../01-product/ROADMAP.md`](../01-product/ROADMAP.md)（阶段与里程碑）· [`../01-product/CAPABILITY_MAP.md`](../01-product/CAPABILITY_MAP.md)（能力依赖）
 
 本目录存放**单个功能的详细规格**。一份规格对应一个可独立开发与验证的功能单元。

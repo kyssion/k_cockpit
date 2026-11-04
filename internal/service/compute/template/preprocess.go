@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -23,6 +24,8 @@ type PreprocessOptions struct {
 	InstallAgent bool
 	// InjectSSHKey 注入 SSH 公钥。
 	InjectSSHKey bool
+	// SSHPublicKey 是选中 InjectSSHKey 时必填的公钥内容。
+	SSHPublicKey string
 	// ResetMachineID 重置 machine-id。
 	//
 	// 克隆出来的机器如果不重置，它们在网络里会被当成同一台（DHCP 拿到同一个地址、systemd 的 ID 冲突）——这是克隆场景里最常见的隐性故障。
@@ -66,6 +69,9 @@ func (s *Service) Preprocess(
 	if len(opts.Steps()) == 0 {
 		return nil, api.InvalidParameter("请至少选择一项预处理内容")
 	}
+	if opts.InjectSSHKey && strings.TrimSpace(opts.SSHPublicKey) == "" {
+		return nil, api.InvalidParameter("已选择注入 SSH 公钥，但公钥内容为空")
+	}
 	if !acknowledge {
 		return nil, api.Conflict("预处理会改写模板镜像内容（失败时由节点还原），确认请勾选")
 	}
@@ -79,9 +85,10 @@ func (s *Service) Preprocess(
 		OwnerID:      v.UserID,
 		CreatedBy:    v.UserID,
 		Params: preprocessParams{
-			TemplateID: tpl.ID,
-			DiskPath:   tpl.DiskPathOf(),
-			Steps:      opts.Steps(),
+			TemplateID:   tpl.ID,
+			DiskPath:     tpl.DiskPathOf(),
+			Steps:        opts.Steps(),
+			SSHPublicKey: strings.TrimSpace(opts.SSHPublicKey),
 		},
 	})
 	if err != nil {
@@ -92,9 +99,10 @@ func (s *Service) Preprocess(
 }
 
 type preprocessParams struct {
-	TemplateID int64    `json:"template_id"`
-	DiskPath   string   `json:"disk_path"`
-	Steps      []string `json:"steps"`
+	TemplateID   int64    `json:"template_id"`
+	DiskPath     string   `json:"disk_path"`
+	Steps        []string `json:"steps"`
+	SSHPublicKey string   `json:"ssh_public_key,omitempty"`
 }
 
 // PreprocessExecutor 执行模板预处理。
@@ -130,7 +138,10 @@ func (e *PreprocessExecutor) Run(ctx context.Context, t *model.Task) error {
 		Kind:   agent.OpTemplatePreprocess,
 		NodeID: *t.NodeID,
 		Target: p.DiskPath,
-		Params: map[string]any{"template_id": p.TemplateID, "steps": p.Steps},
+		Params: map[string]any{
+			"template_id": p.TemplateID, "steps": p.Steps,
+			"ssh_public_key": p.SSHPublicKey,
+		},
 	})
 	if err != nil {
 		return api.Unavailable("节点不可达，预处理未执行")

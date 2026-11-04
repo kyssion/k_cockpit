@@ -61,7 +61,7 @@ func TestConfig_Validate(t *testing.T) {
 			IdleTimeout:     2 * time.Hour,
 			AbsoluteTimeout: 7 * 24 * time.Hour,
 		},
-		Agent: Agent{Transport: AgentTransportMock},
+		Agent: Agent{ListenAddr: ":8443"},
 	}
 
 	tests := []struct {

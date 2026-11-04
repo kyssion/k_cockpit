@@ -317,6 +317,8 @@ export const templateMaintainApi = {
 export interface PreprocessInput {
   install_agent?: boolean
   inject_ssh_key?: boolean
+  /** 选中 inject_ssh_key 时必填。 */
+  ssh_public_key?: string
   reset_machine_id?: boolean
   remove_cloud_init?: boolean
   acknowledge?: boolean

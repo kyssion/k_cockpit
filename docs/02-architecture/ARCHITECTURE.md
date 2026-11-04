@@ -110,7 +110,7 @@ flowchart TB
 | `repository/` 数据库访问层 | SQL/GORM 查询与写入的唯一居所，与 service 域同名对应（分批迁入中，见 ADR-0012） |
 | `model/` 数据库层 | 跨域共享的表结构模型（刻意不按域拆，防 import 环） |
 | `platform/` 基础设施 | api 响应与中间件、config、database、logging、cryptoutil、audit 写侧、authz、version |
-| `agent/` 契约 | 领域操作契约 + mock（真实实现随 M5 落地） |
+| `agent/` 契约 | 领域操作契约；唯一运输层为 gRPC（`agent/hub`） |
 
 **agent 模块**
 

@@ -66,7 +66,7 @@ func ReporterFrom(ctx context.Context) *Reporter {
 // 落库，否则时间线会永远缺一个尾巴，而缺失的尾巴看起来像节点没有响应。
 func (r *Reporter) OnStage() func(agent.Stage) {
 	if r == nil {
-		// 返回 nil 而不是一个空函数：mock 与真实客户端都会跳过 nil，
+		// 返回 nil 而不是一个空函数：客户端都会跳过 nil，
 		// 而没有意外行为比多一次调用更省事。
 		return nil
 	}

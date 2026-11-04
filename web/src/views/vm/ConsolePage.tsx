@@ -198,7 +198,7 @@ export function ConsolePage({ standalone = false }: { standalone?: boolean }) {
         <Notice
           tone="idle"
           title="当前 agent 不支持控制台通道"
-          text="控制面已就绪，但该节点以模拟模式运行，控制台画面暂不可用。"
+          text="控制面已就绪，但该节点的 agent 未提供流式控制台能力，请检查 agent 版本。"
         />
       )}
 

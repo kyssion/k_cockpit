@@ -91,7 +91,7 @@ func (r *Repo) CountNodeVMs(ctx context.Context, nodeID int64) (total, running i
 	return total, running, err
 }
 
-// NodeNames 返回全部节点名（模拟节点预置的幂等判断用）。
+// NodeNames 返回全部节点名。
 func (r *Repo) NodeNames(ctx context.Context) ([]string, error) {
 	var names []string
 	err := r.db.WithContext(ctx).Model(&model.Node{}).Pluck("name", &names).Error

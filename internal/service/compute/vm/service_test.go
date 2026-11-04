@@ -24,7 +24,7 @@ import (
 
 func newTestEnv(t *testing.T) (*vm.Service, *task.Queue, *gorm.DB) {
 	t.Helper()
-	return newTestEnvWithClient(t, agent.NewMockClient())
+	return newTestEnvWithClient(t, newStubClient())
 }
 
 // newTestEnvWithClient 允许替换 agent 实现。
@@ -142,7 +142,7 @@ var testCredentialKey []byte
 
 // probeClient 在 mock 之上覆盖**探测结果**，其余操作沿用 mock。
 type probeClient struct {
-	*agent.MockClient
+	*stubClient
 	status string
 }
 
@@ -153,7 +153,7 @@ func (c *probeClient) Execute(ctx context.Context, op agent.Operation) (*agent.R
 			Data:    map[string]any{agent.StatusDataKey: c.status},
 		}, nil
 	}
-	return c.MockClient.Execute(ctx, op)
+	return c.stubClient.Execute(ctx, op)
 }
 
 // unreachableClient 模拟**指令未送达**：返回 error 而不是 Success=false。
@@ -161,7 +161,7 @@ func (c *probeClient) Execute(ctx context.Context, op agent.Operation) (*agent.R
 // 两者语义不同，调用方的处理也不同（见 agent.Client.Execute 的注释），
 // 因此需要分别覆盖。
 type unreachableClient struct {
-	*agent.MockClient
+	*stubClient
 }
 
 func (c *unreachableClient) Execute(_ context.Context, _ agent.Operation) (*agent.Result, error) {
@@ -229,7 +229,7 @@ func TestCreateFlowEndToEnd(t *testing.T) {
 	if got.UUID == nil || *got.UUID == "" {
 		t.Error("未记录虚拟化层返回的 UUID")
 	}
-	if !strings.HasPrefix(*got.UUID, "mock-") {
+	if len(*got.UUID) != 36 || strings.Count(*got.UUID, "-") != 4 {
 		t.Errorf("UUID 形状异常: %s", *got.UUID)
 	}
 	if got.LastSyncedAt == nil {
@@ -470,7 +470,7 @@ func TestPowerBlockedInMaintenanceMode(t *testing.T) {
 }
 
 func TestPowerUnavailableWhenAgentUnreachable(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &unreachableClient{agent.NewMockClient()})
+	svc, _, db := newTestEnvWithClient(t, &unreachableClient{newStubClient()})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-offline", Status: model.VMStatusRunning, OwnerID: ptr(int64(7))}
@@ -500,7 +500,7 @@ func TestDeleteRequiresExplicitDiskAction(t *testing.T) {
 }
 
 func TestDeleteRejectedWhileRunning(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusRunning})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-running", Status: model.VMStatusStopped, OwnerID: ptr(int64(7))}
@@ -513,7 +513,7 @@ func TestDeleteRejectedWhileRunning(t *testing.T) {
 }
 
 func TestDeleteMarksNotPresentInsteadOfRemoving(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-to-delete", Status: model.VMStatusStopped, OwnerID: ptr(int64(7))}
@@ -550,7 +550,7 @@ func TestDeleteMarksNotPresentInsteadOfRemoving(t *testing.T) {
 }
 
 func TestDeleteRejectedWhenTaskInFlight(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-busy", Status: model.VMStatusStopped, OwnerID: ptr(int64(7))}
@@ -1031,7 +1031,7 @@ func TestUpdateConfigValidatesRange(t *testing.T) {
 }
 
 func TestUpdateConfigEnqueuesWhenStopped(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{
@@ -1073,7 +1073,7 @@ func TestEditFormRejectsOthersVM(t *testing.T) {
 }
 
 func TestUpdateConfigRejectsUnknownField(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-unknown", OwnerID: ptr(int64(7))}
@@ -1089,7 +1089,7 @@ func TestUpdateConfigRejectsUnknownField(t *testing.T) {
 }
 
 func TestUpdateConfigRejectsReadOnlyField(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-ro", OwnerID: ptr(int64(7))}
@@ -1104,7 +1104,7 @@ func TestUpdateConfigRejectsReadOnlyField(t *testing.T) {
 }
 
 func TestUpdateConfigRejectsInvalidEnum(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-enum", OwnerID: ptr(int64(7))}
@@ -1149,7 +1149,7 @@ func TestHotChangeableFieldWorksWhileRunning(t *testing.T) {
 }
 
 func TestIOPSLimitsAreMutuallyExclusive(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-iops", OwnerID: ptr(int64(7))}
@@ -1546,7 +1546,7 @@ func TestBatchPowerRejectsBadRequests(t *testing.T) {
 
 func TestLockBlocksDeleteAndUnlockRestores(t *testing.T) {
 	// 探测返回 stopped，这样「能不能删」只由锁定决定，不受运行态干扰。
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 	viewer := authz.Viewer{UserID: 7}
 
@@ -1682,7 +1682,7 @@ func TestLockVisibleInListView(t *testing.T) {
 // TestBatchDeleteReportsLockedPerItem 覆盖 R-010 的后半句：
 // 批量删除含锁定项时**不静默跳过**——失败项必须出现在结果里。
 func TestBatchDeleteReportsLockedPerItem(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 	viewer := authz.Viewer{UserID: 7}
 

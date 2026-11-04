@@ -33,7 +33,7 @@ func strPtrForTest(v string) *string { return &v }
 // 磁盘是一份具体的文件，"迁到另一台机器的池里"等于让那台机器去读一个
 // 不存在的路径——这类失败发生在搬了一半的时候，是最难收拾的一种。
 func TestMigrateRejectsPoolOnAnotherNode(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-mig", OwnerID: ptr(int64(7))}
@@ -53,7 +53,7 @@ func TestMigrateRejectsPoolOnAnotherNode(t *testing.T) {
 
 // TestMigrateRequiresTarget 覆盖"必须选目标"。
 func TestMigrateRequiresTarget(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-mig2", OwnerID: ptr(int64(7))}
@@ -72,9 +72,9 @@ func TestMigrateRequiresTarget(t *testing.T) {
 // 热迁移期间磁盘仍在使用，业务会有抖动；是否接受只能由使用者判断，
 // 服务端默认替他决定（无论是默认允许还是默认拒绝）都不合适。
 func TestMigrateRequiresHotConfirmation(t *testing.T) {
-	svc, queue, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
+	svc, queue, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusRunning})
 	// 入队会校验任务类型是否已注册；本测试要走到"确认后受理"这一条路径。
-	queue.Register(vm.NewDiskChangeExecutor(db, agent.NewMockClient()))
+	queue.Register(vm.NewDiskChangeExecutor(db, newStubClient()))
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-hot", OwnerID: ptr(int64(7))}
@@ -102,7 +102,7 @@ func TestMigrateRequiresHotConfirmation(t *testing.T) {
 // TestDisksReportsMigrateTargets 覆盖目标池的下发：没有第二个池时界面不该
 // 显示迁移入口——一个点了必然失败的下拉框比没有这个按钮更糟。
 func TestDisksReportsMigrateTargets(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-targets", OwnerID: ptr(int64(7))}
@@ -125,7 +125,7 @@ func TestDisksReportsMigrateTargets(t *testing.T) {
 //
 // 一个点了必然失败的下拉框比没有这个按钮更糟——用户会以为是自己选错了。
 func TestDisksHidesMigrationWithoutTarget(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	// 换一个没有存储池的节点：ensureNodeUsable 只要求节点存在且不在维护模式。
@@ -155,7 +155,7 @@ func TestDisksHidesMigrationWithoutTarget(t *testing.T) {
 // 无主的机器没有"我的存储"可转；默默地按保留处理会让用户以为磁盘已经
 // 进了自己的文件列表——那比直接拒绝更糟。
 func TestDeleteRejectsTransferForUnownedVM(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-orphan"}

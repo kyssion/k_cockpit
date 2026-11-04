@@ -15,7 +15,7 @@ import (
 // mock 节点返回固定读数：预检应把它带出来，并用它换算预计分钟数——
 // 而不是仍按「假设千兆」的公式给一个与实测无关的数字。
 func TestMigrationPreviewUsesMeasuredBandwidth(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := seedMigratableVM(t, db, "migr-vm")

@@ -9,7 +9,6 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
@@ -49,7 +48,7 @@ func newTestEnv(t *testing.T) (*firewall.Service, *gorm.DB) {
 	}).Error; err != nil {
 		t.Fatalf("创建节点失败: %v", err)
 	}
-	return firewall.NewService(db, agent.NewMockClient(), audit.NewRecorder(db)), db
+	return firewall.NewService(db, newStubClient(), audit.NewRecorder(db)), db
 }
 
 func admin() authz.Viewer { return authz.Viewer{UserID: 1, IsAdmin: true} }

@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/authz"
@@ -18,7 +17,7 @@ import (
 // 前端不再维护第二份取值表，因此**矩阵里有什么**就是唯一的答案：向导里
 // 少一项，用户就少一个本来可以设的配置。
 func TestCreateFormPublishesFieldRules(t *testing.T) {
-	svc, _, _ := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, _ := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	form, err := svc.CreateFormOf(ctx, 1, authz.Viewer{UserID: 7})
@@ -64,7 +63,7 @@ func TestCreateFormPublishesFieldRules(t *testing.T) {
 // 没有存储池时创建必定失败，而这个事实应该在**打开向导时**就说清楚，
 // 而不是等用户填完八步才被告知。
 func TestCreateFormReportsMissingPrerequisites(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	if err := db.Where("node_id = ?", 1).Delete(&model.StoragePool{}).Error; err != nil {
@@ -92,7 +91,7 @@ func TestCreateFormReportsMissingPrerequisites(t *testing.T) {
 
 // TestCreateBatchEnqueuesOneTaskPerVM 覆盖批量语义（f-2-02 R-007）。
 func TestCreateBatchEnqueuesOneTaskPerVM(t *testing.T) {
-	svc, _, _ := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, _ := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	tasks, err := svc.CreateBatch(ctx, vm.CreateRequest{
@@ -125,7 +124,7 @@ func TestCreateBatchEnqueuesOneTaskPerVM(t *testing.T) {
 //
 // 重复点击是客户端行为，只有客户端生成的 token 才能识别「这是同一次提交」。
 func TestCreateIsIdempotentByClientToken(t *testing.T) {
-	svc, _, _ := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, _ := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	req := vm.CreateRequest{
@@ -147,7 +146,7 @@ func TestCreateIsIdempotentByClientToken(t *testing.T) {
 
 // TestCreateRejectsDuplicateNameWithSuggestion 覆盖重名（f-2-02 R-010）。
 func TestCreateRejectsDuplicateNameWithSuggestion(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	if err := db.Create(&model.VM{NodeID: 1, Name: "taken"}).Error; err != nil {
@@ -175,7 +174,7 @@ func TestCreateRejectsDuplicateNameWithSuggestion(t *testing.T) {
 
 // TestCreateRejectsExclusiveIOPS 覆盖 IOPS 互斥（与编辑页同一条规则）。
 func TestCreateRejectsExclusiveIOPS(t *testing.T) {
-	svc, _, _ := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, _ := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	_, err := svc.Create(ctx, vm.CreateRequest{
@@ -192,7 +191,7 @@ func TestCreateRejectsExclusiveIOPS(t *testing.T) {
 // 前端的下拉框只来自同一份矩阵，因此这个用例针对的是**绕过界面**的调用
 // ——校验必须落在服务端，否则矩阵就只是一份装饰性的文档。
 func TestCreateRejectsIllegalEnum(t *testing.T) {
-	svc, _, _ := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, _ := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	_, err := svc.Create(ctx, vm.CreateRequest{

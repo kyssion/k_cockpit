@@ -1,8 +1,8 @@
 # 演示优先实施规划（Demo-First）
 
-> 状态：生效
-> 最后更新：2026-09-22
-> 关联：[`PRD.md`](PRD.md)（功能编号与待决问题 Q-3/Q-7）· [`ROADMAP.md`](ROADMAP.md)（阶段与里程碑）· [`GAP_CLOSURE.md`](GAP_CLOSURE.md)（差距核对硬规则与第一轮清单 G-01~G-28）· [`../06-decisions/0007-mock-agent-first.md`](../06-decisions/0007-mock-agent-first.md)（mock 边界的既定决策）
+> 状态：已归档（历史规划，仅供追溯）。2026-11-04 起 mock 传输与演示数据已删除，本文中「agent(mock) 边界」「mock 返回结果」等口径不再成立，现行架构见 [`../06-decisions/0013-remove-mock-transport.md`](../06-decisions/0013-remove-mock-transport.md) 与 [`../07-specs/f-6-08-agent.md`](../07-specs/f-6-08-agent.md)。
+> 最后更新：2026-09-22（归档于 2026-11-04）
+> 关联：[`PRD.md`](PRD.md)（功能编号与待决问题 Q-3/Q-7）· [`ROADMAP.md`](ROADMAP.md)（阶段与里程碑）· [`GAP_CLOSURE.md`](GAP_CLOSURE.md)（差距核对硬规则与第一轮清单 G-01~G-28）
 
 本文回答：**为了尽快向外部演示完整的管理侧能力，按什么顺序补齐剩余差距、每项的页面 / 服务端 / agent(mock) 边界在哪**。
 

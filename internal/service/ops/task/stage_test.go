@@ -20,7 +20,7 @@ var errFake = errors.New("测试失败")
 
 // stageExecutor 是一个会上报阶段的执行器。
 //
-// 它经 agent.MockClient 走**真实的上报路径**，而不是自己直接调记录器：
+// 它经测试 stub 走**真实的上报路径**，而不是自己直接调记录器：
 // 阶段是由节点通过 Operation.OnStage 报上来的，绕开这一步就只测到了
 // 「记录器能写库」，而真正容易接错的那一段（回调 → 记录器）没被覆盖。
 type stageExecutor struct {
@@ -86,7 +86,7 @@ func stageTestEnv(t *testing.T, exec *stageExecutor) *task.Queue {
 
 // TestStagesRecordedInOrder 覆盖「节点上报 → 记录器 → 落库 → 查询」这条链路。
 func TestStagesRecordedInOrder(t *testing.T) {
-	exec := &stageExecutor{client: agent.NewMockClient(), kind: agent.OpVMCreate}
+	exec := &stageExecutor{client: newStubClient(), kind: agent.OpVMCreate}
 	q := stageTestEnv(t, exec)
 	ctx := context.Background()
 
@@ -141,7 +141,7 @@ func TestStagesRecordedInOrder(t *testing.T) {
 // 进度是阶段推进的**派生值**：结束时必须是 100，而不是「4 步都完成了但
 // 进度停在 75」——那会让用户以为还有一步没走。
 func TestStageProgressReachesHundred(t *testing.T) {
-	exec := &stageExecutor{client: agent.NewMockClient(), kind: agent.OpVMCreate}
+	exec := &stageExecutor{client: newStubClient(), kind: agent.OpVMCreate}
 	q := stageTestEnv(t, exec)
 	ctx := context.Background()
 
@@ -165,7 +165,7 @@ func TestStageProgressReachesHundred(t *testing.T) {
 // 不收尾的后果不是「少一条信息」，而是**指向错误的方向**：阶段停在「执行中」
 // 会让排查的人以为节点没响应，而真实原因其实写在任务上。
 func TestFailedTaskClosesOpenStage(t *testing.T) {
-	exec := &stageExecutor{client: agent.NewMockClient(), kind: agent.OpVMCreate, fail: true}
+	exec := &stageExecutor{client: newStubClient(), kind: agent.OpVMCreate, fail: true}
 	q := stageTestEnv(t, exec)
 	ctx := context.Background()
 
@@ -202,7 +202,7 @@ func TestUnregisteredOperationsReportNoStages(t *testing.T) {
 
 	// 经 mock 走真实回调路径：断言的是**行为**（这个操作不上报阶段），
 	// 而不是某个内部表里的条目。
-	if _, err := agent.NewMockClient().Execute(context.Background(), agent.Operation{
+	if _, err := newStubClient().Execute(context.Background(), agent.Operation{
 		Kind:   agent.OpVMStatus,
 		NodeID: 1,
 		OnStage: func(s agent.Stage) {

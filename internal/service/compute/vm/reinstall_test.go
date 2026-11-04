@@ -6,7 +6,6 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/service/compute/vm"
@@ -27,7 +26,7 @@ func reinstallTemplate(t *testing.T, db *gorm.DB, nodeID int64, name string, own
 }
 
 func TestReinstallRequiresStopped(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusRunning})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-ri1", Status: model.VMStatusRunning, OwnerID: ptr(int64(7))}
@@ -45,7 +44,7 @@ func TestReinstallRequiresStopped(t *testing.T) {
 // 决定「你不需要退路了」——而重装往往正是在系统已经出问题的时候做的，
 // 那时人比平时更可能想反悔。
 func TestReinstallBacksUpPreviousSystemDisk(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 	viewer := authz.Viewer{UserID: 7}
 
@@ -86,7 +85,7 @@ func TestReinstallBacksUpPreviousSystemDisk(t *testing.T) {
 // 只有一份备份，第二次重装会覆盖上一次的。静默覆盖会让用户失去「回到上一个
 // 系统」这个唯一的退路——而他可能正指望那条退路。因此显式拒绝。
 func TestReinstallRejectedWhenBackupExists(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 	viewer := authz.Viewer{UserID: 7}
 
@@ -107,7 +106,7 @@ func TestReinstallRejectedWhenBackupExists(t *testing.T) {
 // 运行中不允许清理：节点侧系统盘可能是从备份派生的 overlay，
 // 删掉它会让运行中的虚拟机在读到某块未缓存的数据时崩掉。
 func TestPurgeBackupRequiresStopped(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusRunning})
 	ctx := context.Background()
 
 	backup := "/var/lib/k_cockpit/backups/vm-ri4.qcow2.bak"
@@ -122,7 +121,7 @@ func TestPurgeBackupRequiresStopped(t *testing.T) {
 }
 
 func TestPurgeBackupClearsRecord(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 	viewer := authz.Viewer{UserID: 7}
 
@@ -146,7 +145,7 @@ func TestPurgeBackupClearsRecord(t *testing.T) {
 }
 
 func TestPurgeBackupRejectedWhenNoBackup(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-ri6", Status: model.VMStatusStopped, OwnerID: ptr(int64(7))}
@@ -157,7 +156,7 @@ func TestPurgeBackupRejectedWhenNoBackup(t *testing.T) {
 }
 
 func TestReinstallRejectsTemplateOnAnotherNode(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{
@@ -173,7 +172,7 @@ func TestReinstallRejectsTemplateOnAnotherNode(t *testing.T) {
 }
 
 func TestReinstallRejectsOthersVM(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{

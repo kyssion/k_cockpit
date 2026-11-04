@@ -1,7 +1,7 @@
 # 架构决策记录（ADR）
 
 > 状态：生效
-> 最后更新：<!-- TODO: YYYY-MM-DD -->
+> 最后更新：2026-11-04
 
 本目录记录项目的**重大技术决策及其理由**，采用 ADR（Architecture Decision Record）形式。
 
@@ -95,12 +95,13 @@ NNNN-动词短语.md
 | [0004](0004-adopt-openvswitch-as-network-backend.md) | 采用 Open vSwitch 作为虚拟网络后端 | Accepted | 2026-09-12 |
 | [0005](0005-control-plane-node-agent-architecture.md) | 采用控制面 / 节点代理（agent）架构 | Accepted | 2026-09-15 |
 | [0006](0006-frontend-tech-stack.md) | 前端技术栈选型（AI 驱动） | Accepted | 2026-09-15 |
-| [0007](0007-mock-agent-first.md) | 远程操作先以 Mock Agent 落地，业务逻辑保持真实 | Accepted | 2026-09-15 |
+| [0007](0007-mock-agent-first.md) | 远程操作先以 Mock Agent 落地，业务逻辑保持真实 | Superseded by [0013](0013-remove-mock-transport.md) | 2026-09-15 |
 | [0008](0008-first-admin-bootstrap.md) | 首个管理员通过控制台一次性令牌创建 | Accepted | 2026-09-15 |
 | [0009](0009-defer-external-identity.md) | 暂不纳入外部身份源（F-1-13） | Accepted | 2026-09-28 |
 | [0010](0010-group-internal-by-domain.md) | internal 按业务域分组（platform/compute/network/storage/ops） | Superseded by [0012](0012-layered-internal-structure.md) | 2026-09-28 |
-| [0011](0011-mock-power-state.md) | mock 增加电源生命周期的最小状态（修订 0007 的实现口径） | Accepted | 2026-09-30 |
+| [0011](0011-mock-power-state.md) | mock 增加电源生命周期的最小状态（修订 0007 的实现口径） | Superseded by [0013](0013-remove-mock-transport.md) | 2026-09-30 |
 | [0012](0012-layered-internal-structure.md) | internal 按层组织（router/handler/service/repository/model），取代 0010 的顶级组织方式 | Accepted | 2026-10-06 |
+| [0013](0013-remove-mock-transport.md) | 移除 mock 传输与演示数据，只保留真实 gRPC 通道 | Accepted | 2026-11-04 |
 
 > **新增 ADR 后必须在此表登记。**
 

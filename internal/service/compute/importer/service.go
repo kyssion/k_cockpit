@@ -7,9 +7,8 @@
 // 这样做让整条链路——受理、状态流转、格式转换后的建模板、配额记账——都能
 // 被完整验证，而唯一没被验证的是「字节怎么从浏览器到宿主机」这一段。
 //
-// 那一段属于 mock 未覆盖的范围，且是最难的部分之一（几十 GB 的分块、断点续传、
-// 校验）。把它显式留成空缺，好过用一个假的传输层把接口形状定死——定错了
-// 反而要改的地方更多。
+// 字节走「我的存储」的分片上传通道（分块、断点续传、校验），由节点侧落盘后
+// 再按节点路径导入。
 package importer
 
 import (
@@ -95,7 +94,8 @@ func (s *Service) Parse(
 	if err := s.ensureNode(ctx, req.NodeID); err != nil {
 		return nil, err
 	}
-	if err := s.ensureSourceUploaded(ctx, req.NodeID, req.SourceFilename, v); err != nil {
+	source, err := s.findSourceFile(ctx, req.NodeID, req.SourceFilename, v)
+	if err != nil {
 		return nil, err
 	}
 
@@ -105,7 +105,8 @@ func (s *Service) Parse(
 		result, err := s.agent.Execute(ctx, agent.Operation{
 			Kind:   agent.OpImageParse,
 			NodeID: req.NodeID,
-			Target: req.SourceFilename,
+			Target: source.Filename,
+			Params: map[string]any{"rel_path": source.RelPath},
 		})
 		if err != nil {
 			return nil, api.Unavailable("节点不可达，无法解析该包")
@@ -184,7 +185,8 @@ func (s *Service) Create(
 	if err := s.ensureNode(ctx, req.NodeID); err != nil {
 		return nil, err
 	}
-	if err := s.ensureSourceUploaded(ctx, req.NodeID, req.SourceFilename, v); err != nil {
+	source, err := s.findSourceFile(ctx, req.NodeID, req.SourceFilename, v)
+	if err != nil {
 		return nil, err
 	}
 
@@ -242,6 +244,7 @@ func (s *Service) Create(
 			"source_filename":   req.SourceFilename,
 			"source_format":     req.SourceFormat,
 			"source_size_bytes": req.SourceSizeBytes,
+			"source_rel_path":   source.RelPath,
 			"vcpu":              req.VCPU,
 			"memory_mb":         req.MemoryMB,
 			"disk_gb":           req.DiskGB,
@@ -416,24 +419,35 @@ func (s *Service) ensureNode(ctx context.Context, nodeID int64) error {
 func (s *Service) ensureSourceUploaded(
 	ctx context.Context, nodeID int64, filename string, v authz.Viewer,
 ) error {
+	_, err := s.findSourceFile(ctx, nodeID, filename, v)
+	return err
+}
+
+// findSourceFile 找到上传的源文件并做归属校验。
+//
+// 返回整行而不是只返回错误：节点只认 rel_path，不认控制面的文件名，
+// 解析与导入都必须把真实路径下发。
+func (s *Service) findSourceFile(
+	ctx context.Context, nodeID int64, filename string, v authz.Viewer,
+) (*model.StorageFile, error) {
 	var sf model.StorageFile
 	err := s.db.WithContext(ctx).
 		Where(`node_id = ? AND filename = ? AND category = ? AND uploaded_at IS NOT NULL`,
 			nodeID, filename, model.FileCategoryDisk).
 		Order("id DESC").First(&sf).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return api.ValidationFailed(
+		return nil, api.ValidationFailed(
 			"没有在节点存储中找到这个文件。请先在导入页完成上传" +
 				"（文件会上传到「我的存储」的 disk 类别下）")
 	}
 	if err != nil {
 		log.Printf("[import] 查询源文件失败: %v", err)
-		return api.Internal()
+		return nil, api.Internal()
 	}
 	if sf.UserID != nil && !v.IsAdmin && *sf.UserID != v.UserID {
-		return api.NotFound("没有在节点存储中找到这个文件")
+		return nil, api.NotFound("没有在节点存储中找到这个文件")
 	}
-	return nil
+	return &sf, nil
 }
 
 func (s *Service) load(ctx context.Context, id int64, v authz.Viewer) (*model.ImageImport, error) {

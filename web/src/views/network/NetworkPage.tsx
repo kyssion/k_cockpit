@@ -293,8 +293,7 @@ export function NetworkPage() {
           setError('')
           setNotice(msg)
           // 记录由执行器在节点成功后写入，因此要刷新列表；但**不能立刻**，
-          // 那时任务还没跑完——2 秒足以覆盖 mock 的模拟耗时，真实环境里
-          // 用户可以自己再刷新。
+          // 那时任务还没跑完——2 秒覆盖常见的落库延迟，之后用户可以自己再刷新。
           setTimeout(() => {
             void queryClient.invalidateQueries({ queryKey: ['networks', effectiveNodeID] })
           }, 2000)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/audit"
 	noderepo "k_cockpit/internal/repository/node"
@@ -52,7 +51,7 @@ func TestStatsWithoutClientSaysUnsupported(t *testing.T) {
 
 func TestStatsCountsVMsFromControlPlane(t *testing.T) {
 	db := newStatsDB(t)
-	svc := node.NewService(noderepo.NewRepo(db), &fakeRuntime{}, audit.NewRecorder(db), agent.NewMockClient())
+	svc := node.NewService(noderepo.NewRepo(db), &fakeRuntime{}, audit.NewRecorder(db), newStubClient())
 	ctx := context.Background()
 
 	nodeRow := model.Node{Name: "node-s", EnrollState: model.NodeEnrollEnrolled}

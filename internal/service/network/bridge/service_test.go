@@ -125,7 +125,7 @@ func TestProbeFailureDoesNotClaimDegraded(t *testing.T) {
 // f-4-01 明确要求不能在能力缺失时静默失败。一句「已降级」对用户没有任何
 // 可操作性——他需要知道**具体是哪几张网络不能用了**。
 func TestDegradationNamesAffectedBridges(t *testing.T) {
-	svc, db := newTestEnv(t, agent.NewMockClient())
+	svc, db := newTestEnv(t, newStubClient())
 	seedBridge(t, db, "ovs-net", false, model.BackendOVS)
 	seedBridge(t, db, "plain-net", false, model.BackendBridge)
 
@@ -154,7 +154,7 @@ func TestDegradationNamesAffectedBridges(t *testing.T) {
 
 // TestUplinkRequiresAcknowledge 覆盖物理口入桥的第一道防线。
 func TestUplinkRequiresAcknowledge(t *testing.T) {
-	svc, db := newTestEnv(t, agent.NewMockClient())
+	svc, db := newTestEnv(t, newStubClient())
 	// mock 的候选里 eth0 有 IP——那正是最危险的那一种。
 	bridge := seedBridge(t, db, "b1", false, model.BackendBridge)
 
@@ -175,7 +175,7 @@ func TestUplinkRequiresAcknowledge(t *testing.T) {
 }
 
 func TestUplinkUnknownPortWarns(t *testing.T) {
-	svc, db := newTestEnv(t, agent.NewMockClient())
+	svc, db := newTestEnv(t, newStubClient())
 	bridge := seedBridge(t, db, "b2", false, model.BackendBridge)
 
 	result, err := svc.AttachUplink(context.Background(), bridge.ID, "nosuch0", 300, false,
@@ -193,7 +193,7 @@ func TestUplinkUnknownPortWarns(t *testing.T) {
 
 // TestUplinkArmsWatchdog 覆盖第二道防线：到点自动回滚。
 func TestUplinkArmsWatchdog(t *testing.T) {
-	svc, db := newTestEnv(t, agent.NewMockClient())
+	svc, db := newTestEnv(t, newStubClient())
 	bridge := seedBridge(t, db, "b3", false, model.BackendBridge)
 
 	result, err := svc.AttachUplink(context.Background(), bridge.ID, "eth1", 120, true,
@@ -216,7 +216,7 @@ func TestUplinkArmsWatchdog(t *testing.T) {
 }
 
 func TestUplinkWatchdogBounds(t *testing.T) {
-	svc, db := newTestEnv(t, agent.NewMockClient())
+	svc, db := newTestEnv(t, newStubClient())
 
 	for i, seconds := range []int{10, 59, 1801} {
 		b := seedBridge(t, db, "w"+strconv.Itoa(i), false, model.BackendBridge)
@@ -228,7 +228,7 @@ func TestUplinkWatchdogBounds(t *testing.T) {
 
 // TestReconcileAlignsExpiredUplink 覆盖控制面与节点的分工。
 func TestReconcileAlignsExpiredUplink(t *testing.T) {
-	svc, db := newTestEnv(t, agent.NewMockClient())
+	svc, db := newTestEnv(t, newStubClient())
 	bridge := seedBridge(t, db, "b4", false, model.BackendBridge)
 
 	if _, err := svc.AttachUplink(context.Background(), bridge.ID, "eth1", 300, true,
@@ -259,7 +259,7 @@ func TestReconcileAlignsExpiredUplink(t *testing.T) {
 // 新建虚拟机默认接的就是系统预置网络，删掉等于让「新建」从可用变成不可用，
 // 而用户不会立刻把这两件事联系起来。
 func TestSystemBridgeCannotBeDeleted(t *testing.T) {
-	svc, db := newTestEnv(t, agent.NewMockClient())
+	svc, db := newTestEnv(t, newStubClient())
 	sys := seedBridge(t, db, "default", true, model.BackendBridge)
 
 	err := svc.DeleteBridge(context.Background(), sys.ID, admin(), "root", "")
@@ -280,7 +280,7 @@ func TestSystemBridgeCannotBeDeleted(t *testing.T) {
 // 只报告「修好了什么」会让用户以为没事了；只报告「还有问题」又看不出这次
 // 操作做了什么。两者必须分开。
 func TestRepairSeparatesFixedAndRemaining(t *testing.T) {
-	svc, _ := newTestEnv(t, agent.NewMockClient())
+	svc, _ := newTestEnv(t, newStubClient())
 
 	result, err := svc.Repair(context.Background(), 1, admin(), "root", "")
 	if err != nil {
@@ -317,7 +317,7 @@ func TestRepairFailureIsDataNotError(t *testing.T) {
 }
 
 func TestICMPNATBridgeRequiresDHCPFields(t *testing.T) {
-	svc, _ := newTestEnv(t, agent.NewMockClient())
+	svc, _ := newTestEnv(t, newStubClient())
 	ctx := context.Background()
 
 	// 启用内置 DHCP 但不给地址池：DHCP 要告诉来客网关是谁，
@@ -329,7 +329,7 @@ func TestICMPNATBridgeRequiresDHCPFields(t *testing.T) {
 }
 
 func TestIsolatedBridgeRejectsDHCP(t *testing.T) {
-	svc, _ := newTestEnv(t, agent.NewMockClient())
+	svc, _ := newTestEnv(t, newStubClient())
 
 	// 空交换机不接外网，内置 DHCP 无从谈起。
 	_, err := svc.CreateBridge(context.Background(), bridge.BridgeRequest{

@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/platform/cryptoutil"
@@ -26,7 +25,7 @@ func withCredentialKey(t *testing.T) {
 // 登进机器。读回必须经过密文（库里不该有明文），且审计不能记密码本身。
 func TestInitialCredentialRoundTrip(t *testing.T) {
 	withCredentialKey(t)
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	if _, err := svc.Create(ctx, vm.CreateRequest{
@@ -79,7 +78,7 @@ func TestInitialCredentialRoundTrip(t *testing.T) {
 // 它不是错误，前端据此显示引导而不是报错。
 func TestInitialCredentialAbsent(t *testing.T) {
 	withCredentialKey(t)
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	if _, err := svc.Create(ctx, vm.CreateRequest{
@@ -105,7 +104,7 @@ func TestInitialCredentialAbsent(t *testing.T) {
 // 「设了控制台密码，初始凭据不见了」或反过来。
 func TestInitialCredentialCoexistsWithConsolePassword(t *testing.T) {
 	withCredentialKey(t)
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	if _, err := svc.Create(ctx, vm.CreateRequest{

@@ -25,6 +25,23 @@
   与真实原因无关）；`assets/` 下按内容哈希长缓存（`immutable`）、`index.html` 每次回源；目录缺失
   只记日志、不阻断启动（开发期前端跑在 vite dev server 上）。路径经 `path.Clean` + `filepath.Rel`
   包含性校验，无越界面。
+- **agent 补全 37 项 mock 兜底能力**：盘点发现控制面下发 120 个 OpKind、agent 注册表只有
+  86 项，差额 37 项在 mock 下走默认分支返回 `Success=true`，真实节点上会返回「未实现」。
+  已按域全部接通：VM 6 项（adopt/xml.apply/disk.change/disk.resize/disks.independent/
+  interface.change）、模板 12 项（prepare/delete/rebase/flatten/promote_child/promote_delete/
+  preprocess/export/export.delete/export.fetch/import.preview/import）、镜像 2 项
+  （image.parse/import）、网络 14 项（ACL/交换机维护/计数/带宽/IPv6/公网 IP/抓包）、
+  存储分区 1 项、宿主 PCI 绑定与调优 2 项。注册表 123 项、控制面引用缺口 0。
+  配套契约修正：模板派生链下发 `parent_disk_path / child_disk_paths`；模板包固定为
+  `manifest.json + disk.qcow2`，`template.export.fetch` 改为 offset/length 分片、控制面流式转发；
+  网卡下发 `bridge_name`；`public_ip.reload` 下发绑定列表；新增 `sys.RunTimeout` 供整盘转换使用。
+  单测覆盖 XML 定点编辑、路径越界、运行态拒绝、包往返与成功路径；**真机验收待补**。
+
+### Removed
+- **移除 mock 传输与演示数据**（[ADR-0013](docs/06-decisions/0013-remove-mock-transport.md)）：
+  删除 `agent.MockClient` / `mock_frame.go` / `AGENT_TRANSPORT` 配置分支 / `internal/devdata` /
+  `node.EnsureSimulated` / `POST /api/v1/dev/agent-register` / 前端「模拟」标记与 E2E mock 环境；
+  控制面只保留 gRPC 反向长连接。测试改为每个包自写最小 stub，不再共享全局 mock。
 
 ### Fixed
 - **第五轮深检（VNC 控制台全链 + agent 会话层，真机 WS E2E 验证）**：

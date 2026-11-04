@@ -25,7 +25,7 @@ import (
 // mock 固定返回 running，而本包绝大多数用例需要一个**已关机**的源虚拟机
 // ——既然「必须先关机」正是要验证的规则之一，就不能把这条规则绕过去。
 type statusClient struct {
-	*agent.MockClient
+	*stubClient
 	status string
 }
 
@@ -33,7 +33,7 @@ func (c *statusClient) Execute(ctx context.Context, op agent.Operation) (*agent.
 	if op.Kind == agent.OpVMStatus {
 		return &agent.Result{Success: true, Data: map[string]any{agent.StatusDataKey: c.status}}, nil
 	}
-	return c.MockClient.Execute(ctx, op)
+	return c.stubClient.Execute(ctx, op)
 }
 
 func newTestEnv(t *testing.T, status string) (*template.Service, *gorm.DB) {
@@ -64,7 +64,7 @@ func newTestEnv(t *testing.T, status string) (*template.Service, *gorm.DB) {
 		t.Fatalf("建表失败: %v", err)
 	}
 
-	client := &statusClient{MockClient: agent.NewMockClient(), status: status}
+	client := &statusClient{stubClient: newStubClient(), status: status}
 	recorder := audit.NewRecorder(db)
 	queue := task.NewQueue(db, recorder, task.Options{
 		MaxConcurrent: 1,

@@ -62,7 +62,7 @@ func TestRunningIsRefused(t *testing.T) {
 // TestSuccessEnqueuesTask 覆盖正常路径。
 func TestSuccessEnqueuesTask(t *testing.T) {
 	svc, q, db := newTestEnv(t)
-	q.Register(vm.NewIndependentExecutor(db, agent.NewMockClient()))
+	q.Register(vm.NewIndependentExecutor(db, newStubClient()))
 	owner := int64(7)
 	node := model.Node{Name: "n1", EnrollState: model.NodeEnrollEnrolled}
 	db.Create(&node)

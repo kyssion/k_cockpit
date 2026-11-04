@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/service/compute/vm"
@@ -18,7 +17,7 @@ import (
 // 因此它必须是一个干净的、自洽的镜像。运行中导出得到的是崩溃一致性快照，
 // 而导入方往往不在你手边，出了问题很难回头找原因。
 func TestExportRequiresStopped(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusRunning})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-ex1", Status: model.VMStatusRunning, OwnerID: ptr(int64(7))}
@@ -30,7 +29,7 @@ func TestExportRequiresStopped(t *testing.T) {
 }
 
 func TestExportRejectsBadFormat(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-ex2", Status: model.VMStatusStopped, OwnerID: ptr(int64(7))}
@@ -47,7 +46,7 @@ func TestExportRejectsBadFormat(t *testing.T) {
 // 几十分钟，用户需要在那段时间里看到「有一个导出在进行」；否则界面上什么
 // 都没有，他会以为刚才那一下没点上，转头再点一次。
 func TestExportRecordExistsWhileRunning(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 	viewer := authz.Viewer{UserID: 7}
 
@@ -77,7 +76,7 @@ func TestExportRecordExistsWhileRunning(t *testing.T) {
 // SizeBytes 计入用户的存储配额（f-2-14），因此必须在导出完成后**如实记录**
 // ——记 0 等于这份占用永远不算数。
 func TestExportCompletesAndReportsSize(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 	viewer := authz.Viewer{UserID: 7}
 
@@ -124,7 +123,7 @@ func TestExportCompletesAndReportsSize(t *testing.T) {
 
 // TestExportDownloadRejectedBeforeCompletion 覆盖「没跑完就别给下载」。
 func TestExportDownloadRejectedBeforeCompletion(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 	viewer := authz.Viewer{UserID: 7}
 
@@ -143,7 +142,7 @@ func TestExportDownloadRejectedBeforeCompletion(t *testing.T) {
 }
 
 func TestExportRejectsOthersVM(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	theirs := model.VM{NodeID: 1, Name: "vm-ex6", Status: model.VMStatusStopped, OwnerID: ptr(int64(20))}
@@ -160,7 +159,7 @@ func TestExportRejectsOthersVM(t *testing.T) {
 // 导出编号是全表递增的，若不校验它属于哪台虚拟机，用户就能拿自己虚拟机的
 // ID 加上别人的导出编号去下载——而那不是他的数据。
 func TestExportRecordIsScopedToVM(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 	viewer := authz.Viewer{UserID: 7}
 
@@ -181,7 +180,7 @@ func TestExportRecordIsScopedToVM(t *testing.T) {
 }
 
 func TestDeleteExportRejectedWhileRunning(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 	viewer := authz.Viewer{UserID: 7}
 

@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/authz"
@@ -18,7 +17,7 @@ import (
 // 向导按矩阵渲染：矩阵里没有的字段，用户在界面上就设不了——因此「表单里
 // 有没有」是这条链路的第一道断言。
 func TestCreateFormPublishesNewDimensions(t *testing.T) {
-	svc, _, _ := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, _ := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	form, err := svc.CreateFormOf(ctx, 1, authz.Viewer{UserID: 7})
@@ -57,7 +56,7 @@ func TestCreateFormPublishesNewDimensions(t *testing.T) {
 // 矩阵的逐项校验拦不住，而放过去的表现是虚拟机卡在固件画面，要到装系统
 // 时才暴露。
 func TestCreateRejectsInvalidCombinations(t *testing.T) {
-	svc, _, _ := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, _ := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	base := vm.CreateRequest{
@@ -132,7 +131,7 @@ func TestCreateRejectsInvalidCombinations(t *testing.T) {
 // TestCreateAcceptsValidCombinations 覆盖合法组合的放行：联动校验拦的是
 // 引导不了的组合，不能把「由模板带出的默认组合」也误伤。
 func TestCreateAcceptsValidCombinations(t *testing.T) {
-	svc, _, _ := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, _ := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	// x86_64 的 Windows 组合：UEFI + SATA 磁盘 + e1000 网卡。

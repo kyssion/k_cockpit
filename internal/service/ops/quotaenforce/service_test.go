@@ -9,7 +9,6 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
@@ -45,7 +44,7 @@ func newEnv(t *testing.T) (*gorm.DB, *quotaenforce.Service) {
 	if err := db.Create(&model.Node{ID: 1, Name: "node-1"}).Error; err != nil {
 		t.Fatalf("创建节点失败: %v", err)
 	}
-	client := agent.NewMockClient()
+	client := newStubClient()
 	recorder := audit.NewRecorder(db)
 	q := task.NewQueue(db, recorder, task.Options{})
 	q.Register(quotaenforce.NewExecutor(db, client))

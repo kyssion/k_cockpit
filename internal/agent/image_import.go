@@ -34,7 +34,7 @@ type ImageImportInfo struct {
 
 // ImagePreview 是节点从打包格式（OVA）里解析出的机器描述。
 //
-// 本包**不引用 model**（协议层与存储层解耦，见 mock.go 的说明），因此这里
+// 本包**不引用 model**（协议层与存储层解耦），因此这里
 // 自己声明一份。控制面在受理时把它转成 model.ImportPreview——两份结构相同
 // 但归属不同：一份是「节点说了什么」，一份是「控制面决定存什么」。
 type ImagePreview struct {

@@ -17,7 +17,7 @@ import (
 // 控制面不持有磁盘：存一份就要与虚拟化层对账，而多一块少一块不会报错，
 // 只会在某次操作时变成"改了一块不存在的盘"。
 func TestDisksListsNodeState(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-disks", OwnerID: ptr(int64(7))}
@@ -44,7 +44,7 @@ func TestDisksListsNodeState(t *testing.T) {
 // 节点只报告事实（是不是系统盘、能不能热插拔）；规则只有一份才不会分叉：
 // 界面按它禁用按钮，后端按它拒绝请求。
 func TestDisksMarksActionAvailability(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusRunning})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-running", OwnerID: ptr(int64(7))}
@@ -76,7 +76,7 @@ func TestDisksMarksActionAvailability(t *testing.T) {
 
 // TestChangeDiskRejectsBusChangeWhileRunning 覆盖运行态约束。
 func TestChangeDiskRejectsBusChangeWhileRunning(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusRunning})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-bus", OwnerID: ptr(int64(7))}
@@ -97,7 +97,7 @@ func TestChangeDiskRejectsBusChangeWhileRunning(t *testing.T) {
 //
 // 「vda 一定是系统盘」这种猜测在机型不同的机器上会错，因此判定交给节点。
 func TestChangeDiskRejectsDetachingSystemDisk(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-sys", OwnerID: ptr(int64(7))}
@@ -116,7 +116,7 @@ func TestChangeDiskRejectsDetachingSystemDisk(t *testing.T) {
 
 // TestChangeDiskRejectsFileOnAnotherNode 覆盖「磁盘文件必须在同一节点」。
 func TestChangeDiskRejectsFileOnAnotherNode(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-file", OwnerID: ptr(int64(7))}
@@ -141,7 +141,7 @@ func TestChangeDiskRejectsFileOnAnotherNode(t *testing.T) {
 
 // TestDisksRejectsForeignVM 覆盖归属过滤。
 func TestDisksRejectsForeignVM(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-foreign", OwnerID: ptr(int64(7))}

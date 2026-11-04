@@ -68,20 +68,12 @@ type Security struct {
 	DevBypassCode string
 }
 
-// 节点 agent 通道的传输方式。
-const (
-	// AgentTransportMock 开发期使用：接口直接返回假数据，不与节点通信。
-	AgentTransportMock = "mock"
-	// AgentTransportGRPC 走 gRPC 双向流（f-6-01 §5.2：mTLS 反向长连接）。
-	AgentTransportGRPC = "grpc"
-)
-
 // Agent 是控制面与节点 agent 之间通道的配置。
+//
+// 通道只有 gRPC 一种实现（2026-11-04 起移除 mock 传输）：节点侧能力已全量
+// 接入，保留一条"接口直接返回假数据"的分支只会掩盖未实现的执行器。
 type Agent struct {
-	// Transport 在**启动时**决定，运行期不可切换（ADR-0007）。
-	// 同一进程内不得对不同节点使用不同实现，否则会出现无法复现的中间状态。
-	Transport string
-	// ListenAddr 是 agent 网关（gRPC over TLS）监听地址；仅 grpc 运输层使用。
+	// ListenAddr 是 agent 网关（gRPC over TLS）监听地址。
 	// 默认 :8443——该端口属于控制面与 agent 的私有通道，与 HTTP 面分离：
 	// 两类流量的超时、限流与暴露面都不同。
 	ListenAddr string
@@ -186,10 +178,6 @@ func (c Config) Validate() error {
 	if c.Session.IdleTimeout > c.Session.AbsoluteTimeout {
 		return fmt.Errorf("空闲超时(%s)不能大于绝对上限(%s)", c.Session.IdleTimeout, c.Session.AbsoluteTimeout)
 	}
-	if c.Agent.Transport != AgentTransportMock && c.Agent.Transport != AgentTransportGRPC {
-		return fmt.Errorf("AGENT_TRANSPORT 非法: %q，可选 %s 或 %s",
-			c.Agent.Transport, AgentTransportMock, AgentTransportGRPC)
-	}
 	// 开发期万能验证码在生产环境**必须不存在**（f-10-01 R-001 的底线）。
 	//
 	// 这里选择报错而不是清空该值：清空会让服务照常起来，而部署者以为
@@ -255,7 +243,6 @@ func Load() (Config, error) {
 			AbsoluteTimeout: envDuration("SESSION_ABSOLUTE_TIMEOUT", 7*24*time.Hour),
 		},
 		Agent: Agent{
-			Transport:  env("AGENT_TRANSPORT", AgentTransportMock),
 			ListenAddr: env("AGENT_LISTEN_ADDR", ":8443"),
 			TLSDir:     env("AGENT_TLS_DIR", ""),
 		},

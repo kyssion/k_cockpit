@@ -8,7 +8,6 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/authz"
@@ -109,7 +108,7 @@ func TestGrowSucceeds(t *testing.T) {
 	svc, q, db := newTestEnv(t)
 	// **必须注册执行器**：队列会拒绝没有执行器的任务类型，而测试环境
 	// 不走 main.go 的装配。
-	q.Register(vm.NewDiskResizeExecutor(db, agent.NewMockClient()))
+	q.Register(vm.NewDiskResizeExecutor(db, newStubClient()))
 	vid := seedVM(t, db, 100, model.VMStatusStopped)
 
 	res, err := svc.ResizeDisk(context.Background(), vid, 200,

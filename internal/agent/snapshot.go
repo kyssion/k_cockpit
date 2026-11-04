@@ -19,8 +19,7 @@ const (
 // Snapshot 是节点的运行态快照。
 //
 // 它是**节点自己报上来的数据**，与 node 表中的元数据（名称、注册信息）
-// 是两类东西：元数据由控制面管理，运行态只可能来自 agent。因此开发期
-// 由 mock 提供（ADR-0007），业务代码不区分二者来源。
+// 是两类东西：元数据由控制面管理，运行态只可能来自 agent。
 type Snapshot struct {
 	Status          string
 	LastHeartbeat   time.Time

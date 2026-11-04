@@ -313,7 +313,7 @@ func (c *Collector) accumulate(
 
 	// 流量：本轮的**增量**。
 	//
-	// 这里用的速率（Kbps）乘采样间隔换算成字节——因为 mock 与协议层给的
+	// 这里用的速率（Kbps）乘采样间隔换算成字节——因为协议层给的
 	// 是速率而非累计值。真实实现里如果节点给的是累计字节，这里应当改成
 	// "与上一条记录相减"，那更准（不受采样抖动影响）。
 	inBytes := kbpsToBytes(s.NetRxKbps, deltaSeconds)

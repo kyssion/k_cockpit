@@ -230,7 +230,7 @@ func (h *Template) DownloadExport(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	name, data, mime, err := h.svc.ExportFile(ctx, id, authz.ViewerOf(c))
+	name, reader, mime, err := h.svc.ExportFile(ctx, id, authz.ViewerOf(c))
 	if err != nil {
 		api.Fail(c, err)
 		return
@@ -241,7 +241,8 @@ func (h *Template) DownloadExport(ctx context.Context, c *app.RequestContext) {
 	// 文件名必须由服务端决定，且用 RFC 5987 的形式处理非 ASCII。
 	c.Header("Content-Disposition", api.ContentDisposition(name))
 	c.SetContentType(mime)
-	c.Response.SetBody(data)
+	// 分片流式转发：控制面内存占用恒为单个分片，不随包大小增长。
+	c.Response.SetBodyStream(reader, -1)
 }
 
 // DeleteExport 删除一个导出产物。

@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -18,16 +19,13 @@ import (
 // 全部接口都要求管理员角色——该要求由**路由注册时声明**，而不是在
 // 本文件内部判断（f-1-06 R-003，见 internal/router）。
 type Node struct {
-	svc *node.Service
-	// simulateAgent 为 true 时暴露开发期的模拟注册入口。
-	// 仅在 AGENT_TRANSPORT=mock 时启用；该路由为 mock 专用，不随 agent 通道一起启用。
-	simulateAgent bool
-	risk          *risk.Guard
+	svc  *node.Service
+	risk *risk.Guard
 }
 
 // NewNode 构造节点接口。
-func NewNode(svc *node.Service, simulateAgent bool, guard *risk.Guard) *Node {
-	return &Node{svc: svc, simulateAgent: simulateAgent, risk: guard}
+func NewNode(svc *node.Service, guard *risk.Guard) *Node {
+	return &Node{svc: svc, risk: guard}
 }
 
 // List 返回节点列表（含运行态）。
@@ -181,12 +179,8 @@ type createEnrollTokenResponse struct {
 	ExpiresAt time.Time `json:"expires_at"`
 	Node      node.View `json:"node"`
 
-	// InstallCommand 是在目标机器上执行的 agent 安装命令。
-	// agent 尚未开发，接入后填充（见 docs/06-decisions/0007-mock-agent-first.md）。
+	// InstallCommand 是在目标机器上执行的 agent 注册命令。
 	InstallCommand string `json:"install_command"`
-	// SimulateCommand 是开发期的模拟注册命令：执行它走的是与节点注册
-	// **相同的注册逻辑**，区别只是把「在目标机器上执行」换成了直接调用。
-	SimulateCommand string `json:"simulate_command,omitempty"`
 }
 
 // CreateEnrollToken 生成一次性注册令牌，并创建一条待接入的节点。
@@ -219,57 +213,18 @@ func (h *Node) CreateEnrollToken(ctx context.Context, c *app.RequestContext) {
 		Node:      result.Node,
 	}
 
-	if h.simulateAgent {
-		resp.SimulateCommand = fmt.Sprintf(
-			`curl -sS -X POST '%s/api/v1/dev/agent-register' `+
-				`-H 'Content-Type: application/json' `+
-				`-d '{"token":"%s","agent_id":"mock-agent-%d"}'`,
-			baseURL(c), result.Token, result.Node.ID,
-		)
-	} else {
-		resp.InstallCommand = "（agent 安装脚本尚未实现）"
-	}
+	resp.InstallCommand = fmt.Sprintf(
+		"k_cockpit-agent enroll -server %s:8443 -token %s",
+		hostOnly(string(c.Request.Host())), result.Token,
+	)
 
 	api.Created(c, resp)
 }
 
-type simulateRegisterRequest struct {
-	Token        string `json:"token"`
-	AgentID      string `json:"agent_id"`
-	AgentVersion string `json:"agent_version"`
-}
-
-// SimulateRegister 是**开发期**的模拟注册入口。
-//
-// 它调用与节点注册**同一段** Register 逻辑（ADR-0007）：注册逻辑因此
-// 是被真实验证过的，替换 agent 实现时无需改动本方法所依赖的任何代码。
-// 该路由仅在 AGENT_TRANSPORT=mock 时注册，生产环境不存在。
-func (h *Node) SimulateRegister(ctx context.Context, c *app.RequestContext) {
-	var req simulateRegisterRequest
-	if err := c.Bind(&req); err != nil {
-		api.Fail(c, api.InvalidParameter("请求参数不合法"))
-		return
+// hostOnly 去掉 Host 头里的端口，用于拼接 agent 网关地址。
+func hostOnly(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
 	}
-	if req.AgentVersion == "" {
-		req.AgentVersion = "mock-0.1.0"
-	}
-
-	view, err := h.svc.Register(ctx, req.Token, req.AgentID, req.AgentVersion)
-	if err != nil {
-		api.Fail(c, err)
-		return
-	}
-	api.OK(c, view)
-}
-
-// baseURL 由请求推导服务的基础地址，用于拼接给用户执行的命令。
-//
-// 取请求的 Host 而非配置里的 APP_BASE_URL：用户可能是通过 IP、域名或
-// 反向代理访问的，用配置默认值拼出来的命令在他的环境里多半连不上。
-func baseURL(c *app.RequestContext) string {
-	scheme := "http"
-	if proto := string(c.GetHeader("X-Forwarded-Proto")); proto == "https" {
-		scheme = "https"
-	}
-	return scheme + "://" + string(c.Request.Host())
+	return host
 }

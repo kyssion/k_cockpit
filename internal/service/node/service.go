@@ -3,7 +3,7 @@
 // 职责边界：控制面管理节点的**元数据**（名称、注册信息、维护模式），
 // 节点的**运行态**（心跳、能力、版本）只可能来自 agent 上报，控制面
 // 代为缓存用于展示与离线判定。因此本包依赖 agent.SnapshotProvider：
-// 开发期由 mock 提供，替换 agent 实现时无需改动本包（ADR-0007）。
+// 由 agent 通道提供；本包只依赖 agent.Client，不感知运输层实现。
 package node
 
 import (
@@ -199,7 +199,7 @@ func (s *Service) CreateEnrollToken(
 
 // Register 用注册令牌完成 agent 注册。
 //
-// 真实场景下由 agent 经 gRPC 的 Bootstrap 调用；开发期可由模拟入口调用
+// 真实场景下由 agent 经 gRPC 的 Register 调用
 // ——**两者共用本方法**，保证注册逻辑本身是被真实验证过的（ADR-0007）。
 func (s *Service) Register(ctx context.Context, token, agentID, agentVersion string) (*View, error) {
 	// 空令牌按「令牌无效」处理，而不是「参数错误」：对外表现必须与令牌

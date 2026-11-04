@@ -61,7 +61,7 @@ type app struct {
 	logger *logging.Logger // internal/platform/logging
 	db     *gorm.DB        // internal/platform/database
 	// agentClient 是节点通道（internal/agent.Client）：全部域共用。
-	// 实现按 AGENT_TRANSPORT 切换（mock / grpc 网关），业务不感知（ADR-0007）。
+	// 实现只有 gRPC 网关一种（2026-11-04 起移除 mock）。
 	agentClient agent.Client
 	// agentGatewayStop 优雅停止 agent 网关（仅 grpc 运输层非空）。
 	agentGatewayStop func()
@@ -106,8 +106,6 @@ func main() {
 	a.setupSchedulerRegistry()
 	a.setupServices()
 	a.setupCredentials()
-	a.seedDevData()
-	a.hydrateMockPowerState()
 	a.setupBackground()
 
 	h := a.newHTTPServer()
@@ -271,7 +269,6 @@ func (a *app) routerDeps() router.Deps {
 		Bus:           a.bus,
 		VpcACL:        a.network.vpcACL,
 		SecureCookie:  a.cfg.Session.SecureCookie,
-		SimulateAgent: a.cfg.Agent.Transport == config.AgentTransportMock,
 		// 请求过滤开关每次请求现读设置：改设置立即生效，不需要重启。
 		InputFilterEnabled: func() bool {
 			return a.platform.settings.Bool("security.request_filter_enabled", true)

@@ -7,7 +7,6 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/service/compute/vm"
@@ -40,7 +39,7 @@ func seedMigratableVM(t *testing.T, db *gorm.DB, name string) *model.VM {
 
 // TestMigrateRejectsSameNode 覆盖最基础的一条。
 func TestMigrateRejectsSameNode(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := seedMigratableVM(t, db, "vm-m1")
@@ -54,7 +53,7 @@ func TestMigrateRejectsSameNode(t *testing.T) {
 // 维护模式的目标节点上什么都做不了（创建与电源操作都被拒绝）。迁过去之后
 // 用户会发现这台机器动不了，而他会以为是迁移本身出了问题。
 func TestMigrateRejectsMaintenanceTarget(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := seedMigratableVM(t, db, "vm-m2")
@@ -74,7 +73,7 @@ func TestMigrateRejectsMaintenanceTarget(t *testing.T) {
 // （save/restore 保留内存现场）、停机状态对应 offline，方式由实时探测
 // 决定并写进迁移记录。
 func TestMigrateRunningGoesLive(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusRunning})
 	ctx := context.Background()
 
 	row := seedMigratableVM(t, db, "vm-m3")
@@ -104,7 +103,7 @@ func TestMigrateRunningGoesLive(t *testing.T) {
 // TestMigrateRejectsPaused 暂停态两种方式都不适用：热迁移要机器在跑，
 // 停机迁移要机器已停。
 func TestMigrateRejectsPaused(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusPaused})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusPaused})
 	ctx := context.Background()
 
 	row := seedMigratableVM(t, db, "vm-m3p")
@@ -133,7 +132,7 @@ func deref(p *string) string {
 // 拒绝时必须**列出是哪一项冲突**：只说「有冲突」等于让用户在两个节点之间
 // 逐项对照。
 func TestMigrateRejectsStaticIPConflict(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := seedMigratableVM(t, db, "vm-m4")
@@ -160,7 +159,7 @@ func TestMigrateRejectsStaticIPConflict(t *testing.T) {
 
 // TestMigrateRejectsPortForwardConflict 覆盖端口转发的冲突。
 func TestMigrateRejectsPortForwardConflict(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := seedMigratableVM(t, db, "vm-m5")
@@ -188,7 +187,7 @@ func TestMigrateRejectsPortForwardConflict(t *testing.T) {
 // 节点上没有被登记——于是「地址在节点内唯一」这条约束对新位置失效，
 // 另一台机器可以分配到同一个 IP。
 func TestMigrateMovesVMAndNodeScopedResources(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 	viewer := authz.Viewer{UserID: 7}
 
@@ -261,7 +260,7 @@ func TestMigrateMovesVMAndNodeScopedResources(t *testing.T) {
 
 // TestMigrateRejectsOthersVM 覆盖越权。
 func TestMigrateRejectsOthersVM(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := seedMigratableVM(t, db, "vm-m7")
@@ -276,7 +275,7 @@ func TestMigrateRejectsOthersVM(t *testing.T) {
 }
 
 func TestMigrateRejectsMissingTargetNode(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := seedMigratableVM(t, db, "vm-m8")

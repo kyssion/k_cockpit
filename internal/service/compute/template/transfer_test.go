@@ -8,7 +8,6 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/service/compute/template"
@@ -33,7 +32,7 @@ func seedStorageFile(t *testing.T, db *gorm.DB, nodeID, userID int64, relPath, c
 func testEnvForTransfer(t *testing.T) (*template.Service, *gorm.DB) {
 	t.Helper()
 	svc, db := newTestEnv(t, model.VMStatusStopped)
-	client := &statusClient{MockClient: agent.NewMockClient(), status: model.VMStatusStopped}
+	client := &statusClient{stubClient: newStubClient(), status: model.VMStatusStopped}
 	_ = client
 	return svc, db
 }

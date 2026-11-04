@@ -87,10 +87,17 @@ func (s *Service) ReloadRules(
 	if s.agent == nil {
 		return nil, api.Unavailable("未连接节点，无法重载")
 	}
+	// 节点不知道控制面的绑定关系，重载必须把列表带下去；否则它只能
+	// 返回一个"没有可重载的规则"的空成功。
+	bindings, err := s.activeBindings(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
 	result, err := s.agent.Execute(ctx, agent.Operation{
 		Kind:   agent.OpPublicIPReload,
 		NodeID: nodeID,
 		Target: "rules",
+		Params: map[string]any{"bindings": bindings},
 	})
 	if err != nil {
 		return nil, api.Unavailable("节点不可达，未重载")
@@ -107,6 +114,32 @@ func (s *Service) ReloadRules(
 		Detail:  info.Detail,
 		Message: firstNonEmpty(info.Message, "已按当前绑定关系重新应用规则"),
 	}, nil
+}
+
+// activeBindings 把节点上有效的公网地址绑定转成节点可执行的描述。
+func (s *Service) activeBindings(ctx context.Context, nodeID int64) ([]map[string]any, error) {
+	var rows []model.PublicIPBinding
+	if err := s.db.WithContext(ctx).
+		Where("node_id = ? AND released_at IS NULL AND vm_id IS NOT NULL", nodeID).
+		Find(&rows).Error; err != nil {
+		log.Printf("[publicip] 查询绑定失败 node=%d: %v", nodeID, err)
+		return nil, api.Internal()
+	}
+	out := make([]map[string]any, 0, len(rows))
+	for i := range rows {
+		var ip model.PublicIP
+		if err := s.db.WithContext(ctx).Select("ip").First(&ip, rows[i].PublicIPID).Error; err != nil {
+			continue
+		}
+		var vm model.VM
+		if err := s.db.WithContext(ctx).Select("name").First(&vm, *rows[i].VMID).Error; err != nil {
+			continue
+		}
+		out = append(out, map[string]any{
+			"public_ip": ip.IP, "mode": rows[i].Mode, "vm_name": vm.Name,
+		})
+	}
+	return out, nil
 }
 
 // --- 来宾地址状态 ---

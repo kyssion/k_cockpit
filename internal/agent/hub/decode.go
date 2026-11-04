@@ -3,8 +3,7 @@
 //
 // 因此 hub 需要一张「操作 → 键 → 类型」的解码表。未登记的键走通用 JSON
 // 解码（string/float64/bool/嵌套 any）——那是标量键的正确形状，服务层对
-// 它们的断言本来就是基础类型；数字经 JSON 往返是 float64，与 mock 的
-// 行为一致（mock 的 size_bytes 就是 float64）。
+// 它们的断言本来就是基础类型；数字经 JSON 往返是 float64。
 package hub
 
 import (

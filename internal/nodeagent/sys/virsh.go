@@ -73,7 +73,7 @@ func parseVirshList(out string) []DomainEntry {
 }
 
 // DomainState 把 libvirt 的状态文案映射为控制面的状态值
-// （model.VMStatus 的取值域；映射表与 mock/控制面约定一致）。
+// （model.VMStatus 的取值域；映射表与控制面约定一致）。
 func DomainState(libvirtState string) string {
 	switch strings.ToLower(strings.TrimSpace(libvirtState)) {
 	case "running":

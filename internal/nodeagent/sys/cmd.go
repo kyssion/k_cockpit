@@ -31,8 +31,20 @@ const cmdTimeout = 10 * time.Second
 // virsh/define 这类命令的失败原因只在 stderr 里（"unsupported configuration
 // ..."），不带上的话节点侧只剩一个空泛的 exit status。
 func Run(ctx context.Context, name string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, cmdTimeout)
-	defer cancel()
+	return RunTimeout(ctx, cmdTimeout, name, args...)
+}
+
+// RunTimeout 是 Run 的可控超时版本，给 qemu-img convert / blockcopy 这类
+// 分钟级甚至小时级的操作使用。
+//
+// timeout <= 0 表示不额外加超时，完全由调用方 ctx 控制（任务取消时命令
+// 会随 ctx 一起被终止）。
+func RunTimeout(ctx context.Context, timeout time.Duration, name string, args ...string) (string, error) {
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	cmd := exec.CommandContext(ctx, name, args...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -54,6 +66,25 @@ func RunOK(ctx context.Context, name string, args ...string) bool {
 	return exec.CommandContext(ctx, name, args...).Run() == nil
 }
 
+// Run0Timeout 是 Run0 的可控超时版本（见 RunTimeout）。
+func Run0Timeout(ctx context.Context, timeout time.Duration, name string, args ...string) error {
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	var stderr strings.Builder
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return fmt.Errorf("%s: %s", name, msg)
+		}
+		return err
+	}
+	return nil
+}
+
 // jsonUnmarshalImpl 是 jsonUnmarshal 的实现（独立函数便于替换/打桩）。
 func jsonUnmarshalImpl(b []byte, v any) error { return json.Unmarshal(b, v) }
 
@@ -68,16 +99,5 @@ func osReadFile(path string) (string, error) {
 
 // Run0 执行命令只返回错误（不看输出）——给「成功与否即结论」的写命令用。
 func Run0(ctx context.Context, name string, args ...string) error {
-	ctx, cancel := context.WithTimeout(ctx, cmdTimeout)
-	defer cancel()
-	var stderr strings.Builder
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		if msg := strings.TrimSpace(stderr.String()); msg != "" {
-			return fmt.Errorf("%s: %s", name, msg)
-		}
-		return err
-	}
-	return nil
+	return Run0Timeout(ctx, cmdTimeout, name, args...)
 }

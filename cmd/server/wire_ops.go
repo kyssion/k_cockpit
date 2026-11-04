@@ -59,7 +59,7 @@ func (a *app) setupOpsServices() {
 	a.ops.alert = alert.NewService(db)
 
 	// 定时任务（F-7-05）：调度器到点把**已有的任务类型**入队，自己不做任何
-	// 节点操作，因此不需要新的执行器——这也是它能在 mock 之上完整跑通的原因。
+	// 节点操作，因此不需要新的执行器。
 	a.ops.scheduleSvc = cron.NewService(db)
 
 	// 站点维护（G-46）：逐节点接管节点维护模式，批量关机复用 vm 的入队逻辑。

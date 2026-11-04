@@ -19,7 +19,7 @@ import (
 	"k_cockpit/internal/nodeagent/sys"
 )
 
-// strParam / boolParam 是执行器侧的参数读取（与 mock 的同名助手语义一致）。
+// strParam / boolParam 是执行器侧的参数读取（与控制面的同名助手语义一致）。
 func strParam(params map[string]any, key string) string {
 	s, _ := params[key].(string)
 	return s
@@ -40,7 +40,7 @@ const userdataRoot = "/var/lib/k_cockpit/userdata"
 //
 // 步骤：备盘（克隆=基于模板盘建 overlay 或完整复制；新建=qemu-img create）
 // → 生成域 XML → virsh define → （auto_start 则 virsh autostart）。
-// **创建不自动开机**：与 mock 与控制面的状态机一致（创建后的域是关机态，
+// **创建不自动开机**：与控制面的状态机一致（创建后的域是关机态，
 // 用户点「开机」才启动）。
 func vmCreate(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	spec := parseCreateSpec(op.Target, op.Params)

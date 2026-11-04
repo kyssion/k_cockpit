@@ -3,10 +3,10 @@ import { defineConfig } from '@playwright/test'
 /**
  * Playwright E2E 配置（冒烟档，ADR-0006 / TESTING.md）。
  *
- * 冒烟 E2E 跑在 **mock 栈**上（ADR-0007）：一次性拉起独立的控制面（临时
- * SQLite + AGENT_TRANSPORT=mock）与 vite 开发服务器。它证明的是「登录与
- * 导航这条最重要的链路端到端没断」——创建 / 电源 / 迁移的核心链路覆盖
- * 依赖真实 agent，仍按口径挂在 M5 验收。
+ * 冒烟 E2E 一次性拉起独立的控制面（临时 SQLite）与 vite 开发服务器，不要求
+ * 本机有可用的 libvirt agent。它证明的是「登录与导航这条最重要的链路端到端
+ * 没断」——创建 / 电源 / 迁移的核心链路覆盖依赖真实 agent，仍按口径挂在 M5
+ * 验收。
  *
  * 端口刻意避开开发期常占用的 8080 / 5173：冒烟与本机开发并行不互踩。
  */
@@ -42,7 +42,6 @@ export default defineConfig({
         APP_PORT: String(API_PORT),
         DB_DRIVER: 'sqlite',
         DB_PATH: `${RUN_DIR}/e2e.db`,
-        AGENT_TRANSPORT: 'mock',
         // 日志落在冒烟目录里，不污染开发期的 data/logs。
         LOG_DIR: 'build/e2e/logs',
       },

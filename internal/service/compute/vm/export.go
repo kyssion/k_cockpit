@@ -330,7 +330,7 @@ func newChunkedReader(s *Service, row *model.VMExport, first []byte, total, chun
 
 func (r *chunkedReader) Read(p []byte) (int, error) {
 	for r.off >= len(r.buf) {
-		// 节点没报 total（旧版 agent / mock）：无法判断终点，按「首片即全部」
+		// 节点没报 total（旧版 agent）：无法判断终点，按「首片即全部」
 		// 结束——比无限拉同一片安全（真实大文件必须由新版 agent 提供总长）。
 		if r.total <= 0 || r.next >= r.total {
 			return 0, io.EOF

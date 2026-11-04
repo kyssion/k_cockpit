@@ -24,7 +24,7 @@ import (
 // 本包要验证的核心是**三态的区分**，而 mock 只上报一种固定组合——
 // 用它测出来的永远只有一条路径。
 type backendClient struct {
-	*agent.MockClient
+	*stubClient
 	backend *agent.NetworkBackend
 	// unreachable 模拟探测本身失败（节点不可达）。
 	unreachable bool
@@ -32,7 +32,7 @@ type backendClient struct {
 
 func (c *backendClient) Execute(ctx context.Context, op agent.Operation) (*agent.Result, error) {
 	if op.Kind != agent.OpNodeNetwork {
-		return c.MockClient.Execute(ctx, op)
+		return c.stubClient.Execute(ctx, op)
 	}
 	if c.unreachable {
 		return nil, errors.New("dial tcp: connection refused")
@@ -113,7 +113,7 @@ func capabilityOf(t *testing.T, view *vswitch.StatusView, key string) vswitch.Ca
 }
 
 func TestStatusAllCapabilitiesAvailable(t *testing.T) {
-	svc, _ := newTestEnv(t, &backendClient{MockClient: agent.NewMockClient(), backend: fullBackend()})
+	svc, _ := newTestEnv(t, &backendClient{stubClient: newStubClient(), backend: fullBackend()})
 
 	view, err := svc.Status(context.Background(), 1)
 	if err != nil {
@@ -139,7 +139,7 @@ func TestMissingOptionalCapabilityDoesNotDegrade(t *testing.T) {
 	backend := fullBackend()
 	backend.Missing[agent.CapabilityOVS] = "未检测到 Open vSwitch"
 
-	svc, _ := newTestEnv(t, &backendClient{MockClient: agent.NewMockClient(), backend: backend})
+	svc, _ := newTestEnv(t, &backendClient{stubClient: newStubClient(), backend: backend})
 	view, err := svc.Status(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("查询失败: %v", err)
@@ -168,7 +168,7 @@ func TestMissingRequiredCapabilityDegrades(t *testing.T) {
 	backend.Capabilities = []string{agent.CapabilityBridgeBasic, agent.CapabilityNAT}
 	backend.Missing[agent.CapabilityDHCP] = "未检测到 dnsmasq"
 
-	svc, _ := newTestEnv(t, &backendClient{MockClient: agent.NewMockClient(), backend: backend})
+	svc, _ := newTestEnv(t, &backendClient{stubClient: newStubClient(), backend: backend})
 	view, err := svc.Status(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("查询失败: %v", err)
@@ -190,7 +190,7 @@ func TestProbeFailureIsUnknownNotUnavailable(t *testing.T) {
 	// 这个区分是实的：缺失要装东西，未知要重试。显示成缺失会让用户去装
 	// 一个其实已经装好的包——而这看起来像是「系统检测不准」，比报错更糟。
 	svc, _ := newTestEnv(t, &backendClient{
-		MockClient:  agent.NewMockClient(),
+		stubClient:  newStubClient(),
 		unreachable: true,
 	})
 
@@ -222,7 +222,7 @@ func TestProbeFailureIsUnknownNotUnavailable(t *testing.T) {
 }
 
 func TestSystemNetworkIsCreatedOnce(t *testing.T) {
-	client := &backendClient{MockClient: agent.NewMockClient(), backend: fullBackend()}
+	client := &backendClient{stubClient: newStubClient(), backend: fullBackend()}
 	svc, db := newTestEnv(t, client)
 	ctx := context.Background()
 
@@ -254,7 +254,7 @@ func TestSystemNetworkIsCreatedOnce(t *testing.T) {
 }
 
 func TestUnknownNodeNotFound(t *testing.T) {
-	svc, _ := newTestEnv(t, &backendClient{MockClient: agent.NewMockClient(), backend: fullBackend()})
+	svc, _ := newTestEnv(t, &backendClient{stubClient: newStubClient(), backend: fullBackend()})
 
 	_, err := svc.Status(context.Background(), 999)
 	var apiErr *api.Error
@@ -274,7 +274,7 @@ func TestCapabilitiesCoverCatalog(t *testing.T) {
 	backend := fullBackend()
 	backend.Capabilities = append(backend.Capabilities, "network.unknown-future-thing")
 
-	svc, _ := newTestEnv(t, &backendClient{MockClient: agent.NewMockClient(), backend: backend})
+	svc, _ := newTestEnv(t, &backendClient{stubClient: newStubClient(), backend: backend})
 	view, err := svc.Status(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("查询失败: %v", err)

@@ -1,6 +1,6 @@
 # 0011. mock 增加电源生命周期的最小状态
 
-- 状态：Accepted
+- 状态：Superseded by [0013](0013-remove-mock-transport.md)
 - 日期：2026-09-30
 - 关联：[`0007-mock-agent-first.md`](0007-mock-agent-first.md)（本 ADR 修订其实现口径的一处）· `internal/agent/mock.go`
 

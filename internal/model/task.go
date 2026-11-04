@@ -238,7 +238,7 @@ type TaskStage struct {
 	TaskID int64 `gorm:"not null;index:idx_task_stage_task_seq,priority:1"`
 	// Seq 是阶段序号，从 1 开始，决定时间线的展示顺序。
 	//
-	// 用显式序号而不是靠 started_at 排序：同一毫秒内开始的阶段（mock 与
+	// 用显式序号而不是靠 started_at 排序：同一毫秒内开始的阶段（
 	// 快速操作中很常见）时间戳完全相同，靠时间排序会得到随机顺序，而一条
 	// 顺序错乱的时间线会把人引向错误的结论。
 	Seq int `gorm:"not null;index:idx_task_stage_task_seq,priority:2"`

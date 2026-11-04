@@ -60,6 +60,49 @@ func (s *Service) Maintain(
 		return nil, api.Conflict(acknowledgeReason(req.Action))
 	}
 
+	params := maintainParams{
+		Action:     req.Action,
+		TemplateID: tpl.ID,
+		ChildID:    req.ChildID,
+		DiskPath:   tpl.DiskPathOf(),
+	}
+	// 节点只认磁盘路径，不认控制面的 template_id / child_id。派生链维护
+	// 必须把"上级盘"和"要改挂的子盘"解析成路径下发，否则节点无从下手。
+	if tpl.ParentID != nil {
+		var parent model.Template
+		if err := s.db.WithContext(ctx).
+			Select("id", "name", "disk_path").
+			First(&parent, *tpl.ParentID).Error; err == nil {
+			params.ParentDiskPath = parent.DiskPathOf()
+		}
+	}
+	if params.ParentDiskPath == "" && (req.Action == maintainRebase || req.Action == maintainFlatten) {
+		return nil, api.ValidationFailed("当前模板没有上级模板，无法执行 " + req.Action)
+	}
+
+	switch req.Action {
+	case maintainPromoteChild:
+		var child model.Template
+		if err := s.db.WithContext(ctx).
+			Where("id = ? AND parent_id = ?", req.ChildID, tpl.ID).
+			First(&child).Error; err != nil {
+			return nil, api.ValidationFailed("子模板不存在或不属于当前模板")
+		}
+		params.ChildDiskPaths = []string{child.DiskPathOf()}
+
+	case maintainPromoteDelete:
+		var children []model.Template
+		if err := s.db.WithContext(ctx).
+			Where("parent_id = ?", tpl.ID).
+			Find(&children).Error; err != nil {
+			log.Printf("[template] 查询下游模板失败 id=%d: %v", tpl.ID, err)
+			return nil, api.Internal()
+		}
+		for i := range children {
+			params.ChildDiskPaths = append(params.ChildDiskPaths, children[i].DiskPathOf())
+		}
+	}
+
 	t, err := s.queue.Enqueue(ctx, task.Spec{
 		Type:         model.TaskTemplateMaintain,
 		NodeID:       tpl.NodeID,
@@ -68,12 +111,7 @@ func (s *Service) Maintain(
 		ResourceName: tpl.Name,
 		OwnerID:      v.UserID,
 		CreatedBy:    v.UserID,
-		Params: maintainParams{
-			Action:     req.Action,
-			TemplateID: tpl.ID,
-			ChildID:    req.ChildID,
-			DiskPath:   tpl.DiskPathOf(),
-		},
+		Params:       params,
 	})
 	if err != nil {
 		return nil, err
@@ -107,6 +145,11 @@ type maintainParams struct {
 	TemplateID int64  `json:"template_id"`
 	ChildID    int64  `json:"child_id"`
 	DiskPath   string `json:"disk_path"`
+	// ParentDiskPath 是当前模板的上级盘；rebase / flatten 的新 backing，
+	// promote_* 则是子模板要改挂到的目标。为空表示当前模板是族根。
+	ParentDiskPath string `json:"parent_disk_path,omitempty"`
+	// ChildDiskPaths 是要改挂的下游模板盘。节点只认路径，不认数据库 ID。
+	ChildDiskPaths []string `json:"child_disk_paths,omitempty"`
 }
 
 // MaintainExecutor 执行派生链维护。
@@ -153,7 +196,14 @@ func (e *MaintainExecutor) Run(ctx context.Context, t *model.Task) error {
 		Kind:   kind,
 		NodeID: *t.NodeID,
 		Target: p.DiskPath,
-		Params: map[string]any{"template_id": p.TemplateID, "child_id": p.ChildID},
+		Params: map[string]any{
+			"template_id": p.TemplateID,
+			"child_id":    p.ChildID,
+			// 节点只认路径：template_id/child_id 是控制面数据库 ID，
+			// 节点侧没有这张表，拿不到对应的盘。
+			"parent_disk_path": p.ParentDiskPath,
+			"child_disk_paths": p.ChildDiskPaths,
+		},
 	})
 	if err != nil {
 		return api.Unavailable("节点不可达，派生链未改动")

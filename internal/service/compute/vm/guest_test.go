@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/service/compute/vm"
@@ -14,7 +13,7 @@ import (
 
 // TestOnlinePasswordRequiresRunning 覆盖在线改密的前置条件。
 func TestOnlinePasswordRequiresRunning(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{
@@ -34,7 +33,7 @@ func TestOnlinePasswordRequiresRunning(t *testing.T) {
 // 这句拒绝必须说清「怎么办」（去来宾里装并启动它），而不只是「不行」——
 // 用户看到「未检测到 Guest Agent」的下一个问题一定是「那我要做什么」。
 func TestOnlinePasswordRequiresGuestAgent(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusRunning})
 	ctx := context.Background()
 
 	row := model.VM{
@@ -57,7 +56,7 @@ func TestOfflinePasswordRequiresStoppedAndNoAgent(t *testing.T) {
 	ctx := context.Background()
 
 	// 运行中 → 拒绝（即使装了 agent）。
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusRunning})
 	row := model.VM{
 		NodeID: 1, Name: "vm-g3", Status: model.VMStatusRunning,
 		OwnerID: ptr(int64(7)), GuestAgent: true,
@@ -69,7 +68,7 @@ func TestOfflinePasswordRequiresStoppedAndNoAgent(t *testing.T) {
 	assertAPIError(t, err, 422)
 
 	// 关机且**没有** agent → 接受。
-	svc2, _, db2 := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc2, _, db2 := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	row2 := model.VM{
 		NodeID: 1, Name: "vm-g4", Status: model.VMStatusStopped,
 		OwnerID: ptr(int64(7)), GuestAgent: false,
@@ -88,7 +87,7 @@ func TestOfflinePasswordRequiresStoppedAndNoAgent(t *testing.T) {
 // 是运维随时会翻的。清除必须放在失败路径上也要走到的地方：恰恰是失败时，
 // 用户最可能把参数贴出来求助。
 func TestGuestActionScrubsPassword(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusRunning})
 	ctx := context.Background()
 	viewer := authz.Viewer{UserID: 7}
 
@@ -138,7 +137,7 @@ func TestGuestActionScrubsPassword(t *testing.T) {
 
 // TestGuestActionAuditHasNoPassword 覆盖审计流水同样不含密码。
 func TestGuestActionAuditHasNoPassword(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusRunning})
 	ctx := context.Background()
 
 	row := model.VM{
@@ -171,7 +170,7 @@ func TestGuestActionAuditHasNoPassword(t *testing.T) {
 // 用户名与密码会被拼进 shell 命令交给来宾执行，含空白或换行的输入会让命令
 // 被拆开——那是注入，不只是格式问题。
 func TestGuestActionRejectsInjection(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusRunning})
 	ctx := context.Background()
 
 	row := model.VM{
@@ -200,7 +199,7 @@ func TestGuestActionRejectsInjection(t *testing.T) {
 }
 
 func TestGuestActionRejectsUnknownAction(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusRunning})
 	ctx := context.Background()
 
 	row := model.VM{
@@ -215,7 +214,7 @@ func TestGuestActionRejectsUnknownAction(t *testing.T) {
 }
 
 func TestGuestActionRejectsOthersVM(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusRunning})
 	ctx := context.Background()
 
 	theirs := model.VM{
@@ -235,7 +234,7 @@ func TestGuestActionRejectsOthersVM(t *testing.T) {
 //
 // 让界面据此禁用按钮，而不是让用户点下去才知道不行。
 func TestGuestCapabilitiesReflectState(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusRunning})
 	ctx := context.Background()
 	viewer := authz.Viewer{UserID: 7}
 

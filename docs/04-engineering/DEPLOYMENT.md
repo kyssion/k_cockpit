@@ -4,7 +4,7 @@
 > 最后更新：2026-09-28
 > 关联：[`DEVELOPMENT.md`](DEVELOPMENT.md)（开发环境）· [`../../02-architecture/ARCHITECTURE.md`](../02-architecture/ARCHITECTURE.md) · [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)
 
-本文说明**控制面**的部署、升级与回滚。被管宿主机上的节点代理（agent）尚未实现（[ADR-0007](../06-decisions/0007-mock-agent-first.md)），单机生产形态待其落地后另行补充——当前部署所得的是一个以 mock agent 驱动的完整控制面，适合演示、联调与前端验收，**不能真实管理宿主机**。
+本文说明**控制面**与**节点 agent** 的部署、升级与回滚。控制面只持有期望态，宿主侧动作全部由 agent 经 mTLS 反向长连接执行；2026-11-04 起已移除 mock 传输，控制面必须配合真实 agent 才能管理宿主机。
 
 ---
 
@@ -134,15 +134,37 @@ systemctl restart k-cockpit
 - [ ] 备份任务就位（数据库定时 `pg_dump`，日志目录有清理策略）
 - [ ] `GET /health` 与登录链路验证通过
 
-## 8. 当前边界（演示形态）
+## 8. 节点 agent 部署
 
-控制面在 `AGENT_TRANSPORT=mock`（默认）下运行：节点侧操作全部由 mock 返回假数据，界面上标注「模拟」。这是 [ADR-0007](../06-decisions/0007-mock-agent-first.md) 的已知代价，真实 agent 落地后：
+每台被管宿主机执行一次：
 
-- 本节标注的边界自动消失（无需改部署方式）；
-- 补充宿主机侧 agent 的安装章节（systemd 单元、注册令牌、mTLS）。
+```bash
+# 1) 构建与控制面同版本的 agent
+go build -o bin/agent ./cmd/agent
+
+# 2) 安装二进制与 systemd 单元（root）
+install -m 0755 bin/agent /usr/local/bin/k_cockpit-agent
+install -m 0644 deploy/agent/k_cockpit-agent.service /etc/systemd/system/
+systemctl daemon-reload
+
+# 3) 在面板「节点」页生成一次性注册令牌，然后在宿主机执行
+k_cockpit-agent enroll -server <控制面地址>:8443 -token <一次性令牌>
+
+# 4) 启动常驻通道
+systemctl enable --now k_cockpit-agent
+```
+
+要求：宿主机仅需**出向**连通控制面 `:8443`；身份材料写入 `/var/lib/k_cockpit-agent`（`agent.json` + CA/客户端证书）。证书签发后令牌即销毁，重装需重新生成。
+
+## 9. 当前边界
+
+- live 热迁移因需要节点间 libvirt 互信凭据、与 ADR-0005 冲突而**诚实阻断**（已交付 offline / warm）；
+- 跨节点迁移 relay、模板 tar 包通道、agent 自动升级与遥测仍待后续批次；
+- 单控制面实例；多实例需先外部化会话、任务队列与实时总线。
 
 ## 变更记录
 
 | 日期 | 内容 |
 |---|---|
 | 2026-09-28 | 初版：控制面的构建、安装、迁移、升级、回滚与上线清单（agent 侧待落地） |
+| 2026-11-04 | 移除 mock 传输；补充 agent 安装/enroll/systemd 章节与当前能力边界 |

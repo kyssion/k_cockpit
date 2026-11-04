@@ -9,7 +9,6 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
@@ -45,7 +44,7 @@ func newEnv(t *testing.T) (*gorm.DB, *capture.Service) {
 	if err := db.Create(&model.Node{ID: 1, Name: "node-1"}).Error; err != nil {
 		t.Fatalf("创建节点失败: %v", err)
 	}
-	client := agent.NewMockClient()
+	client := newStubClient()
 	recorder := audit.NewRecorder(db)
 	q := task.NewQueue(db, recorder, task.Options{})
 	q.Register(capture.NewExecutor(db, client))
@@ -231,7 +230,7 @@ func TestEmptyFileExplainsItself(t *testing.T) {
 	if err := db.First(&task2, tk.ID).Error; err != nil {
 		t.Fatalf("找不到任务: %v", err)
 	}
-	if err := capture.NewExecutor(db, agent.NewMockClient()).Run(ctx, &task2); err != nil {
+	if err := capture.NewExecutor(db, newStubClient()).Run(ctx, &task2); err != nil {
 		t.Fatalf("执行失败: %v", err)
 	}
 
@@ -304,7 +303,7 @@ func TestDeleteSendsFileRemovalToNode(t *testing.T) {
 	}
 	var t1 model.Task
 	db.First(&t1, tk.ID)
-	if err := capture.NewExecutor(db, agent.NewMockClient()).Run(ctx, &t1); err != nil {
+	if err := capture.NewExecutor(db, newStubClient()).Run(ctx, &t1); err != nil {
 		t.Fatalf("抓包失败: %v", err)
 	}
 
@@ -316,7 +315,7 @@ func TestDeleteSendsFileRemovalToNode(t *testing.T) {
 	if delTask == nil {
 		t.Fatal("文件已生成时必须下发删除——只删记录会让文件长期留在宿主机上")
 	}
-	if err := capture.NewDeleteExecutor(db, agent.NewMockClient()).Run(ctx, delTask); err != nil {
+	if err := capture.NewDeleteExecutor(db, newStubClient()).Run(ctx, delTask); err != nil {
 		t.Fatalf("执行删除失败: %v", err)
 	}
 

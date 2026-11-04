@@ -9,7 +9,6 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
@@ -43,7 +42,7 @@ func newEnv(t *testing.T) (*gorm.DB, *passthrough.Service) {
 		t.Fatalf("建表失败: %v", err)
 	}
 	db.Create(&model.Node{ID: 1, Name: "node-1"})
-	client := agent.NewMockClient()
+	client := newStubClient()
 	recorder := audit.NewRecorder(db)
 	q := task.NewQueue(db, recorder, task.Options{})
 	q.Register(passthrough.NewExecutor(db, client))

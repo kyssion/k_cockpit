@@ -1,11 +1,11 @@
 # F-6-08 节点 agent（真实通道与领域执行）
 
-- 状态：生效中（P0~P2 已交付 + P3~P5 执行器全量接入；剩余为深化项）
-- 关联：[f-6-01](f-6-01-node.md)（接入与通道协议）· [ADR-0005](../06-decisions/0005-control-plane-node-agent-architecture.md) · [ADR-0007](../06-decisions/0007-mock-agent-first.md) · [`internal/agentproto/agent.proto`](../../internal/agentproto/agent.proto)（线上契约唯一来源）
+- 状态：生效中（P0~P2 已交付；**2026-11-04 补齐**：控制面下发 120 个 OpKind、注册表 123 项，缺口 0；mock 传输与演示数据已删除，见 §2.1 与 [ADR-0013](../06-decisions/0013-remove-mock-transport.md)）
+- 关联：[f-6-01](f-6-01-node.md)（接入与通道协议）· [ADR-0005](../06-decisions/0005-control-plane-node-agent-architecture.md) · [`internal/agentproto/agent.proto`](../../internal/agentproto/agent.proto)（线上契约唯一来源）
 
 ## 1. 已交付（P0，通道骨架）
 
-**架构**：`cmd/agent`（enroll/run 两子命令）+ `internal/nodeagent`（agent 侧：TLS 身份、重连退避、执行器注册表）+ `internal/agent/hub`（控制面侧：连接注册表、PKI 自举、Execute 路由、心跳落库）。传输 gRPC over TLS（mTLS），协议形状见 proto；`AGENT_TRANSPORT=grpc` 启用，mock 保留（E2E 冒烟仍跑 mock）。
+**架构**：`cmd/agent`（enroll/run 两子命令）+ `internal/nodeagent`（agent 侧：TLS 身份、重连退避、执行器注册表）+ `internal/agent/hub`（控制面侧：连接注册表、PKI 自举、Execute 路由、心跳落库）。传输只有 gRPC over TLS（mTLS），协议形状见 proto；2026-11-04 起 mock 已删除。
 
 **安全模型**：控制面启动时自举私有 CA（`agent-pki/`）；agent 一次性令牌经 `Register` 换客户端证书（CN=agent_id）；此后连接出示证书、并校验服务端链是否由该 CA 签发。无证书仅能调 Register；Channel 按 CN 解析节点。令牌校验/审计复用 node 域 `Register` 语义（经 Registrar 接口延迟解析）。
 
@@ -58,16 +58,35 @@ cleanup 波及目标侧定义与 NVRAM。跨节点分片中转（relay 循环）
 |---|---|---|---|
 | P1 只读探测 | 23 个探测操作全部真数据 | ✅ 真机对账通过 | host.hardware 内存条（需 SMBIOS）|
 | P2 生命周期+控制台 | create/clone/delete、电源、快照、光驱、截帧、VNC 流 | ✅ 真机验收通过（aarch64 UEFI+ramfb 建→开→截帧→删；10-22 复验：多数据盘创建/删除、光驱挂载） | 槽位记账精化；克隆 E2E |
-| P3 网络 | vpc.switch（OVS+dnsmasq+NAT）、桥/上行口（看门狗）、安全组（per-VM 链）、双层防火墙、端口转发 DNAT、公网 IP DNAT、端口安全（OVS 流表）、镜像、抓包（tcpdump）、收敛修复 | ✅ 执行器真机部署（85 项能力自报；10-22 镜像全链路真机验收通过） | OVS 原生流表口径深化；交换机迁移 |
-| P4 存储与模板 | 池格式化挂载/删除/配置/卸载/trim、分区、LVM 卷、文件提交与读取、9p 共享 | ✅ 执行器部署（10-22 分片上传→文件落盘真机验证） | 模板制备/导入导出 tar 通道 |
+| P3 网络 | vpc.switch（OVS+dnsmasq+NAT）、桥/上行口（看门狗）、安全组（per-VM 链）、双层防火墙、端口转发 DNAT、公网 IP DNAT、端口安全（OVS 流表）、镜像、抓包（tcpdump）、收敛修复、ACL/交换机迁移/计数/带宽/IPv6 | ✅ 执行器真机部署（10-22 镜像全链路验收）；长尾 14 项 2026-11-04 接通、单测通过 | OVS 原生流表口径深化；交换机迁移真机验收 |
+| P4 存储与模板 | 池格式化挂载/删除/配置/卸载/trim、分区、LVM 卷、文件提交与读取、9p 共享、模板制备/维护/导入导出/预处理、镜像导入 | ✅ 执行器部署（10-22 分片上传→文件落盘真机验证）；模板/镜像 14 项 2026-11-04 接通、单测通过 | 模板包大文件真机验收；virt-customize 环境验收 |
 | P5 长尾 | 冷迁移、重装（备份→重建→失败还原）、救援（配置快照）、导出、口令审计（读 shadow+crypt 比对）、SSH 开关（DenyUsers drop-in+踢会话）、配额处置（FORWARD 链）、平台修复 | ✅ 执行器部署（真机口令审计 36 账号验证；10-22 SSH 开关双向 reload 真机验收通过） | 热迁移/脏页采样、来宾自动化（需 guest-agent）、takeover 完整重建 |
+
+### 2.1 mock 兜底项补齐（2026-11-04 完成）
+
+控制面 `internal/service` 实际下发 120 个 OpKind，`NewRegistry` 原注册 86 项；差额 37 项在 mock 下走 `Execute` 默认分支返回 `Success=true`，真实 agent 下会返回「未实现」。已按 VM → 模板 → 镜像 → 网络 → 存储/宿主分批补齐，注册表当前 **123 项，控制面引用缺口 0**。
+
+**已接通（单测通过，真机待验）**：
+- VM 6 项：`vm.adopt`、`vm.xml.apply`、`vm.disk.change`、`vm.disk.resize`、`vm.disks.independent`、`vm.interface.change`
+- 模板 12 项：prepare / delete / rebase / flatten / promote_child / promote_delete / preprocess / export / export.delete / export.fetch / import.preview / import
+- 镜像 2 项：`image.parse`、`image.import`
+- 网络 14 项：VPC ACL、交换机迁移/重配、端口释放、计数重置、全局带宽、IPv6 策略、公网 IP 预览/重载/来宾状态/IPv6 检测、抓包取回/删除
+- 存储/宿主 3 项：`storage.partition.list`、`host.pci.bind`、`host.tuning.apply`
+
+**已修的契约缺口**：
+- 模板派生链维护新增 `parent_disk_path / child_disk_paths`（节点只认磁盘路径，不认数据库 ID）。
+- 模板包格式固定为 `tar.gz`（`manifest.json` + `disk.qcow2`，磁盘 SHA256 + 包 SHA256）；`template.export.fetch` 改为 offset/length 分片，控制面 `ExportFile` 改为流式转发。
+- `vm.interface.change` 增补 `bridge_name`（控制面由 `switch_id` 解析）。
+- `public_ip.reload` 增补 `bindings` 列表（节点不知道控制面的绑定关系）。
+
+**2026-11-04 同时删除**：`agent.MockClient`、`AGENT_TRANSPORT`、`internal/devdata`、模拟节点、`/api/v1/dev/agent-register`、前端模拟标记（见 [ADR-0013](../06-decisions/0013-remove-mock-transport.md)）。测试改为每包自写 stub。
 
 ## 3. 实现约束（继承既有决策）
 
 - agent 是**唯一直接操作 libvirt/KVM 与宿主系统**的角色（ADR-0005）；libvirt 客户端用纯 Go 实现（无 CGO，交叉编译 linux/arm64），`virsh` 命令降级。
 - 危险操作自带**节点侧**保险（uplink/端口镜像看门狗）；`firewall.rollback` 不允许失败；`host_firewall` 先写入后收紧。
 - 幂等收敛类操作下发期望状态而非增量；`vm.xml.apply` 校验用 libvirt 校验器；源侧迁移数据在目标确认前不删。
-- 阶段 Key 沿用 mock 的 stagePlan 词汇（前端时间线已按此渲染）；`Total=0` 表示总数未知。
+- 阶段 Key 沿用既有阶段词汇（前端时间线已按此渲染）；`Total=0` 表示总数未知。
 - 真实 IP/密码/证书不入仓库（红线）；测试机操作遵循 TROUBLESHOOTING 只读优先与最小变更原则。
 
 ## 4. P5 第二批设计（迁移三模式 / takeover 完整重建 / 来宾自动化）

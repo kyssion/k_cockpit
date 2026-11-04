@@ -38,9 +38,6 @@ var publicAPIRoutes = map[string]bool{
 	"POST /auth/forgot/reset":            true,
 	"GET /invites/preview":               true,
 	"POST /invites/accept":               true,
-	// dev 注册入口只在 AGENT_TRANSPORT=mock 时注册（见 router.Register），
-	// 出现时就是公开的。
-	"POST /dev/agent-register": true,
 }
 
 // adminAPIRoutes 是仅管理员可访问的路由（不含 /api/v1 前缀）。
@@ -302,18 +299,18 @@ var actionGlossary = map[string]string{
 // 启发式生成的摘要对大多数 CRUD 足够，但认证与初始化这类接口的语义
 // 值得手写。
 var summaryOverrides = map[string]string{
-	"POST /auth/login":             "登录（多阶段：ok / login_verify / force_password_change / bootstrap_security）",
-	"POST /auth/login/verify":      "完成登录的第二阶段验证（TOTP / 邮箱验证码）",
-	"POST /auth/login/password":    "首次登录后修改初始密码",
-	"POST /setup/admin":            "创建首个管理员账号（仅系统未初始化时可用）",
-	"GET /maintenance":             "查询站点维护状态",
-	"POST /maintenance/enter":      "进入站点维护（逐节点接管，需二次验证）",
-	"POST /maintenance/exit":       "退出站点维护（只解除本次接管的节点）",
-	"GET /vms/create-form":         "创建向导的步骤、字段矩阵与前置条件（由后端统一下发）",
-	"POST /tasks/stream":           "任务事件的 SSE 实时通道",
-	"POST /auth/forgot/send":       "申请找回密码验证码（只发到已验证邮箱）",
-	"POST /auth/forgot/reset":      "用一次性重置票据设置新密码",
-	"POST /dev/agent-register":     "模拟 agent 注册（仅 AGENT_TRANSPORT=mock 时注册该路由）",
+	"POST /auth/login":          "登录（多阶段：ok / login_verify / force_password_change / bootstrap_security）",
+	"POST /auth/login/verify":   "完成登录的第二阶段验证（TOTP / 邮箱验证码）",
+	"POST /auth/login/password": "首次登录后修改初始密码",
+	"POST /setup/admin":         "创建首个管理员账号（仅系统未初始化时可用）",
+	"GET /maintenance":          "查询站点维护状态",
+	"POST /maintenance/enter":   "进入站点维护（逐节点接管，需二次验证）",
+	"POST /maintenance/exit":    "退出站点维护（只解除本次接管的节点）",
+	"GET /vms/create-form":      "创建向导的步骤、字段矩阵与前置条件（由后端统一下发）",
+	"POST /tasks/stream":        "任务事件的 SSE 实时通道",
+	"POST /auth/forgot/send":    "申请找回密码验证码（只发到已验证邮箱）",
+	"POST /auth/forgot/reset":   "用一次性重置票据设置新密码",
+
 	"GET /invites/preview":         "公开预览一条邀请（不暴露配额）",
 	"POST /invites/accept":         "接受邀请并自助创建账号",
 	"GET /nodes/:id/unmanaged-vms": "扫描节点上面板之外的存量域（未纳管清单）",

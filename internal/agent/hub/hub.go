@@ -8,7 +8,7 @@
 //  3. 注册时给 agent 签发客户端证书（certs.go）。
 //
 // 它实现 agent.Client / agent.SnapshotProvider / agent.StreamOpener 三个
-// 接口——与 MockClient 完全同构，因此切换运输层时业务代码零改动（ADR-0007）。
+// 接口——业务代码只依赖 agent.Client，不感知运输层实现。
 package hub
 
 import (
@@ -236,7 +236,7 @@ func (h *Hub) Execute(ctx context.Context, op agent.Operation) (*agent.Result, e
 
 // Snapshot 实现 agent.SnapshotProvider：从节点行读最近心跳与能力。
 //
-// 与 mock（恒返 online）不同，这里的状态也由心跳时间推导——控制面重启后
+// 状态由心跳时间推导——控制面重启后
 // 内存连接表为空，节点行的 last_heartbeat_at 是唯一幸存的事实。
 func (h *Hub) Snapshot(ctx context.Context, nodeID int64) (*agent.Snapshot, error) {
 	row, err := h.repo.GetNode(ctx, nodeID)

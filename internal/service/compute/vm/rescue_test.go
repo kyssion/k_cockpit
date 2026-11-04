@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/service/compute/vm"
@@ -35,7 +34,7 @@ func TestEnterRescueRequiresStopped(t *testing.T) {
 	// 探测返回 running：救援要改硬件配置，热改会让控制面记录的配置与
 	// 虚拟化层实际的配置分叉——而那份分叉在退出还原时会变成一个
 	// 「还原成什么样」说不清的状态。
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusRunning})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusRunning})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-r1", Status: model.VMStatusRunning, OwnerID: ptr(int64(7))}
@@ -51,7 +50,7 @@ func TestEnterRescueRequiresStopped(t *testing.T) {
 // 那是悄悄改掉用户的配置——他进入救援是为了修系统，退出后发现引导顺序被
 // 重置成了默认值，机器起不来了。
 func TestRescueRoundTripRestoresConfig(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 	viewer := authz.Viewer{UserID: 7}
 
@@ -123,7 +122,7 @@ func TestRescueRoundTripRestoresConfig(t *testing.T) {
 }
 
 func TestEnterRescueRejectsWhenAlreadyActive(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 	viewer := authz.Viewer{UserID: 7}
 
@@ -138,7 +137,7 @@ func TestEnterRescueRejectsWhenAlreadyActive(t *testing.T) {
 }
 
 func TestExitRescueRejectsWhenNotInRescue(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-r3", Status: model.VMStatusStopped, OwnerID: ptr(int64(7))}
@@ -154,7 +153,7 @@ func TestExitRescueRejectsWhenNotInRescue(t *testing.T) {
 // 引导顺序与固件设置，而他无从判断这是不是自己原来的配置。相比起来，
 // 「需要人工确认」是一个明确得多、也安全得多的结果。
 func TestExitRescueWithoutSnapshotIsRejected(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	// 状态是「救援中」但没有快照——模拟历史数据或写入中断。
@@ -169,7 +168,7 @@ func TestExitRescueWithoutSnapshotIsRejected(t *testing.T) {
 }
 
 func TestRescueRejectsOthersVM(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{agent.NewMockClient(), model.VMStatusStopped})
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
 	ctx := context.Background()
 
 	theirs := model.VM{

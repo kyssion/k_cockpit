@@ -1,6 +1,6 @@
 # 0007. 远程操作先以 Mock 落地，业务逻辑保持真实
 
-- 状态：Accepted
+- 状态：Superseded by [0013](0013-remove-mock-transport.md)
 - 日期：2026-09-15
 - 决策人：<!-- TODO -->
 - 关联：[`0005-control-plane-node-agent-architecture.md`](0005-control-plane-node-agent-architecture.md)（控制面 / 节点 agent 架构）· [`../02-architecture/ARCHITECTURE.md`](../02-architecture/ARCHITECTURE.md) · [`../07-specs/f-6-01-node-onboarding.md`](../07-specs/f-6-01-node-onboarding.md) §5.2（agent 通道协议）· [`../07-specs/f-7-01-task-queue.md`](../07-specs/f-7-01-task-queue.md)

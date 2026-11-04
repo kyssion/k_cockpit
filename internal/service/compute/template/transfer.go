@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"time"
 
@@ -88,6 +89,13 @@ func (s *Service) Export(
 			DiskPath: tpl.DiskPathOf(), DiskFormat: tpl.DiskFormat,
 			DiskSizeGB: tpl.DiskSizeGB, Version: tpl.Version,
 			FamilyName: familyName,
+			// 清单要能回答"导入后是什么规格"；这些元数据只存在控制面，
+			// 节点不认识模板记录，必须随下发带入。
+			OSType: derefString(tpl.OSType), OSVariant: derefString(tpl.OSVariant),
+			DefaultCPU: tpl.DefaultCPU, DefaultMemoryMB: tpl.DefaultMemoryMB,
+			DefaultDiskBus:  derefString(tpl.DefaultDiskBus),
+			DefaultNicModel: derefString(tpl.DefaultNicModel),
+			DefaultFirmware: derefString(tpl.DefaultFirmware),
 		},
 	})
 	if err != nil {
@@ -133,7 +141,7 @@ func (s *Service) ListExports(ctx context.Context, nodeID int64, v authz.Viewer)
 // 留在了一处。
 func (s *Service) ExportFile(
 	ctx context.Context, id int64, v authz.Viewer,
-) (fileName string, data []byte, mime string, err error) {
+) (fileName string, reader io.Reader, mime string, err error) {
 	row, err := s.loadExport(ctx, id, v)
 	if err != nil {
 		return "", nil, "", err
@@ -145,27 +153,89 @@ func (s *Service) ExportFile(
 		return "", nil, "", api.NotFound("该导出的产物已不在节点上")
 	}
 
+	// 与虚拟机导出同一条路：模板包可能几十 GB，整包塞进一次 gRPC
+	// 消息会被默认 4MB / 显式 32MB 的收包上限拦下，控制面也会整段
+	// 载入内存。分片拉取、HTTP 层流式写出。
+	const chunk = 8 << 20
+	first, total, err := s.fetchExportChunk(ctx, row, 0, chunk)
+	if err != nil {
+		return "", nil, "", err
+	}
+	if len(first) == 0 {
+		return "", nil, "", api.Unavailable("节点未返回导出包内容")
+	}
+	mimeType := "application/gzip"
+	return row.Filename, newTemplateChunkedReader(s, row, first, total, chunk), mimeType, nil
+}
+
+// fetchExportChunk 取模板包的一段，返回 (数据, 文件总长)。
+func (s *Service) fetchExportChunk(
+	ctx context.Context, row *model.TemplateExport, offset, length int64,
+) ([]byte, int64, error) {
 	result, err := s.agent.Execute(ctx, agent.Operation{
 		Kind:   agent.OpTemplateExportFetch,
 		NodeID: row.NodeID,
 		Target: row.RelPath,
-		Params: map[string]any{"rel_path": row.RelPath},
+		Params: map[string]any{
+			"rel_path": row.RelPath,
+			"offset":   float64(offset),
+			"length":   float64(length),
+		},
 	})
 	if err != nil {
-		return "", nil, "", api.Unavailable("节点不可达，无法获取导出包")
+		return nil, 0, api.Unavailable("节点不可达，无法获取导出包")
 	}
 	if !result.Success {
-		return "", nil, "", api.ValidationFailed(result.Message)
+		return nil, 0, api.ValidationFailed(result.Message)
 	}
 	content := decodeExportContent(result.Data)
-	if len(content.Data) == 0 {
-		return "", nil, "", api.Unavailable("节点未返回导出包内容")
+	total := int64(0)
+	if t, ok := result.Data["total_size"].(float64); ok {
+		total = int64(t)
 	}
-	mimeType := content.MIME
-	if mimeType == "" {
-		mimeType = "application/gzip"
+	return content.Data, total, nil
+}
+
+// templateChunkedReader 把分片拉取拼成 io.Reader。
+type templateChunkedReader struct {
+	s        *Service
+	row      *model.TemplateExport
+	buf      []byte
+	off      int
+	next     int64
+	total    int64
+	chunkLen int64
+}
+
+func newTemplateChunkedReader(
+	s *Service, row *model.TemplateExport, first []byte, total, chunk int64,
+) *templateChunkedReader {
+	return &templateChunkedReader{
+		s: s, row: row, buf: first, total: total,
+		chunkLen: chunk, next: int64(len(first)),
 	}
-	return row.Filename, content.Data, mimeType, nil
+}
+
+func (r *templateChunkedReader) Read(p []byte) (int, error) {
+	for r.off >= len(r.buf) {
+		// 节点没报 total（旧版 agent）时按「首片即全部」结束；真实大包
+		// 必须由新版 agent 提供总长，否则无法判断终点。
+		if r.total <= 0 || r.next >= r.total {
+			return 0, io.EOF
+		}
+		data, total, err := r.s.fetchExportChunk(context.Background(), r.row, r.next, r.chunkLen)
+		if err != nil {
+			return 0, err
+		}
+		if len(data) == 0 {
+			return 0, io.EOF
+		}
+		r.buf, r.off, r.total = data, 0, total
+		r.next += int64(len(data))
+	}
+	n := copy(p, r.buf[r.off:])
+	r.off += n
+	return n, nil
 }
 
 // loadExport 读取一条导出记录并做归属校验。
@@ -396,6 +466,14 @@ type templateExportParams struct {
 	DiskSizeGB   int    `json:"disk_size"`
 	Version      int    `json:"version"`
 	FamilyName   string `json:"family_name"`
+
+	OSType          string `json:"os_type"`
+	OSVariant       string `json:"os_variant"`
+	DefaultCPU      int    `json:"default_cpu"`
+	DefaultMemoryMB int    `json:"default_memory_mb"`
+	DefaultDiskBus  string `json:"default_disk_bus"`
+	DefaultNicModel string `json:"default_nic_model"`
+	DefaultFirmware string `json:"default_firmware"`
 }
 
 type templateExportDeleteParams struct {
@@ -461,4 +539,12 @@ func decodeImportInfo(data map[string]any) agent.TemplateImportInfo {
 	var info agent.TemplateImportInfo
 	_ = json.Unmarshal(blob, &info)
 	return info
+}
+
+// derefString 把可空字符串转成空串（清单字段缺省即空）。
+func derefString(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }

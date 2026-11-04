@@ -1,5 +1,5 @@
 // routes_node 登记节点接入与投影域的路由：节点列表与详情、宿主机指标、
-// 维护模式开关、注册令牌与节点移除，以及开发期的模拟注册入口。
+// 维护模式开关、注册令牌与节点移除。
 package router
 
 import (
@@ -9,7 +9,7 @@ import (
 )
 
 func registerNodeRoutes(v1 *route.RouterGroup, deps Deps, g guards) {
-	nodeHandler := nodehandler.NewNode(deps.Node, deps.SimulateAgent, deps.Risk)
+	nodeHandler := nodehandler.NewNode(deps.Node, deps.Risk)
 
 	{
 		// 节点管理：按 f-1-06 的角色表，全部仅管理员可访问。
@@ -28,11 +28,5 @@ func registerNodeRoutes(v1 *route.RouterGroup, deps Deps, g guards) {
 
 		v1.POST("/nodes/registration-tokens", g.requireAuth, g.adminOnly, nodeHandler.CreateEnrollToken)
 		v1.DELETE("/nodes/:id", g.requireAuth, g.adminOnly, nodeHandler.Remove)
-
-		if deps.SimulateAgent {
-			// 开发期专用：调用它与节点走**同一段注册逻辑**（ADR-0007）。
-			// 它不需要认证——节点注册也不凭用户身份，而凭注册令牌。
-			v1.POST("/dev/agent-register", nodeHandler.SimulateRegister)
-		}
 	}
 }

@@ -9,7 +9,6 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
@@ -45,7 +44,7 @@ func newEnv(t *testing.T) (*gorm.DB, *portsecurity.Service) {
 	if err := db.Create(&model.Node{ID: 1, Name: "node-1"}).Error; err != nil {
 		t.Fatalf("创建节点失败: %v", err)
 	}
-	client := agent.NewMockClient()
+	client := newStubClient()
 	recorder := audit.NewRecorder(db)
 	q := task.NewQueue(db, recorder, task.Options{})
 	q.Register(portsecurity.NewExecutor(db, client))
@@ -234,7 +233,7 @@ func TestDisableReturnsToPending(t *testing.T) {
 	if err := db.Order("id DESC").First(&tk).Error; err != nil {
 		t.Fatalf("找不到任务: %v", err)
 	}
-	if err := portsecurity.NewExecutor(db, agent.NewMockClient()).Run(ctx, &tk); err != nil {
+	if err := portsecurity.NewExecutor(db, newStubClient()).Run(ctx, &tk); err != nil {
 		t.Fatalf("执行停用失败: %v", err)
 	}
 
@@ -309,7 +308,7 @@ func TestConfigChangeGoesBackToPending(t *testing.T) {
 	// 驱动执行器让它变成 active。
 	var tk model.Task
 	db.Order("id DESC").First(&tk)
-	if err := portsecurity.NewExecutor(db, agent.NewMockClient()).Run(ctx, &tk); err != nil {
+	if err := portsecurity.NewExecutor(db, newStubClient()).Run(ctx, &tk); err != nil {
 		t.Fatalf("下发失败: %v", err)
 	}
 	var row model.PortSecurityPolicy

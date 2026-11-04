@@ -58,7 +58,7 @@ func newVolumeEnv(t *testing.T) *volumeEnv {
 
 	recorder := audit.NewRecorder(db)
 	q := task.NewQueue(db, recorder, task.Options{})
-	client := agent.NewMockClient()
+	client := newStubClient()
 	// 执行器在这里注册**只是为了让它能被直接调用**（见 TestDeleteRemovesRecord）：
 	// 队列在测试里不启动后台循环，因此不注册也不会影响入队。
 	q.Register(pool.NewVolumeExecutor(db, client))

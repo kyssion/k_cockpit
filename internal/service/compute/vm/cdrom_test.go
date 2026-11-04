@@ -7,7 +7,6 @@ import (
 
 	"gorm.io/gorm"
 
-	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/service/compute/vm"
 )
@@ -16,7 +15,7 @@ import (
 func cdromEnv(t *testing.T) (*vm.Service, *gorm.DB, int64, int64) {
 	t.Helper()
 	svc, q, db := newTestEnv(t)
-	q.Register(vm.NewCDROMExecutor(db, agent.NewMockClient()))
+	q.Register(vm.NewCDROMExecutor(db, newStubClient()))
 
 	owner := int64(7)
 	node := model.Node{Name: "n1", EnrollState: model.NodeEnrollEnrolled}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/service/compute/vm"
 )
@@ -28,7 +27,7 @@ func TestMediaEjectRunOnce(t *testing.T) {
 		t.Fatalf("建光驱失败: %v", err)
 	}
 
-	loop := vm.NewMediaEjectLoop(svc, db, agent.NewMockClient(), nil, vm.MediaEjectOptions{})
+	loop := vm.NewMediaEjectLoop(svc, db, newStubClient(), nil, vm.MediaEjectOptions{})
 	n, err := loop.RunOnce(ctx)
 	if err != nil {
 		t.Fatalf("扫描失败: %v", err)

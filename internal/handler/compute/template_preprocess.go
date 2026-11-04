@@ -12,11 +12,12 @@ import (
 )
 
 type preprocessRequest struct {
-	InstallAgent    bool `json:"install_agent"`
-	InjectSSHKey    bool `json:"inject_ssh_key"`
-	ResetMachineID  bool `json:"reset_machine_id"`
-	RemoveCloudInit bool `json:"remove_cloud_init"`
-	Acknowledge     bool `json:"acknowledge"`
+	InstallAgent    bool   `json:"install_agent"`
+	InjectSSHKey    bool   `json:"inject_ssh_key"`
+	SSHPublicKey    string `json:"ssh_public_key"`
+	ResetMachineID  bool   `json:"reset_machine_id"`
+	RemoveCloudInit bool   `json:"remove_cloud_init"`
+	Acknowledge     bool   `json:"acknowledge"`
 }
 
 // Preprocess 对模板做离线预处理。
@@ -39,6 +40,7 @@ func (h *Template) Preprocess(ctx context.Context, c *app.RequestContext) {
 	t, err := h.svc.Preprocess(ctx, id, template.PreprocessOptions{
 		InstallAgent:    req.InstallAgent,
 		InjectSSHKey:    req.InjectSSHKey,
+		SSHPublicKey:    req.SSHPublicKey,
 		ResetMachineID:  req.ResetMachineID,
 		RemoveCloudInit: req.RemoveCloudInit,
 	}, req.Acknowledge, authz.ViewerOf(c), user.Username, info.IP)
