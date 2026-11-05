@@ -106,7 +106,7 @@ cleanup 波及目标侧定义与 NVRAM。跨节点分片中转（relay 循环）
 - `vm.migrate.assess` 的**带宽**仍按源节点默认路由网卡协商速率估算；跨节点真实测速需要双端协同。热迁移评估的脏页已改为触发 `domdirtyrate-calc` 后采样。
 - `template.preprocess` 的 `install_agent / inject_ssh_key` 依赖节点 `virt-customize` 与来宾网络，缺工具链时返回 `Unavailable`。
 - 模板/镜像/救援等新路径只做了单测与命令边界验证，**仍需 Linux + libvirt 真机验收**。
-- `repository` 分层、单实例队列/实时总线、agent root 运行属于架构级待办，未在本次功能修复中改动。
+- `repository` 分层按域迁入中（2026-11-05 已迁入 `vmtag`，其余域待续）；单实例队列/实时总线、agent root 运行仍属架构级待办。控制面已加会话级单实例锁防双开，不等于支持多实例。
 
 ## 3. 实现约束（继承既有决策）
 

@@ -283,6 +283,6 @@ if (valid) {
 - service 层**不执行任何 GORM 查询**；引用 gorm 的哨兵错误做翻译（`errors.Is(err, gorm.ErrRecordNotFound)`）是错误分类，允许。
 - service 与 repo 的域目录**同名对应**（`service/<域>` ↔ `repository/<域>`），import 冲突时 repo 侧用 `<域>repo` 别名。
 
-**存量豁免与迁移路线**：repository 层随 ADR-0012 设立，各域**分批迁入**（每域一个 commit、测试护航，compute 最大放最后）。未迁入的域维持「service 直接查库」的现状——**新代码**一律走 repo，不往存量 service 里新增直接查询。
+**存量豁免与迁移路线**：repository 层随 ADR-0012 设立，各域**分批迁入**（每域一个 commit、测试护航，compute 最大放最后）。已迁入：`node`（范式）、`vmtag`（2026-11-05，事务留在 repo、权限判定留在 service）。未迁入的域维持「service 直接查库」的现状——**新代码**一律走 repo，不往存量 service 里新增直接查询。
 
 **agent 契约边界**：service 下发节点操作只经 `internal/agent` 的 `Client` 接口，不感知运输层实现（ADR-0007）；handler 与 repository 不得 import agent。

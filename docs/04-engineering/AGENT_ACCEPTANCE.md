@@ -30,7 +30,8 @@
 - [ ] 协议版本：改造客户端发 `protocol_version=0/2` 时应被 `FailedPrecondition` 拒绝且不签发证书（`hub.protocolVersionSupported`）；
 - [ ] 无客户端证书连接 `Channel` 被拒；心跳 10s、40s 离线阈值符合 `f-6-01` R-005；
 - [ ] 断连自治：拔掉控制面后节点不中断在途操作，重连后阶段/结果补报、控制面投影对账；
-- [ ] 能力自报：节点上报的能力清单与执行器注册表同源（当前 124 项），控制面「节点能力」页可见。
+- [ ] 能力自报：节点上报的能力清单与执行器注册表同源（当前 124 项），控制面「节点能力」页可见；
+- [ ] **SPICE 探测**：在真机上确认 `virsh domcapabilities` 输出是否含 spice 字面量（探测为保守启发式，见 `internal/nodeagent/sys/spice.go`），并验证「节点上报 → 该节点 VM 的 `spice_supported` 同步 → 控制台列出 SPICE → `.vv` 连接文件可用」整条链路；libvirt 未编译 SPICE 时应明确拒绝而不是显示可用。
 
 ## 3. 2026-11-04 补齐的 37 项能力（单测通过、真机待验）
 
@@ -84,6 +85,6 @@
 
 ## 8. 明确不在本清单内（需先有决策或环境）
 
-live 热迁移、跨节点 relay、agent 自动升级、证书续期 / 吊销与 GeoIP 依赖的候选方案与前置条件登记在 [ADR-0014（Proposed）](../06-decisions/0014-node-channel-and-agent-lifecycle.md)，**决策前不实现**。SPICE 需节点探测上报；`repository` 分层按域分批迁入（每域一个 commit）。
+live 热迁移、跨节点 relay、agent 自动升级、证书续期 / 吊销与 GeoIP 依赖的候选方案与前置条件登记在 [ADR-0014（Proposed）](../06-decisions/0014-node-channel-and-agent-lifecycle.md)，**决策前不实现**。SPICE 节点探测链路已落地（真机判定待验）；`repository` 分层按域分批迁入（每域一个 commit）。
 
 已在本清单外并行落地、无需新决策的两项：**PostgreSQL 单实例锁**（`cmd/server` 启动时取会话级 advisory lock，验收项为「同库启动第二个实例应明确失败」）与 **tag 触发的发布制品流水线**（`release.yml` 只出多平台制品，不部署；部署目标与回滚方案仍待确定）。这些项**不因本清单勾选而视为完成**。

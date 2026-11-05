@@ -19,7 +19,6 @@ package settings
 const (
 	GroupBasic    = "basic"
 	GroupSecurity = "security"
-	GroupSession  = "session"
 	GroupVM       = "vm"
 	GroupStorage  = "storage"
 	GroupNetwork  = "network"
@@ -43,7 +42,6 @@ type GroupInfo struct {
 var groups = []GroupInfo{
 	{Key: GroupBasic, Label: "基础", Order: 1},
 	{Key: GroupSecurity, Label: "安全", Order: 2},
-	{Key: GroupSession, Label: "会话", Order: 3},
 	{Key: GroupVM, Label: "虚拟机", Order: 4},
 	{Key: GroupStorage, Label: "存储", Order: 5},
 	{Key: GroupNetwork, Label: "网络", Order: 6},
@@ -169,19 +167,11 @@ type Spec struct {
 //
 // **只登记真正会被使用的项**：加了设置项却没有任何代码读它，等于给用户一个
 // 「改了但不生效」的开关——那正是 R-002 要避免的情形，只是原因不同。
+// 2026-11-05 清理了 11 个从未接线的键（站点名、登录上限、二次验证开关、
+// 会话超时、请求日志保留天数、存储目录、默认网络模式）及随之变空的会话分组；
+// 会话超时与登录限流仍由 config / auth 的既有实现负责，不通过本表配置。
 var specs = []Spec{
 	// --- 基础 ---
-	{
-		Key:          "site.name",
-		Group:        GroupBasic,
-		Label:        "站点名称",
-		Description:  "显示在标题与通知中的系统名称。",
-		Kind:         KindString,
-		Default:      "K Cockpit",
-		EnvVar:       "SITE_NAME",
-		Apply:        ApplyImmediate,
-		Rollbackable: true,
-	},
 	{
 		// 站点对外地址：邀请链接要发给站外的人，相对路径对他们没有意义。
 		// 留空时邀请链接按相对路径返回，界面会提示管理员补上——猜一个错误
@@ -198,60 +188,6 @@ var specs = []Spec{
 	},
 
 	// --- 安全 ---
-	{
-		Key:          "auth.max_login_attempts",
-		Group:        GroupSecurity,
-		Label:        "登录失败上限",
-		Description:  "同一来源在统计窗口内允许的失败次数，超过后暂时拒绝登录。",
-		Kind:         KindInt,
-		Default:      "5",
-		EnvVar:       "AUTH_MAX_LOGIN_ATTEMPTS",
-		Apply:        ApplyImmediate,
-		Rollbackable: true,
-		MinValue:     intPtr(1),
-		MaxValue:     intPtr(100),
-	},
-	{
-		Key:          "auth.risk_verification_enabled",
-		Group:        GroupSecurity,
-		Label:        "高风险操作二次验证",
-		Description:  "关闭后，删除虚拟机等高风险操作将不再要求二次验证。仅在完全可信的环境中关闭。",
-		Kind:         KindBool,
-		Default:      "true",
-		EnvVar:       "RISK_VERIFICATION_ENABLED",
-		Apply:        ApplyImmediate,
-		Rollbackable: true,
-	},
-
-	// --- 会话 ---
-	{
-		Key:          "session.idle_timeout_minutes",
-		Group:        GroupSession,
-		Label:        "空闲超时",
-		Description:  "用户无操作超过该时长后需要重新登录。轮询与心跳不计为活动。",
-		Kind:         KindInt,
-		Default:      "30",
-		EnvVar:       "SESSION_IDLE_TIMEOUT_MINUTES",
-		Apply:        ApplyImmediate,
-		Rollbackable: true,
-		MinValue:     intPtr(1),
-		MaxValue:     intPtr(1440),
-		Unit:         "分钟",
-	},
-	{
-		Key:          "session.absolute_timeout_hours",
-		Group:        GroupSession,
-		Label:        "绝对超时",
-		Description:  "无论是否活跃，登录超过该时长后都必须重新认证。",
-		Kind:         KindInt,
-		Default:      "12",
-		EnvVar:       "SESSION_ABSOLUTE_TIMEOUT_HOURS",
-		Apply:        ApplyImmediate,
-		Rollbackable: true,
-		MinValue:     intPtr(1),
-		MaxValue:     intPtr(720),
-		Unit:         "小时",
-	},
 
 	// --- 虚拟机 ---
 	{
@@ -287,7 +223,7 @@ var specs = []Spec{
 	{
 		// 救援系统 ISO（G-47）：救援模式此前只能用节点内置的默认镜像，
 		// 管理员换成自己维护的救援盘（SystemRescueCd、WinPE 等）没有入口。
-		// 是**宿主机上**的路径：相对 ISO 存放目录（storage.iso_dir）。
+		// 是**宿主机上**的路径：相对节点配置的 ISO 存放目录。
 		Key:          KeyVMRescueISO,
 		Group:        GroupVM,
 		Label:        "救援系统 ISO",
@@ -330,20 +266,6 @@ var specs = []Spec{
 		EnvVar:       "SECURITY_REQUEST_LOG_ENABLED",
 		Apply:        ApplyImmediate,
 		Rollbackable: true,
-	},
-	{
-		Key:          "security.request_log_keep_days",
-		Group:        GroupSecurity,
-		Label:        "请求日志保留天数",
-		Description:  "超过这个天数的请求日志会在清理时被删除。",
-		Kind:         KindInt,
-		Default:      "7",
-		EnvVar:       "SECURITY_REQUEST_LOG_KEEP_DAYS",
-		Apply:        ApplyImmediate,
-		Rollbackable: true,
-		MinValue:     intPtr(1),
-		MaxValue:     intPtr(90),
-		Unit:         "天",
 	},
 	{
 		// 自动轮换会话签名密钥的间隔。
@@ -405,39 +327,6 @@ var specs = []Spec{
 	//
 	// 留空表示用内置默认目录，而不是"关掉这个功能"。
 	{
-		Key:          "storage.iso_dir",
-		Group:        GroupStorage,
-		Label:        "ISO 存放目录",
-		Description:  "「我的存储」里 ISO 类文件在宿主机上的存放位置。留空用内置默认目录。",
-		Kind:         KindString,
-		Default:      "",
-		EnvVar:       "STORAGE_ISO_DIR",
-		Apply:        ApplyImmediate,
-		Rollbackable: true,
-	},
-	{
-		Key:          "storage.disk_dir",
-		Group:        GroupStorage,
-		Label:        "虚拟磁盘目录",
-		Description:  "「我的存储」里虚拟磁盘类文件的存放位置。留空用内置默认目录。",
-		Kind:         KindString,
-		Default:      "",
-		EnvVar:       "STORAGE_DISK_DIR",
-		Apply:        ApplyImmediate,
-		Rollbackable: true,
-	},
-	{
-		Key:          "storage.template_dir",
-		Group:        GroupStorage,
-		Label:        "模板目录",
-		Description:  "模板与模板包在宿主机上的存放位置。留空用内置默认目录。",
-		Kind:         KindString,
-		Default:      "",
-		EnvVar:       "STORAGE_TEMPLATE_DIR",
-		Apply:        ApplyImmediate,
-		Rollbackable: true,
-	},
-	{
 		// 存储空间自动回收（G-52）：删盘后块设备上的可回收块随时间积累，
 		// 自动 trim 让"记得去点"不再是回收发生的前提。执行结果在调度
 		// 事件里（调度器页可见）。
@@ -451,34 +340,8 @@ var specs = []Spec{
 		Apply:        ApplyImmediate,
 		Rollbackable: true,
 	},
-	{
-		Key:          "storage.temp_dir",
-		Group:        GroupStorage,
-		Label:        "临时目录",
-		Description:  "导入、导出与打包过程中的临时文件位置。它需要有足够的空间容纳整块镜像。留空用内置默认目录。",
-		Kind:         KindString,
-		Default:      "",
-		EnvVar:       "STORAGE_TEMP_DIR",
-		Apply:        ApplyImmediate,
-		Rollbackable: true,
-	},
 
 	// --- 网络 ---
-	{
-		Key:          "network.default_mode",
-		Group:        GroupNetwork,
-		Label:        "默认网络模式",
-		Description:  "新建网络时使用的模式。隔离模式不含上行，虚拟机之间可互通。",
-		Kind:         KindSelect,
-		Default:      "nat",
-		EnvVar:       "NETWORK_DEFAULT_MODE",
-		Apply:        ApplyImmediate,
-		Rollbackable: true,
-		Options: []Option{
-			{Value: "nat", Label: "NAT 出网"},
-			{Value: "empty", Label: "隔离（无上行）"},
-		},
-	},
 	{
 		// 全局带宽总限（G-44）：与累计型配额（按月流量）、交换机级限速分工，
 		// 管的是"这台宿主机总共能出多少"。0 表示不限。

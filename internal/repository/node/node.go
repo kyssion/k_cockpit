@@ -76,6 +76,17 @@ func (r *Repo) UpdateNode(ctx context.Context, id int64, updates map[string]any)
 		Where("id = ?", id).Updates(updates).Error
 }
 
+// SetNodeVMSPICESupport 把节点上报的 SPICE 能力同步到该节点的虚拟机。
+//
+// 只在值不同时写：心跳 10 秒一次，无条件 UPDATE 会给每台 VM 每轮制造一次
+// 写操作。能力消失（旧 agent、libvirt 重编译）时同样会置回不支持，避免
+// 界面留下一个点了打不开的协议入口。
+func (r *Repo) SetNodeVMSPICESupport(ctx context.Context, nodeID int64, supported bool) error {
+	return r.db.WithContext(ctx).Model(&model.VM{}).
+		Where("node_id = ? AND spice_supported <> ?", nodeID, supported).
+		Update("spice_supported", supported).Error
+}
+
 // CountNodeVMs 统计节点上的虚拟机总数与运行中数。
 //
 // 口径是控制面投影（present = true），不是节点上真实的域数——「面板显示

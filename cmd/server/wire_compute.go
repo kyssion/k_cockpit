@@ -8,6 +8,7 @@ package main
 
 import (
 	"k_cockpit/internal/platform/cryptoutil"
+	vmtagrepo "k_cockpit/internal/repository/vmtag"
 	"k_cockpit/internal/service/compute/computequota"
 	"k_cockpit/internal/service/compute/importer"
 	"k_cockpit/internal/service/compute/passthrough"
@@ -36,7 +37,7 @@ func (a *app) setupComputeServices() {
 	db, queue, agentClient := a.db, a.queue, a.agentClient
 
 	a.compute.computeQuota = computequota.NewService(db, a.recorder)
-	a.compute.tag = vmtag.NewService(db, a.recorder)
+	a.compute.tag = vmtag.NewService(vmtagrepo.NewRepo(db), a.recorder)
 	// vm 与 storage 都要读设置里的陈旧阈值：把 settings 作为 Provider
 	// 注入，让「面板上改的阈值」真的影响业务行为——否则那两个设置项就是
 	// 摆设，而「改了不生效」正是 f-9-01 R-002 要消灭的现象。

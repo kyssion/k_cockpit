@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"time"
 
 	"google.golang.org/grpc"
@@ -15,6 +16,7 @@ import (
 
 	"k_cockpit/internal/agent"
 	agentproto "k_cockpit/internal/agentproto"
+	"k_cockpit/internal/nodeagent/sys"
 )
 
 // 通道参数（f-6-01 §5.2 的 agent 侧执行口径）。
@@ -37,6 +39,8 @@ type Daemon struct {
 	AgentVersion string
 	// Hostname 仅作展示。
 	Hostname string
+	// SPICESupported 是启动时探测到的宿主能力（见 RefreshHostCapabilities）。
+	SPICESupported bool
 	// TLS 是数据通道的客户端 TLS 配置（由 StateDir.ClientTLS 构造）。
 	TLS *tls.Config
 	// Registry 是本机已实现的执行器。
@@ -70,6 +74,7 @@ var buildVersion string
 
 // Run 阻塞运行直到 ctx 取消。返回值仅表示主循环为何退出。
 func (d *Daemon) Run(ctx context.Context) error {
+	d.RefreshHostCapabilities(ctx)
 	// 镜像看门狗的定时器在内存里，上个进程退出即丢——先按 /run 落盘的
 	// 到期时刻补上（已到期的立刻补撤销），再进入主循环。
 	rearmMirrorWatchdogs()
@@ -225,12 +230,25 @@ func (d *Daemon) session(ctx context.Context) error {
 	}
 }
 
+// RefreshHostCapabilities 探测宿主机的编译期 / 工具链能力。
+//
+// 只在 Run 启动时探测一次：virsh domcapabilities 不是毫秒级操作，没必要
+// 每 10 秒重复；libvirt 重编译后重启 agent 即可刷新。
+func (d *Daemon) RefreshHostCapabilities(ctx context.Context) {
+	d.SPICESupported = sys.SPICESupported(ctx)
+}
+
 func (d *Daemon) heartbeatMsg() *agentproto.AgentToServer {
+	caps := d.Registry.Capabilities()
+	if d.SPICESupported {
+		caps = append(caps, agent.CapabilitySPICE)
+		sort.Strings(caps)
+	}
 	return &agentproto.AgentToServer{Payload: &agentproto.AgentToServer_Heartbeat{
 		Heartbeat: &agentproto.Heartbeat{
 			AgentVersion:    d.AgentVersion,
 			ProtocolVersion: ProtocolVersion,
-			Capabilities:    d.Registry.Capabilities(),
+			Capabilities:    caps,
 			Hostname:        d.Hostname,
 		},
 	}}

@@ -63,11 +63,11 @@ func TestDefaultValueWhenNeverSet(t *testing.T) {
 		t.Fatalf("查询失败: %v", err)
 	}
 
-	it := itemOf(t, items, "site.name")
+	it := itemOf(t, items, "basic.site_url")
 	if it.Source != settings.SourceDefault {
 		t.Errorf("来源 = %q, 期望 default", it.Source)
 	}
-	if it.Value != "K Cockpit" {
+	if it.Value != "" {
 		t.Errorf("值 = %q", it.Value)
 	}
 }
@@ -76,11 +76,11 @@ func TestSettingOverridesDefault(t *testing.T) {
 	svc, _ := newTestEnv(t)
 	ctx := context.Background()
 
-	if _, err := svc.Update(ctx, map[string]string{"site.name": "我的面板"}, 1, "admin", "10.0.0.1"); err != nil {
+	if _, err := svc.Update(ctx, map[string]string{"basic.site_url": "我的面板"}, 1, "admin", "10.0.0.1"); err != nil {
 		t.Fatalf("更新失败: %v", err)
 	}
 
-	item, err := svc.Get(ctx, "site.name")
+	item, err := svc.Get(ctx, "basic.site_url")
 	if err != nil {
 		t.Fatalf("查询失败: %v", err)
 	}
@@ -94,14 +94,14 @@ func TestEnvVarWinsAndLocks(t *testing.T) {
 	ctx := context.Background()
 
 	// 先写入一个面板设置。
-	if _, err := svc.Update(ctx, map[string]string{"site.name": "面板设置的值"}, 1, "admin", "10.0.0.1"); err != nil {
+	if _, err := svc.Update(ctx, map[string]string{"basic.site_url": "面板设置的值"}, 1, "admin", "10.0.0.1"); err != nil {
 		t.Fatalf("更新失败: %v", err)
 	}
 
 	// 再设置环境变量：优先级更高（R-001），且**锁定**该项（R-002）。
-	t.Setenv("SITE_NAME", "环境变量的值")
+	t.Setenv("SITE_URL", "环境变量的值")
 
-	item, err := svc.Get(ctx, "site.name")
+	item, err := svc.Get(ctx, "basic.site_url")
 	if err != nil {
 		t.Fatalf("查询失败: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestEnvVarWinsAndLocks(t *testing.T) {
 	if item.Value != "环境变量的值" {
 		t.Errorf("值 = %q, 期望环境变量的值", item.Value)
 	}
-	if !item.Locked || item.LockedBy != "SITE_NAME" {
+	if !item.Locked || item.LockedBy != "SITE_URL" {
 		t.Errorf("锁定状态不正确: locked=%v by=%q", item.Locked, item.LockedBy)
 	}
 }
@@ -120,9 +120,9 @@ func TestLockedItemRejectsUpdate(t *testing.T) {
 	svc, _ := newTestEnv(t)
 	ctx := context.Background()
 
-	t.Setenv("SITE_NAME", "环境变量的值")
+	t.Setenv("SITE_URL", "环境变量的值")
 
-	results, err := svc.Update(ctx, map[string]string{"site.name": "试图覆盖"}, 1, "admin", "10.0.0.1")
+	results, err := svc.Update(ctx, map[string]string{"basic.site_url": "试图覆盖"}, 1, "admin", "10.0.0.1")
 	if err != nil {
 		t.Fatalf("调用失败: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestLockedItemRejectsUpdate(t *testing.T) {
 	}
 
 	// 值必须没有改变。
-	item, _ := svc.Get(ctx, "site.name")
+	item, _ := svc.Get(ctx, "basic.site_url")
 	if item.Value != "环境变量的值" {
 		t.Errorf("被锁定的项竟然被改成了 %q", item.Value)
 	}
@@ -153,12 +153,12 @@ func TestUpdateIsPartiallySuccessful(t *testing.T) {
 	svc, _ := newTestEnv(t)
 	ctx := context.Background()
 
-	t.Setenv("RISK_VERIFICATION_ENABLED", "true")
+	t.Setenv("STORAGE_AUTO_TRIM_ENABLED", "true")
 
 	results, err := svc.Update(ctx, map[string]string{
-		"site.name":                      "改名成功",
-		"auth.risk_verification_enabled": "false", // 被环境变量锁定
-		"session.idle_timeout_minutes":   "45",
+		"basic.site_url":             "改名成功",
+		"storage.auto_trim_enabled":  "false", // 被环境变量锁定
+		"vm.stale_threshold_seconds": "45",
 	}, 1, "admin", "10.0.0.1")
 	if err != nil {
 		t.Fatalf("调用失败: %v", err)
@@ -169,16 +169,16 @@ func TestUpdateIsPartiallySuccessful(t *testing.T) {
 		byKey[r.Key] = r
 	}
 
-	if byKey["site.name"].Status != settings.StatusApplied {
-		t.Errorf("site.name 应成功: %+v", byKey["site.name"])
+	if byKey["basic.site_url"].Status != settings.StatusApplied {
+		t.Errorf("basic.site_url 应成功: %+v", byKey["basic.site_url"])
 	}
-	if byKey["auth.risk_verification_enabled"].Status != settings.StatusFailed {
-		t.Errorf("被锁定的项应失败: %+v", byKey["auth.risk_verification_enabled"])
+	if byKey["storage.auto_trim_enabled"].Status != settings.StatusFailed {
+		t.Errorf("被锁定的项应失败: %+v", byKey["storage.auto_trim_enabled"])
 	}
 	// 一项失败**不得**影响其余项：原子语义会让用户不知道哪些生效了，
 	// 只能逐项重试去试探。
-	if byKey["session.idle_timeout_minutes"].Status != settings.StatusApplied {
-		t.Errorf("其余项应不受影响: %+v", byKey["session.idle_timeout_minutes"])
+	if byKey["vm.stale_threshold_seconds"].Status != settings.StatusApplied {
+		t.Errorf("其余项应不受影响: %+v", byKey["vm.stale_threshold_seconds"])
 	}
 }
 
@@ -190,11 +190,11 @@ func TestUpdateValidatesTypes(t *testing.T) {
 		key   string
 		value string
 	}{
-		{"session.idle_timeout_minutes", "abc"},  // 非整数
-		{"session.idle_timeout_minutes", "0"},    // 低于下限
-		{"session.idle_timeout_minutes", "9999"}, // 高于上限
-		{"auth.risk_verification_enabled", "是"},  // 非布尔
-		{"network.default_mode", "adhoc"},        // 不在枚举内
+		{"vm.stale_threshold_seconds", "abc"},   // 非整数
+		{"vm.stale_threshold_seconds", "0"},     // 低于下限
+		{"vm.stale_threshold_seconds", "9999"},  // 高于上限
+		{"storage.auto_trim_enabled", "是"},      // 非布尔
+		{"notification.smtp_security", "adhoc"}, // 不在枚举内
 	}
 
 	for _, tc := range cases {
@@ -227,10 +227,10 @@ func TestRollbackRestoresPreviousValue(t *testing.T) {
 	svc, _ := newTestEnv(t)
 	ctx := context.Background()
 
-	svc.Update(ctx, map[string]string{"site.name": "第一次"}, 1, "admin", "10.0.0.1")
-	svc.Update(ctx, map[string]string{"site.name": "第二次"}, 1, "admin", "10.0.0.1")
+	svc.Update(ctx, map[string]string{"basic.site_url": "第一次"}, 1, "admin", "10.0.0.1")
+	svc.Update(ctx, map[string]string{"basic.site_url": "第二次"}, 1, "admin", "10.0.0.1")
 
-	item, err := svc.Rollback(ctx, "site.name", 1, "admin", "10.0.0.1")
+	item, err := svc.Rollback(ctx, "basic.site_url", 1, "admin", "10.0.0.1")
 	if err != nil {
 		t.Fatalf("回滚失败: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestRollbackRestoresPreviousValue(t *testing.T) {
 
 	// 回滚本身也是一次变更：回滚错了还能再回滚回来。不这么做的话，
 	// 一次误回滚会让原值永久消失——而它本可以被简单恢复。
-	item, err = svc.Rollback(ctx, "site.name", 1, "admin", "10.0.0.1")
+	item, err = svc.Rollback(ctx, "basic.site_url", 1, "admin", "10.0.0.1")
 	if err != nil {
 		t.Fatalf("二次回滚失败: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestRollbackRestoresPreviousValue(t *testing.T) {
 func TestRollbackWithoutHistoryFails(t *testing.T) {
 	svc, _ := newTestEnv(t)
 
-	_, err := svc.Rollback(context.Background(), "site.name", 1, "admin", "10.0.0.1")
+	_, err := svc.Rollback(context.Background(), "basic.site_url", 1, "admin", "10.0.0.1")
 	var apiErr *api.Error
 	if !errors.As(err, &apiErr) || apiErr.Status != 422 {
 		t.Fatalf("无历史时应返回 422, 实际 %v", err)
@@ -263,12 +263,12 @@ func TestIdenticalValueDoesNotMoveRollbackPoint(t *testing.T) {
 	svc, _ := newTestEnv(t)
 	ctx := context.Background()
 
-	svc.Update(ctx, map[string]string{"site.name": "A"}, 1, "admin", "10.0.0.1")
-	svc.Update(ctx, map[string]string{"site.name": "B"}, 1, "admin", "10.0.0.1")
+	svc.Update(ctx, map[string]string{"basic.site_url": "A"}, 1, "admin", "10.0.0.1")
+	svc.Update(ctx, map[string]string{"basic.site_url": "B"}, 1, "admin", "10.0.0.1")
 	// 把同一个值再提交一次：前端整表回传时很常见。
-	svc.Update(ctx, map[string]string{"site.name": "B"}, 1, "admin", "10.0.0.1")
+	svc.Update(ctx, map[string]string{"basic.site_url": "B"}, 1, "admin", "10.0.0.1")
 
-	item, err := svc.Rollback(ctx, "site.name", 1, "admin", "10.0.0.1")
+	item, err := svc.Rollback(ctx, "basic.site_url", 1, "admin", "10.0.0.1")
 	if err != nil {
 		t.Fatalf("回滚失败: %v", err)
 	}
@@ -297,12 +297,12 @@ func TestApplyFailureRollsBack(t *testing.T) {
 	svc, _ := newTestEnv(t)
 	ctx := context.Background()
 
-	svc.Update(ctx, map[string]string{"site.name": "原始值"}, 1, "admin", "10.0.0.1")
+	svc.Update(ctx, map[string]string{"basic.site_url": "原始值"}, 1, "admin", "10.0.0.1")
 
 	stub := &applierStub{fail: true}
-	svc.RegisterApplier("site.name", stub)
+	svc.RegisterApplier("basic.site_url", stub)
 
-	results, err := svc.Update(ctx, map[string]string{"site.name": "改坏的值"}, 1, "admin", "10.0.0.1")
+	results, err := svc.Update(ctx, map[string]string{"basic.site_url": "改坏的值"}, 1, "admin", "10.0.0.1")
 	if err != nil {
 		t.Fatalf("调用失败: %v", err)
 	}
@@ -313,7 +313,7 @@ func TestApplyFailureRollsBack(t *testing.T) {
 		t.Errorf("状态 = %q, 期望 rolled_back", results[0].Status)
 	}
 
-	item, _ := svc.Get(ctx, "site.name")
+	item, _ := svc.Get(ctx, "basic.site_url")
 	if item.Value != "原始值" {
 		t.Errorf("应用失败后值 = %q, 期望回滚到 原始值", item.Value)
 	}
@@ -324,16 +324,16 @@ func TestApplySuccessKeepsValue(t *testing.T) {
 	ctx := context.Background()
 
 	stub := &applierStub{}
-	svc.RegisterApplier("site.name", stub)
+	svc.RegisterApplier("basic.site_url", stub)
 
-	if _, err := svc.Update(ctx, map[string]string{"site.name": "新值"}, 1, "admin", "10.0.0.1"); err != nil {
+	if _, err := svc.Update(ctx, map[string]string{"basic.site_url": "新值"}, 1, "admin", "10.0.0.1"); err != nil {
 		t.Fatalf("调用失败: %v", err)
 	}
 
 	if stub.last != "新值" {
 		t.Errorf("应用钩子收到的值 = %q", stub.last)
 	}
-	item, _ := svc.Get(ctx, "site.name")
+	item, _ := svc.Get(ctx, "basic.site_url")
 	if item.Value != "新值" {
 		t.Errorf("值 = %q, 期望 新值", item.Value)
 	}
@@ -458,7 +458,7 @@ func TestProviderReadsEffectiveValue(t *testing.T) {
 	}
 
 	// 非法值回退到 fallback，而不是让业务拿到一个奇怪的数字。
-	svc.Update(ctx, map[string]string{"auth.max_login_attempts": "5"}, 1, "admin", "10.0.0.1")
+	svc.Update(ctx, map[string]string{"vm.stale_threshold_seconds": "60"}, 1, "admin", "10.0.0.1")
 	if got := svc.Int("not.a.real.key", 7); got != 7 {
 		t.Errorf("未知键应返回 fallback, 实际 %d", got)
 	}

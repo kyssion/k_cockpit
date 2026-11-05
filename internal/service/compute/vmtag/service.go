@@ -30,17 +30,19 @@ import (
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
 	"k_cockpit/internal/platform/authz"
+	vmtagrepo "k_cockpit/internal/repository/vmtag"
 )
 
-// Service 提供标签能力。
+// Service 提供标签能力。数据访问全部经 repository（ADR-0012）；gorm 只用于
+// 哨兵错误的分类，不执行任何查询。
 type Service struct {
-	db    *gorm.DB
+	repo  *vmtagrepo.Repo
 	audit *audit.Recorder
 }
 
 // NewService 构造服务。
-func NewService(db *gorm.DB, recorder *audit.Recorder) *Service {
-	return &Service{db: db, audit: recorder}
+func NewService(repo *vmtagrepo.Repo, recorder *audit.Recorder) *Service {
+	return &Service{repo: repo, audit: recorder}
 }
 
 // Tags 返回一台虚拟机的标签（已排序）。
@@ -55,16 +57,13 @@ func (s *Service) TagsOf(ctx context.Context, vmIDs []int64) (map[int64][]string
 		return out, nil
 	}
 
-	var rows []model.VMTag
-	if err := s.db.WithContext(ctx).
-		Where("vm_id IN ?", vmIDs).
-		Order("vm_id, tag").Find(&rows).Error; err != nil {
+	rows, err := s.repo.TagsOfVMs(ctx, vmIDs)
+	if err != nil {
 		log.Printf("[vmtag] 批量查询标签失败: %v", err)
 		return nil, api.Internal()
 	}
 	// 结果不包含"没有标签"的机器——调用方按 map 缺失处理，而不是塞一个空
 	// 切片：空切片与"没查到"在 JSON 里都是 []，但语义不同。
-
 	for i := range rows {
 		out[rows[i].VMID] = append(out[rows[i].VMID], rows[i].Tag)
 	}
@@ -99,20 +98,7 @@ func (s *Service) SetTags(
 
 	// 替换放在一个事务里：分两步会出现「旧的已删、新的没写」的瞬间，
 	// 而那段时间里这台机器没有任何标签——从界面上看就是"标签丢了"。
-	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("vm_id = ?", vmID).Delete(&model.VMTag{}).Error; err != nil {
-			return err
-		}
-		if len(normalized) == 0 {
-			return nil
-		}
-		rows := make([]model.VMTag, 0, len(normalized))
-		for _, t := range normalized {
-			rows = append(rows, model.VMTag{VMID: vmID, Tag: t})
-		}
-		return tx.Create(&rows).Error
-	})
-	if err != nil {
+	if err := s.repo.ReplaceTags(ctx, vmID, normalized); err != nil {
 		log.Printf("[vmtag] 保存标签失败 vm=%d: %v", vmID, err)
 		return nil, api.Internal()
 	}
@@ -139,17 +125,8 @@ func (s *Service) VMsByTag(ctx context.Context, tag string, v authz.Viewer) ([]i
 		return nil, api.InvalidParameter("必须指定标签")
 	}
 
-	query := s.db.WithContext(ctx).Model(&model.VMTag{}).Where("tag = ?", t)
-	if !v.IsAdmin {
-		// 租户只能看到自己名下机器的标签——否则他能通过标签反查出别人的
-		// 机器数量与分布。
-		query = query.Where(
-			"vm_id IN (?)",
-			s.db.Model(&model.VM{}).Select("id").Where("owner_id = ?", v.UserID))
-	}
-
-	var ids []int64
-	if err := query.Pluck("vm_id", &ids).Error; err != nil {
+	ids, err := s.repo.VMIDsByTag(ctx, t, visibleOwner(v))
+	if err != nil {
 		log.Printf("[vmtag] 按标签查询失败: %v", err)
 		return nil, api.Internal()
 	}
@@ -164,15 +141,8 @@ func (s *Service) VMsByTag(ctx context.Context, tag string, v authz.Viewer) ([]i
 // 返回计数而不是纯列表：界面上"生产 (12)"比"生产"有用得多——它能让人
 // 判断这个标签是不是一个只有一台机器的孤儿标签。
 func (s *Service) AllTags(ctx context.Context, v authz.Viewer) ([]TagCount, error) {
-	var rows []TagCount
-	query := s.db.WithContext(ctx).Model(&model.VMTag{}).
-		Select("tag, count(*) AS count").Group("tag").Order("count DESC, tag ASC")
-	if !v.IsAdmin {
-		query = query.Where(
-			"vm_id IN (?)",
-			s.db.Model(&model.VM{}).Select("id").Where("owner_id = ?", v.UserID))
-	}
-	if err := query.Scan(&rows).Error; err != nil {
+	rows, err := s.repo.TagCounts(ctx, visibleOwner(v))
+	if err != nil {
 		log.Printf("[vmtag] 查询标签汇总失败: %v", err)
 		return nil, api.Internal()
 	}
@@ -182,10 +152,15 @@ func (s *Service) AllTags(ctx context.Context, v authz.Viewer) ([]TagCount, erro
 	return rows, nil
 }
 
-// TagCount 是一个标签及其使用次数。
-type TagCount struct {
-	Tag   string `json:"tag"`
-	Count int    `json:"count"`
+// TagCount 是一个标签及其使用次数（与 repository 层同一类型）。
+type TagCount = vmtagrepo.TagCount
+
+// visibleOwner 把权限判定折算成 repo 的纯参数：管理员不限，租户只看自己。
+func visibleOwner(v authz.Viewer) *int64 {
+	if v.IsAdmin {
+		return nil
+	}
+	return &v.UserID
 }
 
 // --- 内部 ---
@@ -223,9 +198,8 @@ func normalize(tags []string) ([]string, error) {
 }
 
 func (s *Service) tagsOf(ctx context.Context, vmID int64) ([]string, error) {
-	var tags []string
-	if err := s.db.WithContext(ctx).Model(&model.VMTag{}).
-		Where("vm_id = ?", vmID).Order("tag ASC").Pluck("tag", &tags).Error; err != nil {
+	tags, err := s.repo.TagsOfVM(ctx, vmID)
+	if err != nil {
 		log.Printf("[vmtag] 查询标签失败: %v", err)
 		return nil, api.Internal()
 	}
@@ -236,8 +210,8 @@ func (s *Service) tagsOf(ctx context.Context, vmID int64) ([]string, error) {
 }
 
 func (s *Service) loadVM(ctx context.Context, id int64, v authz.Viewer) (*model.VM, error) {
-	var vm model.VM
-	if err := s.db.WithContext(ctx).Where("id = ?", id).First(&vm).Error; err != nil {
+	vm, err := s.repo.GetVM(ctx, id)
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, api.NotFound("虚拟机不存在")
 		}
@@ -249,7 +223,7 @@ func (s *Service) loadVM(ctx context.Context, id int64, v authz.Viewer) (*model.
 	if !v.IsAdmin && (vm.OwnerID == nil || *vm.OwnerID != v.UserID) {
 		return nil, api.NotFound("虚拟机不存在")
 	}
-	return &vm, nil
+	return vm, nil
 }
 
 func (s *Service) ensureVM(ctx context.Context, id int64, v authz.Viewer) error {

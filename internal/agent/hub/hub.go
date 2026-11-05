@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -304,6 +305,12 @@ func (h *Hub) onHeartbeat(ctx context.Context, nodeID int64, hb *heartbeat) {
 	// 让节点列表里的名字周期性消失更符合「仅展示」的定位。
 	if hb.Hostname != "" {
 		updates["hostname"] = hb.Hostname
+	}
+	// 能力自报里的 SPICE 标记驱动 VM 级 spice_supported：节点级能力与
+	// VM 列必须一致，否则界面会列出一个点了打不开的协议。
+	if err := h.repo.SetNodeVMSPICESupport(ctx, nodeID,
+		slices.Contains(hb.Capabilities, agent.CapabilitySPICE)); err != nil {
+		log.Printf("[agent-hub] 节点 %d 同步 SPICE 能力失败: %v", nodeID, err)
 	}
 	err := h.repo.UpdateNode(ctx, nodeID, updates)
 	if err != nil {

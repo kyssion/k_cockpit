@@ -15,6 +15,7 @@ import (
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/platform/config"
 	"k_cockpit/internal/platform/database"
+	vmtagrepo "k_cockpit/internal/repository/vmtag"
 	"k_cockpit/internal/service/compute/vmtag"
 )
 
@@ -42,7 +43,7 @@ func newTestEnv(t *testing.T) (*vmtag.Service, *gorm.DB) {
 	); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
-	return vmtag.NewService(db, audit.NewRecorder(db)), db
+	return vmtag.NewService(vmtagrepo.NewRepo(db), audit.NewRecorder(db)), db
 }
 
 const alice = int64(7)
