@@ -1,7 +1,7 @@
 # 功能规格：网络后端抽象与能力降级
 
-- 状态：**Ready**
-- 负责人：<!-- TODO -->
+- 状态：**Implemented**
+- 负责人：—
 - 创建日期：2026-09-15
 - 覆盖需求：**F-4-01**（网络后端抽象，P0）
 - 关联：[`PRD.md`](../01-product/PRD.md) §4 域 4 · [`ADR-0004`](../06-decisions/0004-adopt-openvswitch-as-network-backend.md)（Open vSwitch 作为网络后端）· [`CAPABILITY_MAP.md`](../01-product/CAPABILITY_MAP.md) §2（L0 网络底座）/ §5（运行态前提）· [`DATA_MODEL.md`](../02-architecture/DATA_MODEL.md) §4.5 `vpc_switch`

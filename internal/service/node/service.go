@@ -77,8 +77,10 @@ type View struct {
 	Enabled         bool   `json:"enabled"`
 	MaintenanceMode bool   `json:"maintenance_mode"`
 
-	AgentVersion    string     `json:"agent_version,omitempty"`
-	ProtocolVersion int        `json:"protocol_version"`
+	AgentVersion    string `json:"agent_version,omitempty"`
+	ProtocolVersion int    `json:"protocol_version"`
+	// Hostname 来自 agent 心跳，仅展示；控制面不据此做任何判定。
+	Hostname        string     `json:"hostname,omitempty"`
 	Capabilities    []string   `json:"capabilities,omitempty"`
 	LastHeartbeatAt *time.Time `json:"last_heartbeat_at,omitempty"`
 	LastError       string     `json:"last_error,omitempty"`
@@ -458,6 +460,7 @@ func (s *Service) viewOf(node *model.Node, snap *agent.Snapshot) View {
 	view := View{
 		ID:                node.ID,
 		Name:              node.Name,
+		Hostname:          node.Hostname,
 		EnrollState:       node.EnrollState,
 		Enabled:           node.Enabled,
 		MaintenanceMode:   node.MaintenanceMode,

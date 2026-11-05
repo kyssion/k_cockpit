@@ -246,8 +246,11 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 			"os_type":     p.OSType,
 			"os_variant":  p.OSVariant,
 			// 首次开机的样子：主机名、初始凭据、初始化方式、静态地址。
-			"hostname":          p.Hostname,
-			"initial_password":  p.InitialPassword,
+			"hostname":         p.Hostname,
+			"initial_password": p.InitialPassword,
+			// 与保存到 vm_credential 的用户名同源：初始化介质里的账号
+			// 必须和详情页展示的凭据一致，否则用户按面板上的账号登不进去。
+			"initial_username":  initialUsername(orDefault(p.OSType, "linux")),
 			"init_mode":         p.InitMode,
 			"static_ip":         p.StaticIP,
 			"data_disks":        p.DataDisks,
@@ -345,12 +348,14 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 		DiskIOPSTotal:   p.DiskIOPSTotal,
 		DiskIOPSRead:    p.DiskIOPSRead,
 		DiskIOPSWrite:   p.DiskIOPSWrite,
+		InitMode:        orDefault(p.InitMode, "none"),
 	}
-	// Windows / ConfigDrive 初始化且挂着安装 ISO 时，登记"就绪后自动弹出"
-	// （F-2-17）：cloudbase-init 完成前安装介质必须留在光驱里，完成后由
-	// 弹出循环（media_eject.go）依据节点探测结果弹出。没有安装 ISO 就
-	// 没有可弹的东西，不登记。
-	vm.MediaAutoEject = p.InitMode == "configdrive" && p.ISOFileID > 0
+	// NoCloud（cloud-init）完成时会写 boot-finished，节点侧可以据实判定，
+	// 因此登记"就绪后自动弹出"安装介质。ConfigDrive（Windows）目前没有
+	// 可靠的完成标记，不登记——弹早了会把还在安装的 WinPE 介质摘掉。
+	// 有安装 ISO 才登记：没有介质就没有可弹的东西。
+	hasISO := p.ISOFileID > 0 || len(p.ISOFileIDs) > 0
+	vm.MediaAutoEject = p.InitMode == "nocloud" && hasISO
 
 	if p.TemplateID > 0 {
 		vm.TemplateID = &p.TemplateID
@@ -391,6 +396,16 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 		// 把它当失败会让一台实际可用的机器被标成失败，而用户更可能想去
 		// 删掉重来——那才真的丢了东西。
 		log.Printf("[vm] 写入主网口失败 vm=%d: %v", vm.ID, err)
+	}
+	if mac, ok := result.Data[agent.CreatePrimaryMACKey].(string); ok && mac != "" {
+		// MAC 由 libvirt 生成，节点回传后才谈得上"按 MAC 绑定静态地址"。
+		// 写回网卡记录也补齐了详情页网络标签里的地址信息。
+		if err := e.db.WithContext(ctx).Model(&model.VMInterface{}).
+			Where("vm_id = ? AND \"order\" = ?", vm.ID, 0).
+			Update("mac", mac).Error; err != nil {
+			log.Printf("[vm] 回写主网卡 MAC 失败 vm=%d: %v", vm.ID, err)
+		}
+		e.applyCreateStaticIP(ctx, &vm, p, mac)
 	}
 
 	// 额外的网口。主网口之外还要几块，在创建时一次建好，而不是让用户事
@@ -463,6 +478,91 @@ func (e *CreateExecutor) saveInitialCredential(ctx context.Context, vm *model.VM
 }
 
 // createPrimaryInterface 写入主网口与安全组关联。
+// applyCreateStaticIP 把创建向导里的静态地址落成 DHCP 静态租约。
+//
+// 走 dnsmasq 的 dhcp-host 绑定而不是 cloud-init network-config：后者还需要
+// 网关与掩码，而创建请求里只有一个 IP。绑定失败只记日志——虚拟机已经
+// 建好，不能因为一个网络偏好把整次创建判失败。
+func (e *CreateExecutor) applyCreateStaticIP(ctx context.Context, vm *model.VM, p createParams, mac string) {
+	ip := strings.TrimSpace(p.StaticIP)
+	if ip == "" {
+		return
+	}
+	var nic model.VMInterface
+	if err := e.db.WithContext(ctx).
+		Where("vm_id = ? AND \"order\" = ?", vm.ID, 0).First(&nic).Error; err != nil {
+		log.Printf("[vm] 创建期静态地址：找不到主网卡 vm=%d: %v", vm.ID, err)
+		return
+	}
+
+	bridge, start, end := "", "", ""
+	loadBridge := func(sw *model.VpcSwitch) {
+		bridge = sw.BridgeName
+		if sw.DHCPStart != nil {
+			start = *sw.DHCPStart
+		}
+		if sw.DHCPEnd != nil {
+			end = *sw.DHCPEnd
+		}
+	}
+	var sw model.VpcSwitch
+	if nic.SwitchID != nil {
+		if err := e.db.WithContext(ctx).
+			Select("bridge_name", "dhcp_start", "dhcp_end").
+			First(&sw, *nic.SwitchID).Error; err == nil {
+			loadBridge(&sw)
+		}
+	}
+	if bridge == "" {
+		// 没显式选交换机时用该节点的系统网络，与创建向导的默认值一致。
+		if err := e.db.WithContext(ctx).
+			Select("bridge_name", "dhcp_start", "dhcp_end").
+			Where("node_id = ? AND is_system = ?", vm.NodeID, true).
+			First(&sw).Error; err == nil {
+			loadBridge(&sw)
+		}
+	}
+	if bridge == "" {
+		log.Printf("[vm] 创建期静态地址：节点 %d 没有可用网桥，跳过 vm=%d", vm.NodeID, vm.ID)
+		return
+	}
+
+	order := 0
+	row := model.StaticIP{
+		NodeID: vm.NodeID, VMID: &vm.ID, IP: ip, MAC: &mac,
+		AddressFamily: addressFamilyOf(ip), InterfaceOrder: &order,
+		IsDHCPReservation: true,
+	}
+	if err := e.db.WithContext(ctx).Create(&row).Error; err != nil {
+		log.Printf("[vm] 创建期静态地址落库失败 vm=%d: %v", vm.ID, err)
+		return
+	}
+
+	res, err := e.agent.Execute(ctx, agent.Operation{
+		Kind:   agent.OpVMStaticIPChange,
+		NodeID: vm.NodeID,
+		Target: vm.Name,
+		Params: map[string]any{
+			"action":              NetActionBind,
+			"ip":                  ip,
+			"is_dhcp_reservation": true,
+			"mac":                 mac,
+			"bridge_name":         bridge,
+			"dhcp_start":          start,
+			"dhcp_end":            end,
+		},
+	})
+	if err != nil || res == nil || !res.Success {
+		log.Printf("[vm] 创建期静态地址下发失败 vm=%d: err=%v res=%v", vm.ID, err, res)
+		return
+	}
+	now := time.Now()
+	if err := e.db.WithContext(ctx).Model(&model.StaticIP{}).
+		Where("id = ?", row.ID).Update("applied_at", now).Error; err != nil {
+		log.Printf("[vm] 更新静态地址生效时间失败 id=%d: %v", row.ID, err)
+	}
+}
+
 func (e *CreateExecutor) createPrimaryInterface(
 	ctx context.Context, vm *model.VM, p createParams,
 ) error {

@@ -8,12 +8,13 @@ import (
 
 // AllModels 列出全部表模型，按 model 文件逐一登记。
 //
-// 用途有二：E2E 冒烟栈建库（cmd/e2e-init）与少数需要全套表的测试。
-// 新增模型时**必须**同步本清单与 internal/model/——漏掉的表现为冒烟栈
+// 用途有三：本地开发建库（cmd/dev-init）、E2E 冒烟栈建库
+// （cmd/e2e-init）与少数需要全套表的测试。
+// 新增模型时**必须**同步本清单与 internal/model/——漏掉的表现为开发库
 // 在运行期报「no such table」，而不是编译错误。
 //
 // 注意这与「服务启动不做自动迁移」的约定（AGENTS.md）不冲突：本函数
-// **只在测试与冒烟工具里调用**，生产库一律走 migrations/ 的 SQL 迁移；
+// **只在开发与测试工具里调用**，生产库一律走 migrations/ 的 SQL 迁移；
 // 两套结构的一致性由 model_alignment_test 对齐检查兜底。
 func AllModels() []any {
 	return []any{

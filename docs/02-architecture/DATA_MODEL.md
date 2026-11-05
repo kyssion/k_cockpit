@@ -45,7 +45,7 @@
 
 ## 2. 实体清单
 
-共 **43 张表**，按域列出。"删除"列标注软删除（软）或物理删除（物）。
+共 **61 张业务表**，按域列出。"删除"列标注软删除（软）或物理删除（物）。
 
 ### 2.1 身份与安全（7）
 
@@ -607,7 +607,7 @@ erDiagram
 - **执行方式**：`go run ./cmd/migrate`（迁移执行器，读取该目录、按 `schema_migration` 去重后执行，单文件单事务）。也可用 `psql "<DSN>" -f <文件>` 手工执行，但**必须自行登记** `schema_migration`，否则执行器会把它当成待应用再跑一遍（虽幂等，但校验和比对会失效）。
 - **执行后登记**：写入 `schema_migration`（`migration_id` = 文件名去扩展名、`checksum` = 文件 sha256、`applied_at`），用于发现"历史迁移被改动"。
 - **编号撞号的既有例外**：`0018` 与 `0019` 各有两个文件（`0018_bridge_uplink_watchdog` / `0018_drop_unused_security_challenge`、`0019_bridge_detail` / `0019_resource_quota`），源于并行分支。`migration_id` 取**完整文件名**、执行顺序按文件名排序，因此两者都能正常执行、互不覆盖。**但不得改名修复**：`migration_id` 即文件名，改名会让已应用的环境把它当成待应用再跑一遍，校验和比对也随之失效。新增迁移从 `0051` 起继续顺延，保持编号唯一。
-- **双库说明**：本 SQL 为 **PostgreSQL 专用**；本地开发用 SQLite，建表入口是 `go run ./cmd/e2e-init`（`internal/platform/database/testschema.go` 按 GORM 模型 `AutoMigrate` 出全套表），**服务启动不做自动迁移**。
+- **双库说明**：本 SQL 为 **PostgreSQL 专用**；本地开发用 SQLite，建表入口是 `go run ./cmd/dev-init`（`internal/platform/database/testschema.go` 按 GORM 模型 `AutoMigrate` 出全套表，可重复执行）。`cmd/e2e-init` 是 E2E 冒烟专用变体（要求每次从干净库开始）。生产库走 `cmd/migrate`，**服务启动不做自动迁移**。
 - **失败处理**：整个脚本在**单事务**内执行，任一句失败即整体回滚，不会留下半成品表结构。
 
 > **前置清理（已实际踩到）**：脚手架阶段的示例模型曾用 GORM `AutoMigrate` 建出一张只有 `id/name/email` 的 `user` 表；
@@ -617,7 +617,7 @@ erDiagram
 ### 6.2 迁移原则
 
 - **建表入口唯一**：结构变更一律走 `internal/platform/database/migrations/` 下的**显式迁移**，执行后写入 `schema_migration`；**服务启动不做自动迁移**。
-- **本地 SQLite**：由 `cmd/e2e-init`（`BuildTestSchema`）按 GORM 模型 `AutoMigrate` 建表，模型须与本文件的表与字段保持一致；服务启动**不做**自动迁移。模型与迁移脚本的对齐由 `model_alignment_test.go` / `index_alignment_test.go` 静态校验。
+- **本地 SQLite**：由 `cmd/dev-init`（`BuildTestSchema`）按 GORM 模型 `AutoMigrate` 建表，E2E 冒烟由 `cmd/e2e-init` 在干净库上做同一件事；模型须与本文件的表与字段保持一致，模型变更后需重跑 `dev-init`。服务启动**不做**自动迁移。模型与迁移脚本的对齐由 `model_alignment_test.go` / `index_alignment_test.go` 静态校验。
 - **必须写显式迁移的场景**（只靠 AutoMigrate 会出错，参考项目已踩过）：
   1. 新增唯一索引前**先去重**（否则建索引直接失败）；
   2. 索引冲突 / 重命名；
@@ -638,7 +638,7 @@ erDiagram
 
 | 数据 | 保留期 | 清理方式 | 说明 |
 |---|---|---|---|
-| `host_stats_record` / `vm_stats_record` | 90 天（可配） | 定时任务按时间清理 | 保留期需覆盖"历史曲线"最长时间范围 |
+| `host_stats_record` / `vm_stats_record` | 7 天（固定，见下文） | 指标采集器按小时清理 | 只清明细；按天聚合表长期保留 |
 | `vm_runtime_daily` / `traffic_stat_daily` | 13 个月 | 定时任务 | 跨月配额与年度对比 |
 | `task` / `task_stage` | 终态后 30 天 | 定时任务清理 | 运行中任务不清理；级联删 `task_stage` |
 | `scheduler_event` | 可配（默认 7 天） | 定时任务 | 与参考项目一致 |
@@ -649,6 +649,14 @@ erDiagram
 | `network_capture` | 7 天 | 定时任务（文件 + 记录） | 抓包文件体积大，需限时 |
 | `storage_file` | 与磁盘文件同生命周期 | 删除文件时同步删记录 | 记录只是索引，文件实体在存储池 |
 | 软删除对象（`user` / `node` / `template` 等） | 删除后保留 30 天 | 手工或定时硬删除 | 保留期用于审计与误删恢复 |
+
+> **实现现状（2026-11-05）**：
+> - 指标**明细**保留期固定 7 天（`internal/service/ops/monitor` 的 `DefaultOptions`），按小时清理；上表早期的「90 天可配」是设计目标，现按实现修订。按天聚合表不动；
+> - `task` / `task_stage` / `audit_log` / `network_capture` 的定时清理已由 `scheduler.RetentionLoop.RunDataRetention` 每小时执行一次（终态任务 30 天、审计 1 年、抓包 7 天或按 `expires_at`）。抓包**文件**仍由节点侧按 `expires_at` 清理，控制面只删记录；
+> - `scheduler_event` 的保留期可在系统设置调整（默认 168 小时）；
+> - 上表其余行（`user_session`、软删除对象等）仍是设计目标，当前靠业务路径自行处理或人工清理。
+>
+> 另：`security_challenge` 表由 `0001_init_schema.sql` 建出，但**没有任何 Go 模型或代码引用**，属待清理的历史表。
 
 ---
 

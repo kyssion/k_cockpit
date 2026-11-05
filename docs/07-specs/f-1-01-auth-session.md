@@ -1,7 +1,7 @@
 # 功能规格：本地账号登录与会话令牌
 
-- 状态：**Ready**
-- 负责人：<!-- TODO -->
+- 状态：**Implemented**
+- 负责人：—
 - 创建日期：2026-09-15
 - 覆盖需求：**F-1-01**（本地账号登录）、**F-1-02**（会话与令牌）
 - 关联：[`PRD.md`](../01-product/PRD.md) §4 域 1 · [`DATA_MODEL.md`](../02-architecture/DATA_MODEL.md) §4.1 `user` / §4.2 `user_session` · [`API.md`](../03-api/API.md) §4（安全要求）· [`FRONTEND.md`](../02-architecture/FRONTEND.md) §5.0（认证链路）

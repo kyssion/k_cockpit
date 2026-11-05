@@ -180,6 +180,13 @@ func loadMigrations(dir string) ([]migration, error) {
 	}
 	sort.Strings(names)
 
+	// 现存 0018 / 0019 各有两份，是历史遗留。此时只告警不报错：已执行的
+	// 迁移文件不能改名（校验和登记在 schema_migration 里），但新增编号
+	// 必须唯一，否则"按文件名排序即执行顺序"这条约定会悄悄失效。
+	for _, pair := range duplicatePrefixes(names) {
+		log.Printf("⚠️ 迁移编号重复：%s 与 %s；新增迁移请使用未占用的编号", pair[0], pair[1])
+	}
+
 	out := make([]migration, 0, len(names))
 	for _, name := range names {
 		raw, err := os.ReadFile(filepath.Join(dir, name))
@@ -195,6 +202,21 @@ func loadMigrations(dir string) ([]migration, error) {
 		})
 	}
 	return out, nil
+}
+
+// duplicatePrefixes 找出共用同一数字前缀的迁移文件。
+func duplicatePrefixes(names []string) [][2]string {
+	seen := map[string]string{}
+	var out [][2]string
+	for _, name := range names {
+		prefix := strings.SplitN(name, "_", 2)[0]
+		if prev, ok := seen[prefix]; ok {
+			out = append(out, [2]string{prev, name})
+		} else {
+			seen[prefix] = name
+		}
+	}
+	return out
 }
 
 // splitStatements 把 SQL 脚本切成可逐条执行的语句。

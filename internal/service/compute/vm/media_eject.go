@@ -21,12 +21,16 @@ type MediaEjectOptions struct {
 	Interval time.Duration
 }
 
-// MediaEjectLoop 周期检查"欠一次自动弹出"的虚拟机，初始化就绪后弹出
-// 安装介质（F-2-17）。
+// MediaEjectLoop 周期检查"欠一次自动弹出"的虚拟机，cloud-init 就绪后
+// 弹出安装介质（F-2-17）。
 //
 // 为什么是一个循环而不是创建时的一次性任务：就绪时刻取决于用户什么时候
-// 开机、cloudbase-init 跑多久——控制面在创建时既不知道也不该猜。把
+// 开机、cloud-init 跑多久——控制面在创建时既不知道也不该猜。把
 // "还欠着"记在 vm 表上、由循环收敛，天然覆盖"用户三天后才第一次开机"。
+//
+// 目前只有 NoCloud（Linux cloud-init）登记这个标记：它写完 boot-finished
+// 才算完成，节点侧可以据实判定。ConfigDrive（Windows）没有可靠的完成
+// 信号，不登记自动弹出，安装介质由用户手工弹出。
 type MediaEjectLoop struct {
 	svc   *Service
 	db    *gorm.DB

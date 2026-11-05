@@ -421,33 +421,39 @@ func (s *Service) UpdateConsole(
 	}
 	isSPICE := protocol == ConsoleProtocolSPICE
 	prefix := protocol + "_"
-	defaultPort := DefaultVNCPort
-	if isSPICE {
-		defaultPort = DefaultSPICEPort
+
+	// SPICE 是 libvirt 的**编译期可选**能力。节点没上报支持时直接拒绝：
+	// 落库只会得到一份指向不存在端口的连接文件，而用户在下载之前不会知道。
+	if isSPICE && !vm.SPICESupported {
+		return nil, api.ValidationFailed(
+			"当前节点未上报 SPICE 支持（libvirt 编译时未启用 spice），无法开启 SPICE 控制台")
 	}
 
-	updates := map[string]any{}
-	action := "vm.console.update"
-	after := map[string]any{"protocol": protocol}
-
+	enabled := enabledOf(vm, protocol)
 	if req.Enabled != nil {
-		// 首次开启时分配端口。已在用的端口不重新分配——那会让正在连着的
-		// 客户端断掉，而用户只是又点了一次"开启"。
-		port := vm.VNCPort
-		if isSPICE {
-			port = vm.SPICEPort
+		enabled = *req.Enabled
+	}
+	exposed := exposedOf(vm, protocol)
+	if req.Exposed != nil {
+		exposed = *req.Exposed
+	}
+	if req.Exposed != nil && *req.Exposed && !enabled {
+		return nil, api.ValidationFailed("控制台未开启时不能对外暴露，请先开启控制台")
+	}
+
+	// 监听地址与端口是**节点上的事实**，不是控制面的偏好：必须写进域 XML
+	// 才真的生效。暴露时监听所有地址，否则收在回环上（R-001）。
+	listen := "127.0.0.1"
+	if exposed {
+		listen = "0.0.0.0"
+	}
+	port := 0
+	if isSPICE {
+		if vm.SPICEPort != nil {
+			port = *vm.SPICEPort
 		}
-		if *req.Enabled && port == nil {
-			p := defaultPort
-			updates[prefix+"port"] = p
-		}
-		updates[prefix+"enabled"] = *req.Enabled
-		after["enabled"] = *req.Enabled
-		if *req.Enabled {
-			action = "vm.console.enable"
-		} else {
-			action = "vm.console.disable"
-		}
+	} else if vm.VNCPort != nil {
+		port = *vm.VNCPort
 	}
 
 	if req.Exposed != nil {
@@ -459,15 +465,67 @@ func (s *Service) UpdateConsole(
 		if err := s.ensureExposureVerified(ctx); err != nil {
 			return nil, err
 		}
-		updates[prefix+"exposed"] = *req.Exposed
-		// 暴露时改为监听所有地址；关闭时收回 127.0.0.1。
-		if *req.Exposed {
-			updates[prefix+"bind"] = "0.0.0.0"
-		} else {
-			updates[prefix+"bind"] = "127.0.0.1"
+	}
+
+	// 先下发、后落库：节点拒绝时控制面不能留下一个"看起来已生效"的配置。
+	// 这是本函数与其它元数据修改最大的不同——控制台配置的真相在域 XML 里。
+	needsNode := req.Enabled != nil || req.Exposed != nil || req.Password != nil
+	restartRequired := false
+	if needsNode {
+		params := map[string]any{
+			"protocol": protocol,
+			"enabled":  enabled,
+			"listen":   listen,
+			"port":     port,
 		}
+		if req.Password != nil {
+			params["password"] = *req.Password
+		}
+		res, err := s.agent.Execute(ctx, agent.Operation{
+			Kind:   agent.OpVMConsoleUpdate,
+			NodeID: vm.NodeID,
+			Target: vm.Name,
+			Params: params,
+		})
+		if err != nil {
+			// 未送达 ≠ 已执行：明确说明"配置未变更"，避免用户以为点了就生效。
+			return nil, api.Unavailable("节点不可达，控制台配置未变更")
+		}
+		if !res.Success {
+			return nil, api.ValidationFailed(res.Message)
+		}
+		if p, ok := res.Data[agent.ConsoleUpdatePortKey].(float64); ok && p > 0 {
+			port = int(p)
+		}
+		restartRequired, _ = res.Data[agent.ConsoleUpdateRestartRequiredKey].(bool)
+	}
+
+	updates := map[string]any{}
+	action := "vm.console.update"
+	after := map[string]any{"protocol": protocol}
+
+	if req.Enabled != nil {
+		updates[prefix+"enabled"] = *req.Enabled
+		after["enabled"] = *req.Enabled
+		if *req.Enabled {
+			action = "vm.console.enable"
+		} else {
+			action = "vm.console.disable"
+		}
+	}
+
+	if req.Exposed != nil {
+		updates[prefix+"exposed"] = *req.Exposed
+		updates[prefix+"bind"] = listen
 		after["exposed"] = *req.Exposed
 		action = "vm.console.exposure"
+	}
+
+	if port > 0 {
+		updates[prefix+"port"] = port
+	}
+	if restartRequired {
+		after["restart_required"] = true
 	}
 
 	if req.Password != nil {

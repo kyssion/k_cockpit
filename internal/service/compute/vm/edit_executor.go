@@ -65,6 +65,16 @@ func (e *ConfigUpdateExecutor) Run(ctx context.Context, t *model.Task) error {
 		updates[key] = value
 	}
 
+	// 显示设备选「无」等于告诉用户这台机器不再提供控制台画面（F-2-11 的
+	// R-011 口径）。投影里的 display_device 必须同步，否则详情页仍会显示
+	// 一个点了打不开的控制台入口。改回有显示时同理恢复入口。
+	if v, ok := p.Changes["video_model"].(string); ok {
+		updates["display_device"] = model.DisplayVNC
+		if v == "none" {
+			updates["display_device"] = model.DisplayNone
+		}
+	}
+
 	if err := e.db.WithContext(ctx).Model(&model.VM{}).
 		Where("id = ?", p.VMID).Updates(updates).Error; err != nil {
 		// 宿主侧已改成功，只是本地投影没写上。不返回错误：让任务报失败会

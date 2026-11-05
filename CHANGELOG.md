@@ -18,6 +18,38 @@
 ## [Unreleased]
 
 ### Added
+- **本地开发建库入口（2026-11-05）**：新增 `go run ./cmd/dev-init`，按 GORM 模型幂等建出本地 SQLite 全套表。此前 `AGENTS.md` 的「`cp .env.example .env && go run ./cmd/server`」会得到一个没有任何表的库（服务启动不做自动迁移，唯一建表入口 `cmd/e2e-init` 是 E2E 专用且拒绝已存在库）；`AGENTS.md`、`DATA_MODEL.md`、`DEVELOPMENT.md` 已同步。
+- **注册阶段协议版本校验（2026-11-05）**：`RegisterRequest.protocol_version` 此前 agent 上报、控制面不校验，proto 却承诺 N-1 兼容。现在签发证书前按 `hub.protocolVersionSupported` 拒绝不兼容版本（当前仅接受 1），补单测。
+- **注册名与宿主机名不再空转（2026-11-05）**：`k_cockpit-agent enroll -name NAME` 现在会把 `requested_name` 送到控制面用于节点命名并回显（传输层做格式校验，写失败不阻断注册）；心跳里的 `hostname` 落到 `node.hostname`（迁移 `0051`）并在节点视图带出，空值不覆盖旧值。
+- **历史数据定时清理（2026-11-05）**：`scheduler.RetentionLoop` 每小时清理终态任务及其阶段（30 天）、审计日志（1 年）与过期抓包记录（7 天或按 `expires_at`），使用已定义但一直未登记的 `KeyTaskCleanup` 记录调度事件；抓包文件仍由节点侧清理。`DATA_MODEL.md` §7 按实现修订。
+- **真实 agent 真机验收清单（2026-11-05）**：新增 `docs/04-engineering/AGENT_ACCEPTANCE.md`，把「单测通过但真机待验」的 37 项能力、F-2-17、双机迁移、降级矩阵、安全复查与 E2E 核心链路变成有判定标准的可勾选清单；不在无 agent 环境写假 E2E 用例。
+- **首次启动初始化介质（F-2-17，2026-11-05）**：创建向导的「初始化方式 / 主机名 /
+  初始密码」此前只落库，来宾第一次开机不会发生任何事。现在节点按 `nocloud` /
+  `configdrive` 生成 `meta-data` + `user-data`（或 ConfigDrive v2 的
+  `meta_data.json` / `user_data`），用 `genisoimage` / `mkisofs` / `xorriso`
+  打成卷标 `cidata` / `config-2` 的 ISO，挂成第二块光驱（`sdb`，安装 ISO 仍是
+  `sda`）；缺工具链或挂载失败会连带回滚域与磁盘，不留孤儿域。
+- **创建期静态地址生效（2026-11-05）**：节点创建结果回传 libvirt 分配的主网卡
+  MAC；控制面写回网卡记录，并按 `(MAC, IP)` 登记 dnsmasq 静态租约，节点确认后
+  才记 `applied_at`。此前这个字段只做了合法性校验，从未落库或下发。
+- **cloud-init 就绪探测（2026-11-05）**：`vm.init.ready` 从恒 false 的占位改为
+  经 qemu-guest-agent 检查 `/var/lib/cloud/instance/boot-finished`（并关闭文件
+  句柄）。自动弹出安装介质只对 NoCloud 登记；ConfigDrive（Windows）没有可靠的
+  完成信号，明确不自动弹出，避免弹早了摘掉还在安装的 WinPE 介质。
+- **控制台配置真实下发（2026-11-04）**：`PATCH /vms/:id/console` 此前只改数据库——
+  「对外暴露」不会让 qemu 监听 `0.0.0.0`，「改密」也不会写进域定义。新增
+  `vm.console.update`：按协议修改 `<graphics>` 的 `listen / port / passwd` 并
+  `virsh define`；控制面改为**先下发、成功后再落库**（节点拒绝时不留"看起来
+  已生效"的记录），运行中的域明确提示需重启，SPICE 在节点未上报支持时直接拒绝。
+  补 XML 定点编辑与下发链路的服务层/执行器测试。
+- **编辑矩阵 12 项接通节点**：`boot_order`、`watchdog`、`video_model`、`rtc_mode`、
+  `apic`、`pae`、`hide_kvm`、`memory_hugepages`、CPU 拓扑（sockets/cores/threads）、
+  `cpu_affinity`、`cpu_limit_percent` 此前只写库不生效，现经域 XML 定点修改后
+  `define` 落盘；CPU 配额与绑核写入 `<cputune>`，并修正为需关机后生效。
+- **前端业务页面改为路由级懒加载（2026-11-04）**：此前 40 个页面全部静态导入，
+  首屏包包含创建向导、模板、监控图表等重依赖，与 `vite.config.ts` 的首屏预算
+  注释直接矛盾。现在除登录/初始化等入口外一律 `lazy()`，Suspense 边界放在布局
+  内容区（切页不闪侧栏）；构建产物已按页面拆分为独立 chunk。
 - **控制面静态托管前端产物**：`STATIC_DIR`（默认 `public`）指向 `web/dist` 的拷贝，由控制面直接
   服务前端——此前 `AGENTS.md` 与 `DEPLOYMENT.md` 均声明「由控制面静态托管」，但代码里没有任何
   静态服务，产物实际无处可放。行为约定：未匹配的 GET/HEAD 回退 `index.html`（SPA 深链刷新）；
@@ -44,6 +76,31 @@
   控制面只保留 gRPC 反向长连接。测试改为每个包自写最小 stub，不再共享全局 mock。
 
 ### Fixed
+- **优雅停机补齐（2026-11-05）**：后台循环与任务队列改用同一个可取消 ctx，`stopBackground` 先取消并等待全部循环退出，再逐个调用自带 `Stop` 的组件，最后 `Queue.Stop()` 等在途任务跑完；此前 `Queue.Stop()` 从未被调用、`scheduler.Stop()` 存在却被注释误判为「没有 Stop」、6/10 个循环无人收尾。
+- **CI 覆盖率门禁与权限契约对账（2026-11-05）**：后端 CI 改用 `go test -coverprofile` 并对整体行覆盖设 25% 防下降下限（实测 28.5%，不引入新依赖）；新增 `TestAdminAPIRoutesMatchRouter` 静态比对接口文档的 admin 清单与路由 `adminOnly` 声明，并修正 `GET /network/client-ip` 被误标为管理员、移除已删除的 `dev` 模块标签。
+- **文档与配置事实校准（2026-11-05）**：13 份规格状态回填为 `Implemented` / `In Progress` 并新增状态定义与验收勾选口径（164 条 AC 仍按 M5 证据回填，不批量打勾）；8 份实质完整的草稿文档改为生效；`TECH_STACK.md` 的协议「待定」改为 gRPC + Protobuf 并标注未落地的前端选型；`API.md` 两项「规划中」改为「已废弃（由现有接口承接）」；`SECURITY_REVIEW.md` §3 改写为 M5 复查方法与待办状态；修正 `.env.example` 的 `SMTP_USER` 错名、删除 19 个无消费方的死变量并补登记实际读取的变量；`ROADMAP` / `CAPABILITY_MAP` / `README` / `AGENTS.md` / `DEVELOPMENT.md` / `CONTRIBUTING.md` 的过期表述与 TODO 一并回填。
+- **引导与初始化口径（2026-11-05）**：创建向导现在把 `init_mode` 写进 `vm` 投影，
+  并下发与凭据表同源的 `initial_username`；NoCloud 引导项 `disk` 统一映射为
+  libvirt 的 `hd`（此前原样写进域定义会被拒绝）。
+- **handler 层测试与迁移编号告警（2026-11-05）**：补 `handler/ops` 的 SSE 视角
+  过滤 / 写帧测试与 `handler/network` 的请求映射测试；`cmd/migrate` 启动时对
+  重复数字前缀告警（现存 `0018` / `0019` 各两份，历史文件不能改名以免校验和
+  失配），并加单测锁住判定规则。
+- **编辑页不再"假成功"（2026-11-04）**：节点侧未实现的键（机型、固件、架构、
+  热插拔槽位、嵌套虚拟化等）此前会写库并返回成功。现在控制面在受理阶段明确
+  拒绝并列出键名，编辑表单下发 `not_applied` 由前端禁用并说明原因；备注/分组
+  不再允许从配置接口提交（走元数据接口）。节点侧同时保留兜底校验。
+- **引导顺序 disk→hd 映射（2026-11-04）**：界面口径 `disk,cdrom,network` 与域 XML
+  的 `hd / cdrom / network / fd` 不是一套取值，旧实现把 `disk` 原样写进定义
+  （libvirt 会拒绝）。创建与编辑共用同一处映射。
+- **显示设备改为「无」时同步控制台投影（2026-11-04）**：`video_model=none` 现在
+  同时把 `display_device` 置为 `none`，详情页不再显示打不开的控制台入口。
+- **磁盘限速五项在节点侧从未下发（2026-11-04）**：`vm.config.update` 此前只处理
+  `disk_iops_total`，`disk_iops_read/write` 与 `disk_bytes_*` 三档吞吐限值**只写库并返回成功**——
+  界面显示"已应用"，磁盘上没有任何变化。现统一翻译为一次 `virsh blkdeviotune` 调用下发
+  （字节类字段按 MB/s → bytes/s 换算），运行中的域带 `--live` 与界面「即时生效」的口径对齐，
+  关机态只写 `--config`；未提交的项不补 0，避免清掉用户原有设置。补运行态 / 关机态 /
+  参数翻译三组单测。
 - **agent 第一轮复审补强（2026-11-04）**：
   - 完整克隆 / 重装 / 导出 / 冷迁移的 `qemu-img convert` 与 `cp` 改用 `RunTimeout`，不再被 10s 探测超时截断。
   - OVA 导出改为 VMDK + OVF + SHA1 清单打 tar（`qemu-img` 无 ova 输出格式，旧实现必然失败）。

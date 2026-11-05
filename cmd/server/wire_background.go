@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"k_cockpit/internal/service/compute/vm"
@@ -36,6 +37,29 @@ type backgroundLoops struct {
 	passAuditLoop  *passaudit.Loop
 	authKeyLoop    *authkey.Loop
 	collector      *monitor.Collector
+
+	// cancel 停止所有以 ctx 为生命周期的循环（含任务队列轮询）；wg 等它们
+	// 真正退出。没有这两个字段时，进程退出会留下仍在读写库的 goroutine，
+	// 而 Queue.Stop() 会等一个永不退出的轮询 goroutine。
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+}
+
+// goLoop 启动一个阻塞到 ctx 取消的循环，并纳入统一等待。
+func (l *backgroundLoops) goLoop(fn func()) {
+	l.wg.Add(1)
+	go func() {
+		defer l.wg.Done()
+		fn()
+	}()
+}
+
+// stopLoops 取消循环上下文并等待全部退出；必须早于各组件自己的 Stop。
+func (l *backgroundLoops) stopLoops() {
+	if l.cancel != nil {
+		l.cancel()
+	}
+	l.wg.Wait()
 }
 
 // setupSchedulerRegistry 登记调度器身份并建记录器。
@@ -138,30 +162,41 @@ func (a *app) setupBackground() {
 	}, reconcile.Options{})
 }
 
-// startBackground 启动全部后台周期组件。
+// startBackground 启动任务队列与全部后台周期组件。
+//
+// 所有循环共用同一个可取消的 ctx：这是 Queue.Stop() 能返回的前提——
+// 队列的轮询 goroutine 与在途任务在同一个 WaitGroup 上，只 Stop 不取消
+// 会等到一个永远不会退出的轮询循环。
 func (a *app) startBackground() {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	a.bg.cancel = cancel
+
+	a.queue.Start(ctx)
 	a.bg.scheduler.Start(ctx)
 	a.bg.quotaLoop.Start(ctx)
 	a.bg.alertLoop.Start(ctx)
-	go a.bg.passAuditLoop.Start(ctx)
-	go a.bg.authKeyLoop.Start(ctx)
 	a.bg.collector.Start(ctx)
-	go a.bg.schedRetention.Start(ctx)
-	go a.bg.trimLoop.Start(ctx)
-	go a.bg.mediaEjectLoop.Start(ctx)
-	go a.bg.netReconcile.Start(ctx)
+	a.bg.goLoop(func() { a.bg.passAuditLoop.Start(ctx) })
+	a.bg.goLoop(func() { a.bg.authKeyLoop.Start(ctx) })
+	a.bg.goLoop(func() { a.bg.schedRetention.Start(ctx) })
+	a.bg.goLoop(func() { a.bg.trimLoop.Start(ctx) })
+	a.bg.goLoop(func() { a.bg.mediaEjectLoop.Start(ctx) })
+	a.bg.goLoop(func() { a.bg.netReconcile.Start(ctx) })
 }
 
-// stopBackground 停止需要优雅收尾的周期组件。
-//
-// 只停这几个：与拆分前 main 里的 defer 一一对应。passAuditLoop /
-// authKeyLoop / scheduler 原本就没有 Stop（进程退出即止），这里不新增。
+// stopBackground 停止全部后台组件，顺序不可调换：
+//  1. 取消 ctx 并等阻塞式循环退出（含任务队列轮询）；
+//  2. 逐个调用自带 Stop 的组件，等各自的 goroutine 收尾；
+//  3. 最后 Queue.Stop() 等在途任务跑完——中断「正在创建虚拟机」会把
+//     系统留在中间状态，比让它跑完更糟。
 func (a *app) stopBackground() {
+	a.bg.stopLoops()
+	a.bg.scheduler.Stop()
 	a.bg.collector.Stop()
 	a.bg.alertLoop.Stop()
 	a.bg.quotaLoop.Stop()
 	a.bg.schedRetention.Stop()
 	a.bg.trimLoop.Stop()
 	a.bg.mediaEjectLoop.Stop()
+	a.queue.Stop()
 }

@@ -8,8 +8,6 @@
 package main
 
 import (
-	"context"
-
 	"k_cockpit/internal/service/compute/importer"
 	"k_cockpit/internal/service/compute/passthrough"
 	"k_cockpit/internal/service/compute/template"
@@ -135,6 +133,4 @@ func (a *app) setupTaskQueue() {
 	a.queue.Register(hosttuning.NewExecutor(db, agentClient))
 	// 平台自检后的重新下发。
 	a.queue.Register(platformcheck.NewExecutor(db, agentClient))
-
-	a.queue.Start(context.Background())
 }

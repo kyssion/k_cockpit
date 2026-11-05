@@ -5,10 +5,12 @@ import (
 	"errors"
 	"log"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
@@ -73,6 +75,14 @@ type EditField struct {
 	// 用于**探测结果**（如 Guest Agent 是否在运行）：它不是用户能设定的东西，
 	// 把它做成可编辑的输入框会让人以为「勾上它就能让 Guest Agent 跑起来」。
 	ReadOnly bool `json:"read_only"`
+
+	// NotApplied 表示节点侧尚未实现该项的在线修改，编辑页不可提交。
+	//
+	// 只在**编辑表单**里置位：创建向导不受影响，那些项由建域 XML 一次性
+	// 落实。没有这个标记时，界面会让用户以为能改，提交后任务还报成功。
+	NotApplied bool `json:"not_applied"`
+	// NotAppliedReason 是 NotApplied 时给用户看的原因。
+	NotAppliedReason string `json:"not_applied_reason,omitempty"`
 
 	// InCreate 表示这一项出现在**创建向导**里（f-2-02）。
 	//
@@ -404,14 +414,14 @@ var editFields = []EditField{
 	},
 	{
 		Key: "cpu_affinity", Label: "CPU 亲和性（绑核）", Kind: EditKindText, Group: EditGroupAdvanced,
-		RequiresNode: true, InCreate: true,
+		RequiresNode: true, RequiresShutdown: true, InCreate: true,
 		Hint: "形如 0-3 或 0,2,4。留空表示不绑核，由调度器自行选择物理核。",
 	},
 	{
 		Key: "cpu_limit_percent", Label: "CPU 使用率上限（%）", Kind: EditKindNumber,
 		Group: EditGroupAdvanced, InCreate: true, Default: "0",
-		RequiresNode: true, Min: 0, Max: 100,
-		Hint: "0 表示不限制。",
+		RequiresNode: true, RequiresShutdown: true, Min: 0, Max: 100,
+		Hint: "0 表示不限制。写入 cputune，与绑核一样需要关机后生效。",
 	},
 	{
 		Key: "memory_hugepages", Label: "使用内存大页", Kind: EditKindBoolean,
@@ -511,6 +521,23 @@ var editGroups = []EditGroupInfo{
 	{Key: EditGroupAdvanced, Label: "高级设置"},
 }
 
+// editFieldsForEdit 返回带能力标记的编辑矩阵副本。
+//
+// 不复用全局切片：给其中一项置位会污染创建向导——创建路径由建域 XML
+// 一次性落实这些项，与"编辑时能否在线改"是两件事。
+func editFieldsForEdit() []EditField {
+	out := make([]EditField, len(editFields))
+	copy(out, editFields)
+	for i := range out {
+		f := &out[i]
+		if f.RequiresNode && !agent.ConfigKeyApplied(f.Key) {
+			f.NotApplied = true
+			f.NotAppliedReason = "当前版本节点侧尚未实现该项的在线修改，保存后不会生效；如需调整请使用 XML 编辑或等待后续版本"
+		}
+	}
+	return out
+}
+
 // EditFormOf 返回某台虚拟机的编辑表单元数据与当前值。
 //
 // **实时探测**运行态（而不是读投影）：EditableNow 直接决定界面能否提交，
@@ -540,7 +567,7 @@ func (s *Service) EditFormOf(
 	}
 
 	return &EditForm{
-		Fields:        editFields,
+		Fields:        editFieldsForEdit(),
 		Values:        editValues(vm),
 		EditableNow:   current == model.VMStatusStopped,
 		HotAddition:   hot,
@@ -739,6 +766,7 @@ func (s *Service) UpdateConfig(
 	// 回来，而「等值修改」在需要重启的项上会白白触发一次重启。
 	existing := editValues(vm)
 	changes := map[string]any{}
+	var unsupported []string
 
 	for key, raw := range req.Changes {
 		f, ok := editFieldByKey(key)
@@ -760,14 +788,43 @@ func (s *Service) UpdateConfig(
 		if err != nil {
 			return nil, err
 		}
+		if !f.RequiresNode {
+			// 备注与分组走 UpdateMetadata：混进配置文件会入队一次没有
+			// 意义的节点往返，而节点根本不认识这两个概念。
+			return nil, api.InvalidParameter(f.Label + " 请在元数据接口中修改")
+		}
+		if !agent.ConfigKeyApplied(key) {
+			unsupported = append(unsupported, key)
+			continue
+		}
 		if sameValue(value, existing[key]) {
 			continue
 		}
 		changes[key] = value
 	}
 
+	// 未实现的项必须**明确拒绝**：放行会让任务报成功而虚拟机没变，
+	// 用户会把原因归到"节点没生效"上，实际是这项能力还不存在。
+	if len(unsupported) > 0 {
+		sort.Strings(unsupported)
+		return nil, api.ValidationFailed(
+			"以下配置项目前不支持在线修改：" + strings.Join(unsupported, "、") +
+				"；请使用 XML 编辑或等待后续版本支持")
+	}
+
 	if len(changes) == 0 {
 		return nil, api.InvalidParameter("没有需要修改的内容")
+	}
+
+	// CPU 拓扑是一个三元组：只改其中一项时，节点需要另外两项才能生成
+	// 合法的 <topology/>。这里把未改动的两项按当前值补齐——否则节点只能
+	// 跳过，用户会看到一个"成功但没变"的任务。
+	if _, a := changes["cpu_sockets"]; a {
+		forceTopology(changes, existing)
+	} else if _, b := changes["cpu_cores"]; b {
+		forceTopology(changes, existing)
+	} else if _, c := changes["cpu_threads"]; c {
+		forceTopology(changes, existing)
 	}
 
 	// IOPS 的「总量」与「读写分离」互斥（f-2-06）。
@@ -998,6 +1055,15 @@ func stringify(v any) string {
 		return strconv.FormatFloat(t, 'f', -1, 64)
 	default:
 		return ""
+	}
+}
+
+// forceTopology 把 CPU 拓扑未提交的两个维度按当前值补齐。
+func forceTopology(changes, existing map[string]any) {
+	for _, key := range []string{"cpu_sockets", "cpu_cores", "cpu_threads"} {
+		if _, ok := changes[key]; !ok {
+			changes[key] = existing[key]
+		}
 	}
 }
 

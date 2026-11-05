@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -31,7 +32,8 @@ func boolParam(params map[string]any, key string) bool {
 }
 
 // imagesDir 是本节点虚拟机磁盘的默认根（与存储池创建的默认路径一致）。
-const imagesDir = "/var/lib/k_cockpit/images"
+// 声明为变量而非常量：测试需要把它指到临时目录，避免在 CI 上写 /var/lib。
+var imagesDir = "/var/lib/k_cockpit/images"
 
 // userdataRoot 是「我的存储」的节点侧根（storage.file.commit 的落盘前缀）。
 const userdataRoot = "/var/lib/k_cockpit/userdata"
@@ -136,13 +138,45 @@ func vmCreate(ctx context.Context, op agent.Operation, report Reporter) (*agent.
 	if spec.AutoStart {
 		_, _ = sys.Run(ctx, "virsh", "autostart", spec.Name)
 	}
+
+	// 首次启动初始化（F-2-17）：把 cloud-init / cloudbase-init 的配置打成
+	// ISO 挂成第二块光驱。失败必须连带回滚域与磁盘，否则会留下一个"已定义
+	// 但没有初始化盘"的孤儿域，用户重试时还会撞同名。
+	seedAttached := false
+	seedPath := ""
+	seed := seedSpec{
+		Mode:     strParam(op.Params, "init_mode"),
+		Name:     spec.Name,
+		Hostname: strParam(op.Params, "hostname"),
+		Username: strParam(op.Params, "initial_username"),
+		Password: strParam(op.Params, "initial_password"),
+	}
+	if seed.needsSeed() {
+		iso, err := prepareSeedISO(ctx, seed)
+		if err != nil {
+			rollbackCreatedDomain(ctx, spec.Name, created, "")
+			return failResult("生成首次启动初始化介质失败: " + err.Error()), nil
+		}
+		seedPath = iso
+		if err := attachSeedISO(ctx, spec.Name, iso); err != nil {
+			rollbackCreatedDomain(ctx, spec.Name, created, iso)
+			return failResult("挂载首次启动初始化介质失败: " + err.Error()), nil
+		}
+		seedAttached = true
+	}
+
+	// MAC 由 libvirt 分配；创建向导填写的静态地址靠它登记 DHCP 静态租约。
+	mac := primaryMACOf(ctx, spec.Name)
 	uuid, _ := sys.DomainUUID(ctx, spec.Name)
 	return &agent.Result{
 		Success: true,
 		Data: map[string]any{
-			"uuid":              uuid,
-			agent.StatusDataKey: "stopped",
-			agent.CloneDataKey:  agent.CloneInfo{DiskPath: diskPath, BackingPath: backingOf(spec)},
+			"uuid":                    uuid,
+			agent.CreatePrimaryMACKey: mac,
+			"seed_attached":           seedAttached,
+			agent.StatusDataKey:       "stopped",
+			agent.CloneDataKey:        agent.CloneInfo{DiskPath: diskPath, BackingPath: backingOf(spec)},
+			"seed_iso_path":           seedPath,
 		},
 	}, nil
 }
@@ -472,6 +506,28 @@ func vmConfigUpdate(ctx context.Context, op agent.Operation, report Reporter) (*
 	changes, _ := op.Params["changes"].(map[string]any)
 	var applied, skipped []string
 
+	// 兜底：控制面已经拒过一轮，这里再拒一次。节点侧拿到不认识的键时
+	// **不能当作成功**——那正是历史上"任务成功、虚拟机没变"的来源。
+	if unsupported := unsupportedConfigKeys(changes); len(unsupported) > 0 {
+		return failResult("以下配置项目前无法在节点侧生效：" + strings.Join(unsupported, "、")), nil
+	}
+
+	// XML 类配置先做：它们要读一次定义、改完再 define。失败就整体返回，
+	// 不再继续下发命令——否则会留下"一半改了一半没改"的中间态。
+	if len(xmlConfigKeys(changes)) > 0 {
+		xmlText, err := sys.DumpXML(ctx, op.Target, false)
+		if err != nil {
+			return failResult("读取域定义失败: " + err.Error()), nil
+		}
+		newXML, appliedKeys := applyConfigXML(xmlText, changes)
+		if len(appliedKeys) > 0 {
+			if err := defineXML(ctx, newXML); err != nil {
+				return failResult("libvirt 拒绝了配置变更: " + err.Error()), nil
+			}
+			applied = append(applied, appliedKeys...)
+		}
+	}
+
 	setV := func(args ...string) error {
 		_, err := sys.Run(ctx, "virsh", append([]string{"-c", "qemu:///system"}, args...)...)
 		return err
@@ -511,14 +567,30 @@ func vmConfigUpdate(ctx context.Context, op agent.Operation, report Reporter) (*
 			applied = append(applied, "auto_start")
 		}
 	}
-	// IOPS 限值走 blkdeviotune（需要设备名——从定义里取系统盘）。
-	if iops, ok := numField(changes, "disk_iops_total"); ok {
+	// 磁盘限速走 blkdeviotune（需要设备名——从定义里取系统盘）。
+	//
+	// 六项限值一次调用下发：分多次调用时，中途失败会留下一半新一半旧的
+	// 组合，而用户看到的只是一个"失败"。
+	//
+	// 运行中的域带 --live，与界面标注的「即时生效」对齐；只写 --config
+	// 会让改动等下次重启才生效，而用户收到的是"已应用"。
+	//
+	// 字节类字段的单位是 MB/s（矩阵与界面的口径），blkdeviotune 收 bytes/s。
+	if tune := diskTuneArgs(changes); len(tune) > 0 {
 		if dev := sysDiskDev(ctx, op.Target); dev != "" {
-			_, err := sys.Run(ctx, "virsh", "blkdeviotune", op.Target, dev,
-				"--total-iops-sec", fmtInt(iops), "--config")
-			if err == nil {
-				applied = append(applied, "disk_iops_total")
+			args := append([]string{"-c", "qemu:///system", "blkdeviotune", op.Target, dev}, tune...)
+			if running, err := vmRunning(ctx, op.Target); err == nil && running {
+				args = append(args, "--live", "--config")
+			} else {
+				args = append(args, "--config")
 			}
+			if _, err := sys.Run(ctx, "virsh", args...); err == nil {
+				applied = append(applied, tunedKeys(changes)...)
+			} else {
+				skipped = append(skipped, "磁盘限速（节点拒绝）")
+			}
+		} else {
+			skipped = append(skipped, "磁盘限速（找不到系统盘）")
 		}
 	}
 
@@ -532,11 +604,70 @@ func vmConfigUpdate(ctx context.Context, op agent.Operation, report Reporter) (*
 	return &agent.Result{Success: true, Message: msg}, nil
 }
 
+// unsupportedConfigKeys 返回 changes 里节点侧没有实现的键（按字典序）。
+func unsupportedConfigKeys(changes map[string]any) []string {
+	out := make([]string, 0, len(changes))
+	for key := range changes {
+		if !agent.ConfigKeyApplied(key) {
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// diskTuneArgs 把磁盘限速类变更翻译成 blkdeviotune 参数。
+//
+// 只翻译 changes 里**出现**的键：差异提交下未出现的项保持节点上的原值，
+// 补一个 0 会把用户上次设的限制悄悄清掉。
+func diskTuneArgs(changes map[string]any) []string {
+	var args []string
+	addIOPS := func(key, flag string) {
+		if v, ok := numField(changes, key); ok {
+			args = append(args, flag, fmtInt(v))
+		}
+	}
+	// 界面按 MB/s 填写；blkdeviotune 的 bytes 类参数收 bytes/s。
+	addBytes := func(key, flag string) {
+		if v, ok := numField(changes, key); ok {
+			args = append(args, flag, strconv.FormatInt(int64(v)*1024*1024, 10))
+		}
+	}
+	addIOPS("disk_iops_total", "--total-iops-sec")
+	addIOPS("disk_iops_read", "--read-iops-sec")
+	addIOPS("disk_iops_write", "--write-iops-sec")
+	addBytes("disk_bytes_total", "--total-bytes-sec")
+	addBytes("disk_bytes_read", "--read-bytes-sec")
+	addBytes("disk_bytes_write", "--write-bytes-sec")
+	return args
+}
+
+// tunedKeys 返回本次实际下发的限速键，供结果消息列出「改了哪些」。
+func tunedKeys(changes map[string]any) []string {
+	keys := make([]string, 0, 6)
+	for _, key := range []string{
+		"disk_iops_total", "disk_iops_read", "disk_iops_write",
+		"disk_bytes_total", "disk_bytes_read", "disk_bytes_write",
+	} {
+		if _, ok := numField(changes, key); ok {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
 func numField(m map[string]any, key string) (int, bool) {
 	if m == nil {
 		return 0, false
 	}
-	if v, ok := m[key].(float64); ok {
+	// 线上参数经过 JSON 反序列化，数字是 float64；进程内调用与单测可能
+	// 直接给 int。两种都认，避免"同一份参数在测试里能过、线上被静默跳过"。
+	switch v := m[key].(type) {
+	case float64:
+		return int(v), true
+	case int:
+		return v, true
+	case int64:
 		return int(v), true
 	}
 	return 0, false

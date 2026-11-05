@@ -111,8 +111,9 @@ func main() {
 	h := a.newHTTPServer()
 	a.registerRoutes(h)
 
-	// 周期组件的启动放在路由注册之后：它们都在独立的定时 goroutine 上，
-	// 与路由注册互不依赖，而服务在 h.Spin() 之前不会受理任何请求。
+	// 周期组件与任务队列的启动放在路由注册之后：它们都在独立的定时
+	// goroutine 上，与路由注册互不依赖，而服务在 h.Spin() 之前不会受理
+	// 任何请求。统一从这里启动，是为了让 stopBackground 能取消同一个 ctx。
 	a.startBackground()
 	// stopBackground 后注册，先于 logger.Close 执行——与拆分前三个 defer
 	// （collector / alertLoop / quotaLoop）的 LIFO 顺序一致。

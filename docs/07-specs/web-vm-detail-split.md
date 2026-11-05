@@ -1,7 +1,7 @@
 # 规格：虚拟机详情页（VmDetailPage）拆分重构
 
-- 状态：Ready
-- 负责人：<!-- TODO -->
+- 状态：Implemented
+- 负责人：—
 - 创建日期：2026-11-03
 - 关联需求：F-2-03（详情页）；**行为口径以 [`f-2-01-vm-list.md`](f-2-01-vm-list.md) 为准，本规格只调整代码组织**
 - 关联 ADR：无（不改技术栈与架构；组件风格遵循 [ADR-0006](../06-decisions/0006-frontend-tech-stack.md) 与 [`FRONTEND.md`](../02-architecture/FRONTEND.md) §4.7）

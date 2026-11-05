@@ -1,56 +1,87 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, type ComponentType } from 'react'
 import { createBrowserRouter } from 'react-router'
 
 import { PageLoading, Placeholder } from '@/components/common/Feedback'
 import { AppLayout } from '@/layout/AppLayout'
-import { DashboardPage } from '@/views/dashboard/DashboardPage'
 import { LoginPage } from '@/views/auth/LoginPage'
 import { ForgotPasswordPage } from '@/views/auth/ForgotPasswordPage'
 import { InvitePage } from '@/views/auth/InvitePage'
 import { SetupPage } from '@/views/auth/SetupPage'
-import { NetworkPage } from '@/views/network/NetworkPage'
-import { NetworkPage2 } from '@/views/network/NetworkPage2'
-import { NodeDetailPage } from '@/views/node/NodeDetailPage'
-import { AuditLogPage } from '@/views/audit/AuditLogPage'
-import { UserAdminPage } from '@/views/user/UserAdminPage'
-import { NodeListPage } from '@/views/node/NodeListPage'
-import { PublicIPPage } from '@/views/network/PublicIPPage'
-import { FirewallPage } from '@/views/network/FirewallPage'
-import { PortMirrorPage } from '@/views/network/PortMirrorPage'
-import { SecurityGroupPage } from '@/views/network/SecurityGroupPage'
-import { PortSecurityPage } from '@/views/network/PortSecurityPage'
-import { HostFirewallPage } from '@/views/network/HostFirewallPage'
-import { PassthroughPage } from '@/views/network/PassthroughPage'
-import { CapturePage } from '@/views/network/CapturePage'
-import { ImportPage } from '@/views/storage/ImportPage'
-import { MyStoragePage } from '@/views/storage/MyStoragePage'
-import { StorageVolumePage } from '@/views/storage/StorageVolumePage'
-import { SchedulerPage } from '@/views/system/SchedulerPage'
-import { AlertPage } from '@/views/system/AlertPage'
-import { AboutPage } from '@/views/system/AboutPage'
-import { DiagnosticsPage } from '@/views/system/DiagnosticsPage'
-import { VersionPage } from '@/views/system/VersionPage'
-import { ApiDocsPage } from '@/views/apidocs/ApiDocsPage'
-import { LogPage } from '@/views/system/LogPage'
-import { HostTuningPage } from '@/views/system/HostTuningPage'
-import { PlatformCheckPage } from '@/views/system/PlatformCheckPage'
-import { AccessControlPage } from '@/views/system/AccessControlPage'
-import { ResourceQuotaPage } from '@/views/settings/ResourceQuotaPage'
-import { TemplatePage } from '@/views/template/TemplatePage'
-import { APIKeyPage } from '@/views/security/APIKeyPage'
-import { SecurityPage } from '@/views/security/SecurityPage'
-import { QuotaPage } from '@/views/settings/QuotaPage'
-import { SettingsPage } from '@/views/settings/SettingsPage'
-import { StoragePoolPage } from '@/views/storage/StoragePoolPage'
-import { TaskListPage } from '@/views/task/TaskListPage'
-import { VmDetailPage } from '@/views/vm/VmDetailPage'
 
-// noVNC 只在控制台页面用得到，但它是主 chunk 里最大的一块（约 60 KB）。
-// 静态导入会让所有用户（包括从不打开控制台的那些）都下载它。
+// 业务页面一律路由级懒加载。
+//
+// 静态导入会让首屏包包含全部 40 个页面（含创建向导、模板、监控图表这些
+// 重依赖），而用户第一次打开时只需要工作台。React Router 的懒加载边界
+// 在 AppLayout 的 <Outlet/> 外（见 AppLayout），切换页面不会闪掉整个外壳。
 //
 // react/only-export-components 要求「文件只导出组件」才能启用 Fast Refresh。
 // 本文件是路由配置，导出的是 router 常量而非组件，天然不满足该前提。
 /* oxlint-disable react/only-export-components */
+const lazyPage = <T extends Record<string, unknown>>(loader: () => Promise<T>, name: keyof T) =>
+  lazy(async () => ({ default: (await loader())[name] as ComponentType }))
+
+const DashboardPage = lazyPage(() => import('@/views/dashboard/DashboardPage'), 'DashboardPage')
+const VmListPage = lazyPage(() => import('@/views/vm/VmListPage'), 'VmListPage')
+const VmDetailPage = lazyPage(() => import('@/views/vm/VmDetailPage'), 'VmDetailPage')
+const TrashPage = lazyPage(() => import('@/views/vm/TrashPage'), 'TrashPage')
+const TaskListPage = lazyPage(() => import('@/views/task/TaskListPage'), 'TaskListPage')
+const MyStoragePage = lazyPage(() => import('@/views/storage/MyStoragePage'), 'MyStoragePage')
+const ImportPage = lazyPage(() => import('@/views/storage/ImportPage'), 'ImportPage')
+const StoragePoolPage = lazyPage(() => import('@/views/storage/StoragePoolPage'), 'StoragePoolPage')
+const StorageVolumePage = lazyPage(
+  () => import('@/views/storage/StorageVolumePage'),
+  'StorageVolumePage',
+)
+const TemplatePage = lazyPage(() => import('@/views/template/TemplatePage'), 'TemplatePage')
+const NetworkPage = lazyPage(() => import('@/views/network/NetworkPage'), 'NetworkPage')
+const NetworkPage2 = lazyPage(() => import('@/views/network/NetworkPage2'), 'NetworkPage2')
+const PublicIPPage = lazyPage(() => import('@/views/network/PublicIPPage'), 'PublicIPPage')
+const SecurityGroupPage = lazyPage(
+  () => import('@/views/network/SecurityGroupPage'),
+  'SecurityGroupPage',
+)
+const PortSecurityPage = lazyPage(
+  () => import('@/views/network/PortSecurityPage'),
+  'PortSecurityPage',
+)
+const HostFirewallPage = lazyPage(
+  () => import('@/views/network/HostFirewallPage'),
+  'HostFirewallPage',
+)
+const FirewallPage = lazyPage(() => import('@/views/network/FirewallPage'), 'FirewallPage')
+const PortMirrorPage = lazyPage(() => import('@/views/network/PortMirrorPage'), 'PortMirrorPage')
+const PassthroughPage = lazyPage(() => import('@/views/network/PassthroughPage'), 'PassthroughPage')
+const CapturePage = lazyPage(() => import('@/views/network/CapturePage'), 'CapturePage')
+const NodeListPage = lazyPage(() => import('@/views/node/NodeListPage'), 'NodeListPage')
+const NodeDetailPage = lazyPage(() => import('@/views/node/NodeDetailPage'), 'NodeDetailPage')
+const UserAdminPage = lazyPage(() => import('@/views/user/UserAdminPage'), 'UserAdminPage')
+const AuditLogPage = lazyPage(() => import('@/views/audit/AuditLogPage'), 'AuditLogPage')
+const QuotaPage = lazyPage(() => import('@/views/settings/QuotaPage'), 'QuotaPage')
+const ResourceQuotaPage = lazyPage(
+  () => import('@/views/settings/ResourceQuotaPage'),
+  'ResourceQuotaPage',
+)
+const SettingsPage = lazyPage(() => import('@/views/settings/SettingsPage'), 'SettingsPage')
+const SecurityPage = lazyPage(() => import('@/views/security/SecurityPage'), 'SecurityPage')
+const APIKeyPage = lazyPage(() => import('@/views/security/APIKeyPage'), 'APIKeyPage')
+const SchedulerPage = lazyPage(() => import('@/views/system/SchedulerPage'), 'SchedulerPage')
+const AlertPage = lazyPage(() => import('@/views/system/AlertPage'), 'AlertPage')
+const AboutPage = lazyPage(() => import('@/views/system/AboutPage'), 'AboutPage')
+const VersionPage = lazyPage(() => import('@/views/system/VersionPage'), 'VersionPage')
+const DiagnosticsPage = lazyPage(() => import('@/views/system/DiagnosticsPage'), 'DiagnosticsPage')
+const ApiDocsPage = lazyPage(() => import('@/views/apidocs/ApiDocsPage'), 'ApiDocsPage')
+const LogPage = lazyPage(() => import('@/views/system/LogPage'), 'LogPage')
+const HostTuningPage = lazyPage(() => import('@/views/system/HostTuningPage'), 'HostTuningPage')
+const PlatformCheckPage = lazyPage(
+  () => import('@/views/system/PlatformCheckPage'),
+  'PlatformCheckPage',
+)
+const AccessControlPage = lazyPage(
+  () => import('@/views/system/AccessControlPage'),
+  'AccessControlPage',
+)
+
+// noVNC 是控制台页面最重的一块（约 60 KB），只在独立窗口与控制台标签用得到。
 const LazyConsolePage = lazy(() =>
   import('@/views/vm/ConsolePage').then((m) => ({ default: m.ConsolePage })),
 )
@@ -64,8 +95,6 @@ function StreamFallback() {
   )
 }
 /* oxlint-enable react/only-export-components */
-import { VmListPage } from '@/views/vm/VmListPage'
-import { TrashPage } from '@/views/vm/TrashPage'
 
 import { RequireAuth } from './RequireAuth'
 import { RequireInitialized } from './RequireInitialized'
@@ -148,11 +177,8 @@ export const router = createBrowserRouter([
           { path: 'resource-quota', element: <ResourceQuotaPage /> },
           { path: 'network', element: <NetworkPage /> },
           { path: 'network/base', element: <NetworkPage2 /> },
-          // 用户管理（F-1-07）仍是占位。
-          //
-          // 保留一个**明确的占位**而不是把它藏起来：隐藏会让「这个产品没有
-          // 这个能力」与「这个能力还没做」看起来一样——前者是设计判断，
-          // 后者是欠账，对使用者是两件事。
+          // 用户管理（F-1-07）：创建 / 编辑 / 封禁 / 删除，封禁会级联处理
+          // 该用户的 SSH 与运行中虚拟机。
           { path: 'user', element: <UserAdminPage /> },
           { path: 'audit', element: <AuditLogPage /> },
           { path: 'quota', element: <QuotaPage /> },

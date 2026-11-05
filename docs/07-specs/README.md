@@ -61,10 +61,13 @@ docs/06-decisions/             不得违背既有 ADR
 | Draft | 草稿，细节仍在讨论 | 否 |
 | Ready | 已确认，无遗留疑问 | 是 |
 | In Progress | 实现中 | — |
+| Implemented | 代码已交付，验收结论随 M5 回填 | — |
 | Done | 已完成并验收 | — |
 | Cancelled | 已取消 | 否 |
 
 **规则**：状态不是 `Ready` 的规格，AI **不应**开始实现，应先澄清疑问。
+
+**验收口径**：各规格 §7 的 `- [ ]` 表示**验收结论**，与「代码已实现」是两件事。勾选需要真机 / 端到端证据，按 [`ROADMAP.md`](../01-product/ROADMAP.md) §5.2 的 M5 批次逐项回填；在此之前保持未勾选，不得为「看起来完成」批量打勾。当前 13 份规格的状态见 §6.1。
 
 ### 5.1 规格的演进（重要）
 
@@ -84,21 +87,21 @@ docs/06-decisions/             不得违背既有 ADR
 
 | 文件 | 功能 | 覆盖需求 | 状态 | 负责人 |
 |---|---|---|---|---|
-| [`f-6-01-node-onboarding.md`](f-6-01-node-onboarding.md) | 节点纳管与 agent 通道 | F-6-01、F-6-02 | **Ready**（7 项决策见 §9） | <!-- TODO --> |
-| [`f-6-08-agent.md`](f-6-08-agent.md) | 节点 agent（真实通道与领域执行，P0 已交付 / P1~P5 分期） | F-6-08 | **生效中** | <!-- TODO --> |
-| [`f-1-01-auth-session.md`](f-1-01-auth-session.md) | 本地账号登录与会话令牌 | F-1-01、F-1-02 | **Ready**（8 项决策见 §9） | <!-- TODO --> |
-| [`f-1-06-authorization.md`](f-1-06-authorization.md) | 授权与资源归属 | F-1-06、F-1-09 | **Ready**（8 项决策见 §9） | <!-- TODO --> |
-| [`f-7-01-task-queue.md`](f-7-01-task-queue.md) | 异步任务队列、任务中心与实时通道 | F-7-01、F-7-02、F-7-03 | **Ready**（11 项决策见 §9） | <!-- TODO --> |
-| [`f-5-01-storage-pool.md`](f-5-01-storage-pool.md) | 存储池管理 | F-5-01 | **Ready**（9 项决策见 §9） | <!-- TODO --> |
-| [`f-4-01-network-backend.md`](f-4-01-network-backend.md) | 网络后端抽象与能力降级 | F-4-01 | **Ready**（9 项决策见 §9） | <!-- TODO --> |
-| [`f-2-02-vm-create.md`](f-2-02-vm-create.md) | 虚拟机创建向导 | F-2-02 | **Ready**（9 项决策见 §9） | <!-- TODO --> |
-| [`f-2-01-vm-list.md`](f-2-01-vm-list.md) | 虚拟机列表、详情与电源操作 | F-2-01、F-2-03、F-2-04 | **Ready**（9 项决策见 §9） | <!-- TODO --> |
-| [`f-2-08-vnc-console.md`](f-2-08-vnc-console.md) | 虚拟机 VNC 控制台 | F-2-08 | **Ready**（10 项决策见 §9） | <!-- TODO --> |
-| [`f-10-01-high-risk-verification.md`](f-10-01-high-risk-verification.md) | 高风险操作二次验证 | F-10-01、F-10-02 | **Ready**（10 项决策见 §9） | <!-- TODO --> |
-| [`f-9-01-system-settings.md`](f-9-01-system-settings.md) | 系统设置 | F-9-01 | **Ready**（10 项决策见 §9） | <!-- TODO --> |
-| [`web-vm-detail-split.md`](web-vm-detail-split.md) | 虚拟机详情页拆分重构（**重构规格，无行为变更**） | F-2-03（行为口径见 `f-2-01`） | **Ready**（6 项决策见 §9；1 项待确认见 §8） | <!-- TODO --> |
+| [`f-6-01-node-onboarding.md`](f-6-01-node-onboarding.md) | 节点纳管与 agent 通道 | F-6-01、F-6-02 | **Implemented**（7 项决策见 §9） | — |
+| [`f-6-08-agent.md`](f-6-08-agent.md) | 节点 agent（真实通道与领域执行，P0 已交付 / P1~P5 分期） | F-6-08 | **In Progress** | — |
+| [`f-1-01-auth-session.md`](f-1-01-auth-session.md) | 本地账号登录与会话令牌 | F-1-01、F-1-02 | **Implemented**（8 项决策见 §9） | — |
+| [`f-1-06-authorization.md`](f-1-06-authorization.md) | 授权与资源归属 | F-1-06、F-1-09 | **Implemented**（8 项决策见 §9） | — |
+| [`f-7-01-task-queue.md`](f-7-01-task-queue.md) | 异步任务队列、任务中心与实时通道 | F-7-01、F-7-02、F-7-03 | **Implemented**（11 项决策见 §9） | — |
+| [`f-5-01-storage-pool.md`](f-5-01-storage-pool.md) | 存储池管理 | F-5-01 | **Implemented**（9 项决策见 §9） | — |
+| [`f-4-01-network-backend.md`](f-4-01-network-backend.md) | 网络后端抽象与能力降级 | F-4-01 | **Implemented**（9 项决策见 §9） | — |
+| [`f-2-02-vm-create.md`](f-2-02-vm-create.md) | 虚拟机创建向导 | F-2-02 | **Implemented**（9 项决策见 §9） | — |
+| [`f-2-01-vm-list.md`](f-2-01-vm-list.md) | 虚拟机列表、详情与电源操作 | F-2-01、F-2-03、F-2-04 | **Implemented**（9 项决策见 §9） | — |
+| [`f-2-08-vnc-console.md`](f-2-08-vnc-console.md) | 虚拟机 VNC 控制台 | F-2-08 | **Implemented**（10 项决策见 §9） | — |
+| [`f-10-01-high-risk-verification.md`](f-10-01-high-risk-verification.md) | 高风险操作二次验证 | F-10-01、F-10-02 | **Implemented**（10 项决策见 §9） | — |
+| [`f-9-01-system-settings.md`](f-9-01-system-settings.md) | 系统设置 | F-9-01 | **Implemented**（10 项决策见 §9） | — |
+| [`web-vm-detail-split.md`](web-vm-detail-split.md) | 虚拟机详情页拆分重构（**重构规格，无行为变更**） | F-2-03（行为口径见 `f-2-01`） | **Implemented**（6 项决策见 §9；Q-001 见 §8） | — |
 
-**M2 规划规格已全部创建完毕（11 / 11，均 `Ready`）**，逐项覆盖核对见 §6.2 末。
+**M2 规划规格已全部交付（11 / 11，均 `Implemented`）**，逐项覆盖核对见 §6.2 末。
 
 ### 6.2 M2 规划清单（全部完成）
 
@@ -168,7 +171,7 @@ AI 代理在实现某个功能前，应：
 1. 读取对应的规格文件，确认状态为 `Ready`。
 2. 若发现歧义、缺失或与既有 ADR 冲突，**先提出疑问**，不要自行假定。
 3. 按规格的「验收标准」编写测试，确保实现与验收一致。
-4. 实现完成后，将规格状态更新为 `Done`。
+4. 实现完成后，将规格状态更新为 `Implemented` 并同步 §6.1 清单；真机 / 端到端验收通过后再更新为 `Done`。
 
 ---
 

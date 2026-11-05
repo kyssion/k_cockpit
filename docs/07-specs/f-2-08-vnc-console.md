@@ -1,7 +1,7 @@
 # 功能规格：虚拟机 VNC 控制台
 
-- 状态：**Ready**
-- 负责人：<!-- TODO -->
+- 状态：**Implemented**
+- 负责人：—
 - 创建日期：2026-09-15
 - 覆盖需求：**F-2-08**（VNC 控制台，P0）
 - 关联：[`PRD.md`](../01-product/PRD.md) §4 域 2 · [`FRONTEND.md`](../02-architecture/FRONTEND.md) §5.3.3（控制台标签）/ §5.3.4（独立窗口）/ §6.7（懒加载预算）· [`ADR-0005`](../06-decisions/0005-control-plane-node-agent-architecture.md)（控制面不直连宿主机）· [`ADR-0006`](../06-decisions/0006-frontend-tech-stack.md)（noVNC 选型）

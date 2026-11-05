@@ -28,6 +28,8 @@ docs/
 │   ├── TESTING.md                 # 测试规范
 │   ├── GIT_WORKFLOW.md            # 分支与提交流程
 │   ├── DEPLOYMENT.md              # 部署、升级与回滚（控制面）
+│   ├── SECURITY_REVIEW.md         # 发版前安全自查记录与 M5 复查项
+│   ├── AGENT_ACCEPTANCE.md        # 真实 agent 真机验收清单与判定标准
 │   ├── TROUBLESHOOTING.md         # 排障与运维规范
 │   └── REFERENCE_*.md             # 已迁移至 08-reference/（仅保留跳转存根）
 ├── 05-ai/                         # AI 层：如何与 AI 协作
@@ -36,7 +38,7 @@ docs/
 │   └── CONTEXT.md                 # 上下文管理策略
 ├── 06-decisions/                  # 决策层：为什么这么选
 │   ├── README.md                  # ADR 说明与清单
-│   └── 0001~0006-*.md             # 架构决策记录（只增不改）
+│   └── 0001~0013-*.md             # 架构决策记录（只增不改，见 06-decisions/README.md）
 ├── 07-specs/                      # 规格层：单个功能怎么做
 │   ├── README.md                  # 规格说明、规格清单与 M2 规划顺序
 │   ├── _TEMPLATE.md               # 规格模板

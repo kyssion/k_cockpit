@@ -95,8 +95,8 @@ go run ./cmd/migrate             # 应用未执行的迁移
 | 单包测试 | `go test ./internal/handler/...` |
 | 覆盖率 | `go test -cover ./...` |
 | 数据库迁移 | `go run ./cmd/migrate`（按 `schema_migration` 去重并登记校验和；见 [`../02-architecture/DATA_MODEL.md`](../02-architecture/DATA_MODEL.md) §6） |
-| 前端依赖 / 开发 / 构建（`web/`，**尚未创建**，技术栈见 [ADR-0006](../06-decisions/0006-frontend-tech-stack.md)） | `cd web && pnpm install` / `pnpm dev`（`/api` 代理到 8080） / `pnpm build` |
-| 前端类型检查 / Lint | `cd web && pnpm typecheck` / `pnpm lint` |
+| 前端依赖 / 开发 / 构建（`web/`，技术栈见 [ADR-0006](../06-decisions/0006-frontend-tech-stack.md)） | `cd web && pnpm install` / `pnpm dev`（`/api` 代理到 8080） / `pnpm build` |
+| 前端类型检查 / Lint | `cd web && pnpm exec tsc -b` / `pnpm lint` |
 | 前端测试 | `cd web && pnpm test`（Vitest）/ `pnpm test:e2e`（Playwright） |
 
 ---
@@ -124,12 +124,17 @@ go run ./cmd/migrate             # 应用未执行的迁移
 
 | 现象 | 可能原因 | 解决方式 |
 |---|---|---|
-| <!-- TODO --> | | |
+| 接口报 `no such table` | 本地 SQLite 尚未建表或模型已变更 | 执行 `go run ./cmd/dev-init`（服务启动不做自动迁移） |
 
 ### 本地环境重置
 
 ```bash
-# TODO: 清理依赖与缓存、重建数据库的标准步骤
+# 仅用于本地开发库：会清空本地数据，生产库禁止这样操作
+rm -f data/k_cockpit.db
+go run ./cmd/dev-init
+
+# 前端依赖与构建产物
+cd web && pnpm install --frozen-lockfile && pnpm build
 ```
 
 ---

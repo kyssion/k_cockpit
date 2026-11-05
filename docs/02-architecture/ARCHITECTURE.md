@@ -1,6 +1,6 @@
 # 架构设计
 
-> 状态：草稿（**控制面 / 节点代理架构已定**，见 [ADR-0005](../06-decisions/0005-control-plane-node-agent-architecture.md)；性能与容量指标待压测补充）
+> 状态：生效（控制面 / 节点代理架构已定，见 [ADR-0005](../06-decisions/0005-control-plane-node-agent-architecture.md)；性能与容量指标随 M5 压测补充）
 > 最后更新：2026-09-15
 > 关联文档：[`TECH_STACK.md`](TECH_STACK.md) · [`DATA_MODEL.md`](DATA_MODEL.md) · [`FRONTEND.md`](FRONTEND.md) · [`../03-api/API.md`](../03-api/API.md) · [`../06-decisions/0005-control-plane-node-agent-architecture.md`](../06-decisions/0005-control-plane-node-agent-architecture.md)
 

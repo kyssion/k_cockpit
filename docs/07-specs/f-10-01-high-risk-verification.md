@@ -1,7 +1,7 @@
 # 功能规格：高风险操作二次验证
 
-- 状态：**Ready**
-- 负责人：<!-- TODO -->
+- 状态：**Implemented**
+- 负责人：—
 - 创建日期：2026-09-15
 - 覆盖需求：**F-10-01**（高风险操作二次验证，P0）、**F-10-02**（高风险操作清单与口径，P0）
 - 关联：[`PRD.md`](../01-product/PRD.md) §4 域 10 · [`FRONTEND.md`](../02-architecture/FRONTEND.md) §6.2（二次验证流程）/ §6.5（规则同源）/ §4.7（高风险确认弹窗）· [`API.md`](../03-api/API.md) §1.4（状态码）· [`CAPABILITY_MAP.md`](../01-product/CAPABILITY_MAP.md) §4（跨切面）

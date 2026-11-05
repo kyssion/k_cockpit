@@ -57,6 +57,11 @@ func RegisterBuiltins(r *Registry, opts BuiltinOptions) {
 		IntervalSeconds: int(opts.RetentionInterval.Seconds()),
 	})
 	r.Register(Info{
+		Key: KeyTaskCleanup, Name: "历史数据保留清理", Group: GroupMaintain,
+		Description:     "每小时清理终态任务及其阶段（30 天）、审计日志（1 年）与过期抓包记录（7 天或按 expires_at）。运行中与结果未知的任务一律不动；抓包文件由节点侧清理。",
+		IntervalSeconds: int(opts.RetentionInterval.Seconds()),
+	})
+	r.Register(Info{
 		Key: KeyVMMediaEject, Name: "安装介质自动弹出", Group: GroupScheduled,
 		Description:     "Windows（ConfigDrive）初始化完成、cloudbase-init 就绪后自动弹出安装介质。就绪判定由节点探测（来宾日志），未就绪的机器下一轮再看。",
 		IntervalSeconds: int(opts.MediaEjectInterval.Seconds()),

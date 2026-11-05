@@ -7,8 +7,9 @@
 // 参数覆盖面（f-2-02 下发的全部创建参数）：核心硬件（CPU/内存/热插拔/拓扑/
 // CPU 型号与限额）、机型与固件（aarch64 → virt + UEFI）、磁盘（格式/总线/
 // IOPS 限值/多盘）、网卡（型号/桥接或用户态）、显示（VNC + 显卡模型）、
-// RTC/APIC/PAE/看门狗/自启。init_mode / hostname / 初始密码属于**来宾内**
-// 的自动化（vm.guest，P5），不进域 XML。
+// RTC/APIC/PAE/看门狗/自启。init_mode / hostname / 初始密码不进域 XML：
+// 它们由独立生成的 cloud-init / ConfigDrive 介质承载（seed.go，F-2-17），
+// 建域完成后挂成第二块光驱。
 package nodeagent
 
 import (
@@ -308,7 +309,23 @@ func normalizeBootOrder(s string) string {
 	if s == "" {
 		return "hd"
 	}
-	return s
+	// 界面口径是 disk,cdrom,network，而域 XML 只认 hd/cdrom/network/fd。
+	// 不做这层翻译，创建出的定义会被 libvirt 拒绝（"unknown boot device"）。
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if d := bootDevName(p); d != "" {
+			out = append(out, d)
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return strings.Join(out, ",")
 }
 
 // uefiCandidates 返回 (loader, vars) 的 UEFI 固件路径候选。

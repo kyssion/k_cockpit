@@ -1,7 +1,7 @@
 # 功能规格：授权与资源归属
 
-- 状态：**Ready**
-- 负责人：<!-- TODO -->
+- 状态：**Implemented**
+- 负责人：—
 - 创建日期：2026-09-15
 - 覆盖需求：**F-1-06**（角色与权限模型）、**F-1-09**（资源归属）
 - 关联：[`PRD.md`](../01-product/PRD.md) §4 域 1 · [`DATA_MODEL.md`](../02-architecture/DATA_MODEL.md) §4.1 `user`（`role`）· [`API.md`](../03-api/API.md) §4（安全要求）· [`ARCHITECTURE.md`](../02-architecture/ARCHITECTURE.md) §3（身份与权限模块）

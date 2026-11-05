@@ -6,6 +6,7 @@ package nodeagent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"hash/crc32"
 	"os"
@@ -973,10 +974,39 @@ func networkCapture(ctx context.Context, op agent.Operation, report Reporter) (*
 	}}, nil
 }
 
-// vmInitReady 实现 vm.init.ready（P2 诚实占位：真实判定读来宾日志，P5）。
+// vmInitReady 实现 vm.init.ready（F-2-17）。
+//
+// 判定依据是来宾里的 cloud-init 完成标记 `/var/lib/cloud/instance/boot-finished`：
+// 它在 cloud-init 全部阶段结束后才被写出，比"拿到了 DHCP 地址"或"域已运行"
+// 都更晚，因此可以作为弹出安装介质的安全信号。
+//
+// 访问来宾文件需要 qemu-guest-agent。没有 agent 时**如实报未就绪**，而不是
+// 猜一个时间后弹出——弹早了会让还在安装的 WinPE / 安装器丢失介质。
 func vmInitReady(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
+	report(Stage{Key: "init_ready", Name: "检查初始化完成标记", Index: 1, Total: 1})
+	info := agent.InitReadyInfo{Ready: false, Detail: "来宾内尚未安装或未连通 qemu-guest-agent，无法确认初始化是否完成"}
+
+	if guestPing(ctx, op.Target) {
+		const marker = "/var/lib/cloud/instance/boot-finished"
+		out, err := agentCmd(ctx, op.Target, "guest-file-open", "path", marker, "mode", "r")
+		if err == nil {
+			var resp struct {
+				Return int `json:"return"`
+			}
+			if json.Unmarshal([]byte(out), &resp) == nil && resp.Return > 0 {
+				info.Ready = true
+				info.Detail = "cloud-init 已完成（检测到 " + marker + "）"
+				// 句柄必须关掉：每轮探测开一个不关，长时间运行会耗尽
+				// guest agent 的文件句柄表。
+				_, _ = agentCmd(ctx, op.Target, "guest-file-close", "handle", resp.Return)
+			}
+		}
+		if !info.Ready {
+			info.Detail = "尚未检测到 cloud-init 完成标记；ConfigDrive（Windows）需要来宾日志访问，暂不自动弹出安装介质"
+		}
+	}
+
 	return &agent.Result{Success: true, Data: map[string]any{
-		agent.InitReadyDataKey: agent.InitReadyInfo{Ready: false,
-			Detail: "初始化判定需要来宾日志访问（P5 来宾自动化接入）"},
+		agent.InitReadyDataKey: info,
 	}}, nil
 }

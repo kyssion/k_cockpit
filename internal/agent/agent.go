@@ -103,6 +103,19 @@ const (
 	// 参数 `mode` 取 `screenshot` 时返回**全幅截帧**（用户主动截图的场景，
 	// 预览卡的缩略图分辨率不够）；缺省为预览档。
 	OpVMConsoleFrame OpKind = "vm.console.frame"
+
+	// OpVMConsoleUpdate 把控制台配置写入域定义（F-2-08 / F-2-09）。
+	//
+	// 只落控制面库是不够的：对外暴露要求 qemu 真的监听 0.0.0.0，而监听地址
+	// 来自域 XML 的 `<graphics listen='...'>`；密码同理。没有这一步，
+	// 界面上的「已暴露 / 已改密」只是一行数据库记录。
+	OpVMConsoleUpdate OpKind = "vm.console.update"
+
+	// ConsoleUpdatePortKey 是 OpVMConsoleUpdate 结果中回传的实际端口。
+	// 0 表示由 libvirt 自动分配（当前无法在域启动前确定）。
+	ConsoleUpdatePortKey = "port"
+	// ConsoleUpdateRestartRequiredKey 表示改动需重启虚拟机才生效。
+	ConsoleUpdateRestartRequiredKey = "restart_required"
 )
 
 // StatsDataKey 是 OpVMStats 结果中承载指标的键。
@@ -110,6 +123,12 @@ const StatsDataKey = "stats"
 
 // FrameDataKey 是 OpVMConsoleFrame 结果中承载画面数据的键。
 const FrameDataKey = "frame"
+
+// CreatePrimaryMACKey 是 vm.create 结果里主网卡的 MAC 地址。
+//
+// MAC 由 libvirt 在 define 时生成；创建向导填写的静态地址要靠它落成
+// DHCP 静态租约，因此必须由节点回传，控制面不能猜。
+const CreatePrimaryMACKey = "primary_mac"
 
 // VMStats 是节点上报的一台虚拟机的运行指标。
 //

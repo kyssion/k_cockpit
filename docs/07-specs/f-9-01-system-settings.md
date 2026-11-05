@@ -1,7 +1,7 @@
 # 功能规格：系统设置
 
-- 状态：**Ready**
-- 负责人：<!-- TODO -->
+- 状态：**Implemented**
+- 负责人：—
 - 创建日期：2026-09-15
 - 覆盖需求：**F-9-01**（系统设置，P0）
 - 关联：[`PRD.md`](../01-product/PRD.md) §4 域 9 · [`FRONTEND.md`](../02-architecture/FRONTEND.md) §5.10（页面）/ §6.5（规则同源）· [`ADR-0005`](../06-decisions/0005-control-plane-node-agent-architecture.md)（宿主机级配置经 agent 写入）· [`API.md`](../03-api/API.md)

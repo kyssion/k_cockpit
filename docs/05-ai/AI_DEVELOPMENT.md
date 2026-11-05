@@ -1,7 +1,7 @@
 # AI 驱动开发规范
 
-> 状态：草稿
-> 最后更新：<!-- TODO: YYYY-MM-DD -->
+> 状态：生效
+> 最后更新：2026-11-05
 > 关联文档：[`../../AGENTS.md`](../../AGENTS.md) · [`PROMPTS.md`](PROMPTS.md) · [`CONTEXT.md`](CONTEXT.md)
 
 ---

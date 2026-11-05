@@ -58,7 +58,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `k_cockpit-agent — K Cockpit 节点代理
 
 用法：
-  k_cockpit-agent enroll -server host:port -token TOKEN [-state-dir DIR] [-id UUID]
+  k_cockpit-agent enroll -server host:port -token TOKEN [-state-dir DIR] [-id UUID] [-name NAME]
   k_cockpit-agent run    [-state-dir DIR] [-server HOST:PORT]
   k_cockpit-agent version
 
@@ -79,6 +79,7 @@ func cmdEnroll(args []string) error {
 	token := fs.String("token", "", "一次性注册令牌（面板 → 节点 → 注册令牌 生成）")
 	stateDir := fs.String("state-dir", "/var/lib/k_cockpit-agent", "身份与证书目录")
 	id := fs.String("id", "", "agent 身份（缺省生成 uuid）")
+	name := fs.String("name", "", "注册时希望使用的节点名（可选；重复 enroll 会覆盖节点名）")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -93,11 +94,12 @@ func cmdEnroll(args []string) error {
 	}
 
 	result, err := nodeagent.Enroll(context.Background(), nodeagent.EnrollInput{
-		Server:  *server,
-		Token:   *token,
-		AgentID: agentID,
-		Version: nodeagent.AgentVersionOf(),
-		TLS:     sd.EnrollTLS(),
+		Server:        *server,
+		Token:         *token,
+		AgentID:       agentID,
+		Version:       nodeagent.AgentVersionOf(),
+		RequestedName: *name,
+		TLS:           sd.EnrollTLS(),
 	})
 	if err != nil {
 		return err

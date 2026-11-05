@@ -129,7 +129,6 @@ var adminAPIRoutes = map[string]bool{
 	"DELETE /vms/:id/firewall":                  true,
 	"GET /settings/access":                      true,
 	"PUT /settings/access":                      true,
-	"GET /network/client-ip":                    true,
 	"GET /ovs/status":                           true,
 	"GET /ovs/ports":                            true,
 	"GET /ovs/leases":                           true,
@@ -256,7 +255,6 @@ var moduleLabels = map[string]string{
 	"host-tuning":        "宿主机调优",
 	"access-control":     "公网访问控制",
 	"versions":           "版本与依赖",
-	"dev":                "开发期入口",
 }
 
 // actionGlossary 把常见的动作段翻译成中文；未登记的动作原样保留。

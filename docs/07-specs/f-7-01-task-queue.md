@@ -1,7 +1,7 @@
 # 功能规格：异步任务队列、任务中心与实时通道
 
-- 状态：**Ready**
-- 负责人：<!-- TODO -->
+- 状态：**Implemented**
+- 负责人：—
 - 创建日期：2026-09-15
 - 覆盖需求：**F-7-01**（异步任务队列）、**F-7-02**（任务中心）、**F-7-03**（实时通道）
 - 关联：[`PRD.md`](../01-product/PRD.md) §4 域 7 与 §4.3 约定 1 · [`DATA_MODEL.md`](../02-architecture/DATA_MODEL.md) §4.11 `task` / §4.12 `task_stage` · [`ARCHITECTURE.md`](../02-architecture/ARCHITECTURE.md) §4.2 / §4.4 · [`FRONTEND.md`](../02-architecture/FRONTEND.md) §6.1 · [`CAPABILITY_MAP.md`](../01-product/CAPABILITY_MAP.md) §4（跨切面）

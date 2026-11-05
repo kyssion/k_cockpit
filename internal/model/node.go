@@ -69,6 +69,8 @@ type Node struct {
 	// 版本、心跳与能力上报。
 	AgentVersion    *string `gorm:"size:32"`
 	ProtocolVersion int     `gorm:"not null;default:0"`
+	// Hostname 是 agent 心跳上报的宿主机名，仅用于展示；空值表示尚未上报。
+	Hostname        string `gorm:"size:255"`
 	LastHeartbeatAt *time.Time
 	LastSeenAt      *time.Time
 	Capabilities    *string `gorm:"type:text"`

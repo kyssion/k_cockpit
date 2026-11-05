@@ -43,6 +43,15 @@ export interface EditField {
    * 做成可编辑的输入框会让人以为「勾上它就能让它跑起来」。
    */
   read_only: boolean
+  /**
+   * 节点侧尚未实现该项的在线修改，编辑页不可提交。
+   *
+   * 只在编辑表单里出现：创建向导不受影响，那些项由建域 XML 一次性落实。
+   * 没有这个标记时，用户会以为能改，提交后任务还报成功。
+   */
+  not_applied: boolean
+  /** not_applied 时的原因说明。 */
+  not_applied_reason?: string
   options?: EditOption[]
   min?: number
   max?: number

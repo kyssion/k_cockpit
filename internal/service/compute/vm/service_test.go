@@ -1117,9 +1117,9 @@ func TestUpdateConfigRejectsInvalidEnum(t *testing.T) {
 	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
 	assertAPIError(t, err, 400)
 
-	// 合法值应通过。
+	// 合法且节点侧已实现的枚举值应通过。
 	if _, err := svc.UpdateConfig(ctx, row.ID, vm.ConfigChangeRequest{
-		Changes: map[string]any{"firmware": "uefi"},
+		Changes: map[string]any{"watchdog": "poweroff"},
 	}, authz.Viewer{UserID: 7}, "alice", "10.0.0.1"); err != nil {
 		t.Errorf("合法枚举值被拒绝: %v", err)
 	}

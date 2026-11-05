@@ -1,7 +1,7 @@
 # 功能规格：虚拟机列表、详情与电源操作
 
-- 状态：**Ready**
-- 负责人：<!-- TODO -->
+- 状态：**Implemented**
+- 负责人：—
 - 创建日期：2026-09-15
 - 覆盖需求：**F-2-01**（列表与实时刷新）、**F-2-03**（详情页）、**F-2-04**（电源与生命周期）——均为 P0
 - 关联：[`PRD.md`](../01-product/PRD.md) §4 域 2 · [`FRONTEND.md`](../02-architecture/FRONTEND.md) §5.3.1（列表）/ §5.3.3（详情）/ §6.1（实时通道）· [`DATA_MODEL.md`](../02-architecture/DATA_MODEL.md) §4.6 `vm`

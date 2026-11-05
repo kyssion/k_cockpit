@@ -1,11 +1,12 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 
 import { alertApi, type AlertItem } from '@/api/alert'
 import { authApi } from '@/api/auth'
 import { Button } from '@/components/common/Button'
 import { CommandPalette } from '@/components/common/CommandPalette'
+import { PageLoading } from '@/components/common/Feedback'
 import { Icon, type IconName } from '@/components/common/Icon'
 import { RiskVerificationGate } from '@/components/risk/RiskVerificationGate'
 import { TabBar } from '@/components/common/TabBar'
@@ -347,7 +348,11 @@ export function AppLayout() {
           {/* key 跟着路径换：路由切换时内容整体轻柔上浮入场（§4.6），
               顺带保证跨页面的滚动位置重置。 */}
           <div key={location.pathname} className="animate-fade-rise">
-            <Outlet />
+            {/* 懒加载边界放在 Outlet 内层：切页时只替换内容区，
+                侧栏/标签栏/任务栏保持可见，不会整屏闪一下加载态。 */}
+            <Suspense fallback={<PageLoading />}>
+              <Outlet />
+            </Suspense>
           </div>
         </main>
 

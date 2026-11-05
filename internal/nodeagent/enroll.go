@@ -21,6 +21,8 @@ type EnrollInput struct {
 	Token   string
 	AgentID string
 	Version string
+	// RequestedName 是首次注册时希望使用的节点名；留空则由控制面保留原名称。
+	RequestedName string
 	// TLS 是 enroll 连接的 TLS 配置（StateDir.EnrollTLS：无客户端证书）。
 	TLS *tls.Config
 }
@@ -61,6 +63,7 @@ func Enroll(ctx context.Context, in EnrollInput) (*EnrollResult, error) {
 		AgentId:         in.AgentID,
 		AgentVersion:    in.Version,
 		ProtocolVersion: ProtocolVersion,
+		RequestedName:   in.RequestedName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("注册被拒绝: %w", err)
@@ -131,6 +134,7 @@ func NewRegistry() Registry {
 		agent.OpVMFloppyApply:     vmFloppyApply,
 		agent.OpVMNVRAMRepair:     vmNVRAMRepair,
 		agent.OpVMConsoleFrame:    vmConsoleFrame,
+		agent.OpVMConsoleUpdate:   vmConsoleUpdate,
 		// vm 编辑 / 纳管（P2 补全：这些操作此前未在节点侧实现）
 		agent.OpVMAdopt:            vmAdopt,
 		agent.OpVMXMLApply:         vmXMLApply,

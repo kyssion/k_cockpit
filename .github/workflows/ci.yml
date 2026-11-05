@@ -52,10 +52,15 @@ jobs:
 
       # 测试输出同步落盘：偶发失败（如某次 CI 单测红而同一提交重跑即绿）
       # 时，失败 artifact 里带着完整的 --- FAIL 行，不必再靠猜。
-      - name: 单元测试
+      # 覆盖率门禁用 Go 自带工具，不引入新依赖；25% 是「防下降」下限，
+      # 不是质量目标（当前 28.5%，含大量尚无测试的包）。
+      - name: 单元测试与覆盖率
         run: |
           set -o pipefail
-          go test ./... 2>&1 | tee /tmp/go-test.log
+          go test -coverprofile=/tmp/kc-cover.out ./... 2>&1 | tee /tmp/go-test.log
+          total=$(go tool cover -func=/tmp/kc-cover.out | awk '/^total:/ {gsub(/%/, "", $3); print $3}')
+          echo "Go 整体行覆盖率: ${total}%"
+          awk -v t="$total" 'BEGIN { if (t+0 < 25) { print "覆盖率低于 25% 门槛" > "/dev/stderr"; exit 1 } }'
 
       - name: 上传测试日志（仅失败时）
         if: failure()

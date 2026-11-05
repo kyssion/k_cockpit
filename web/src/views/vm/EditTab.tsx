@@ -131,7 +131,9 @@ export function EditTab({ vmID, onSaved }: { vmID: number; onSaved: () => void }
               // 例外（G-33）：热添加开关打开的机器，vCPU / 内存运行中可增。
               const hotOK = data.hot_addition?.[f.key] === true
               const blocked =
-                (f.requires_shutdown && blockedByStatus && !hotOK) || f.read_only
+                (f.requires_shutdown && blockedByStatus && !hotOK) ||
+                f.read_only ||
+                f.not_applied
               const statusLabel =
                 VM_STATUS_LABEL[data.current_status as VmStatus] ?? data.current_status
 
@@ -139,16 +141,20 @@ export function EditTab({ vmID, onSaved }: { vmID: number; onSaved: () => void }
               // 拆成徽标 + 提示两处反而要来回对照。
               const mode = f.read_only
                 ? '由节点上报，不可修改'
-                : f.requires_shutdown
-                  ? '需关机后修改'
-                  : '即时生效，不影响运行'
+                : f.not_applied
+                  ? '当前版本不支持在编辑页修改'
+                  : f.requires_shutdown
+                    ? '需关机后修改'
+                    : '即时生效，不影响运行'
               const hint = f.read_only
                 ? mode
-                : f.requires_shutdown && hotOK
-                  ? `当前为${statusLabel}，已开启热添加：可增加，不能减少`
-                  : f.requires_shutdown && blockedByStatus
-                    ? `当前为${statusLabel}，需关机后才能修改`
-                    : [mode, f.hint].filter(Boolean).join(' · ')
+                : f.not_applied
+                  ? (f.not_applied_reason ?? mode)
+                  : f.requires_shutdown && hotOK
+                    ? `当前为${statusLabel}，已开启热添加：可增加，不能减少`
+                    : f.requires_shutdown && blockedByStatus
+                      ? `当前为${statusLabel}，需关机后才能修改`
+                      : [mode, f.hint].filter(Boolean).join(' · ')
 
               return (
                 <FieldControl
@@ -279,7 +285,9 @@ function computeChanges(form: EditForm, draft: Record<string, string>) {
   let hasConfig = false
 
   for (const f of form.fields) {
-    if (f.read_only) continue
+    // 节点侧未实现的项不参与差异计算：即使输入框被绕过改了值，
+    // 也不该把它提交上去换回一个 422。
+    if (f.read_only || f.not_applied) continue
 
     const before = toStr(form.values[f.key])
     const after = draft[f.key] ?? ''

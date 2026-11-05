@@ -1,7 +1,7 @@
 # 功能规格：存储池管理
 
-- 状态：**Ready**
-- 负责人：<!-- TODO -->
+- 状态：**Implemented**
+- 负责人：—
 - 创建日期：2026-09-15
 - 覆盖需求：**F-5-01**（存储池管理，P0）
 - 关联：[`PRD.md`](../01-product/PRD.md) §4 域 5 · [`DATA_MODEL.md`](../02-architecture/DATA_MODEL.md) §4.4 `storage_pool` · [`ARCHITECTURE.md`](../02-architecture/ARCHITECTURE.md) §5 · [`CAPABILITY_MAP.md`](../01-product/CAPABILITY_MAP.md) §2（L0 存储底座）/ §5（运行态前提）

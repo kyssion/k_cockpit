@@ -390,8 +390,8 @@
 | API-011 | GET | `/api/v1/tasks` | 任务列表（按状态 / 类型 / 资源筛选，归属过滤） | 是 | 已实现 | F-7-02 |
 | API-012 | GET | `/api/v1/tasks/:id` | 任务详情（含参数、结果、错误与当前阶段）。**参数已脱敏**：口令、密钥、令牌不落库（R-009）。阶段**时间线**尚未实现——`task_stage` 表已在库里，但队列只写单个 `current_stage` 字符串 | 是 | 已实现（阶段时间线待补） | F-7-02 |
 | API-013 | POST | `/api/v1/tasks/:id/cancel` | 请求取消任务（下发给执行方，**已产生的副作用不回滚**） | 是 | 已实现 | F-7-02 |
-| API-014 | DELETE | `/api/v1/tasks` | 清理终态任务（拒绝含非终态） | 是 | 规划中 | F-7-02 |
-| API-015 | GET | `/api/v1/events/{channel}` | **SSE 实时通道**（`vm-list` / `vm-detail` / `tasks` / `host-metrics`） | 是 | 规划中 | F-7-03 |
+| API-014 | DELETE | `/api/v1/tasks` | 清理终态任务（拒绝含非终态）；契约由 API-299 `POST /api/v1/tasks/clear` 承接 | 是 | 已废弃 | F-7-02 |
+| API-015 | GET | `/api/v1/events/{channel}` | **SSE 实时通道**（`vm-list` / `vm-detail` / `tasks` / `host-metrics`）；契约由 API-368 `GET /api/v1/tasks/stream` 与 API-295 `GET /api/v1/settings/log/stream` 承接 | 是 | 已废弃 | F-7-03 |
 | API-016 | GET | `/api/v1/nodes/:id/disks` | 块设备清单（容量、状态标签、是否系统盘、是否含数据）；由 agent **实时探测**，不缓存 | 是（管理员） | 已实现 | F-5-01 |
 | API-017 | GET | `/api/v1/nodes/:id/storage-pools` | 该节点的存储池列表（含空间与新鲜度） | 是（管理员） | 已实现 | F-5-01 |
 | API-018 | POST | `/api/v1/storage-pools` | 创建存储池（格式化 + 挂载），返回任务标识；**高风险操作**，需二次验证 + `confirm_device_name` 逐字符一致 | 是（管理员） | 已实现 | F-5-01 |
@@ -481,12 +481,14 @@
 **状态口径**：
 
 - `已实现` = 代码中已注册且可用；
-- `规划中` = 已在功能规格中确定契约、尚未实现。
+- `规划中` = 已在功能规格中确定契约、尚未实现（当前无此类项）；
+- `已废弃` = 契约已由其它接口承接，不再实现；
+- `已实现（…）` = 主链路已实现，括号内为尚未交付的部分。
 
 > 本表**允许先于实现登记**（契约先行），但状态必须如实标注——禁止把未实现的接口标为已实现，也禁止实现后不更新状态。
 >
 > **脚手架阶段的示例接口（`/api/v1/users` 系列）已随示例模型一并移除**——它与正式表结构不兼容，留着会让"按模型自动建表"给正式表加错列。
-> 新增接口的顺序：先在功能规格（[`../07-specs/`](../07-specs/README.md)）确定契约 → 在本表登记 → 实现于 `internal/handler/` → 注册于 `internal/router/router.go`。
+> 新增接口的顺序：先在功能规格（[`../07-specs/`](../07-specs/README.md)）确定契约 → 在本表登记 → 实现于 `internal/handler/` → 注册于 `internal/router/routes_*.go`。
 
 ---
 

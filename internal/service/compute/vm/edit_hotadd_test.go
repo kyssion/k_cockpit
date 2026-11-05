@@ -90,9 +90,9 @@ func TestUpdateConfigHotAdditionRules(t *testing.T) {
 		t.Fatalf("CPU 热添加被误拒: %v", err)
 	}
 
-	// 混合提交：热改项合法，但固件仍需关机——整体拒绝。
+	// 混合提交：热改项合法，但看门狗仍需关机——整体拒绝。
 	_, err = svc.UpdateConfig(ctx, row.ID, vm.ConfigChangeRequest{
-		Changes: map[string]any{"vcpu": 4, "firmware": "uefi"},
+		Changes: map[string]any{"vcpu": 4, "watchdog": "poweroff"},
 	}, viewer, "alice", "10.0.0.1")
 	assertValidation(t, err, "关机")
 }

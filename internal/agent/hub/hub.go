@@ -291,7 +291,7 @@ func (h *Hub) onHeartbeat(ctx context.Context, nodeID int64, hb *heartbeat) {
 			capsJSON = string(b)
 		}
 	}
-	err := h.repo.UpdateNode(ctx, nodeID, map[string]any{
+	updates := map[string]any{
 		"last_heartbeat_at": now,
 		"last_seen_at":      now,
 		"agent_version":     hb.AgentVersion,
@@ -299,7 +299,13 @@ func (h *Hub) onHeartbeat(ctx context.Context, nodeID int64, hb *heartbeat) {
 		"capabilities":      capsJSON,
 		"capabilities_at":   now,
 		"status":            agent.StatusOnline,
-	})
+	}
+	// 空值不覆盖上一次的宿主机名：agent 读不到 hostname 时保留旧值，比
+	// 让节点列表里的名字周期性消失更符合「仅展示」的定位。
+	if hb.Hostname != "" {
+		updates["hostname"] = hb.Hostname
+	}
+	err := h.repo.UpdateNode(ctx, nodeID, updates)
 	if err != nil {
 		log.Printf("[agent-hub] 节点 %d 心跳落库失败: %v", nodeID, err)
 	}

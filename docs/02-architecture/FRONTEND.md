@@ -1,6 +1,6 @@
 # 前端设计
 
-> 状态：草稿（信息架构、设计系统与页面设计已定稿；**前端技术栈已定，见 [ADR-0006](../06-decisions/0006-frontend-tech-stack.md)**）
+> 状态：生效（信息架构、设计系统与页面设计已定稿；前端技术栈见 [ADR-0006](../06-decisions/0006-frontend-tech-stack.md)）
 > 最后更新：2026-09-15
 > 关联：[`../01-product/PRD.md`](../01-product/PRD.md)（功能编号 `F-x-xx`）· [`../01-product/CAPABILITY_MAP.md`](../01-product/CAPABILITY_MAP.md)（能力分层）· [`ARCHITECTURE.md`](ARCHITECTURE.md) · [`../03-api/API.md`](../03-api/API.md)
 > 对标参考：[`../08-reference/qvmconsole/capabilities.md`](../08-reference/qvmconsole/capabilities.md) §3（工作台与全局界面、设计系统与前端约定）

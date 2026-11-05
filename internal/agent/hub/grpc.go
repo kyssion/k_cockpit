@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -38,6 +39,12 @@ func (g *gateway) Register(ctx context.Context, req *agentproto.RegisterRequest)
 	if req.Token == "" {
 		return nil, status.Error(codes.InvalidArgument, "注册令牌不能为空")
 	}
+	// 协议版本必须在签发证书之前校验：让一个说不清自己版本的 agent 拿到
+	// 长期有效的 mTLS 凭据，之后只能靠吊销来收拾。
+	if !protocolVersionSupported(req.ProtocolVersion) {
+		return nil, status.Error(codes.FailedPrecondition,
+			"协议版本不受支持（当前支持 1~"+strconv.Itoa(agentProtocolVersion)+"），请对齐控制面与 agent 版本")
+	}
 	agentID := req.AgentId
 	if agentID == "" {
 		// agent 首次 enroll 未携带身份时由控制面生成；此后 agent 持久化它。
@@ -47,6 +54,20 @@ func (g *gateway) Register(ctx context.Context, req *agentproto.RegisterRequest)
 	if err != nil {
 		// 注册失败的常见原因（令牌无效/过期/已用）由 service 层给出可执行文案。
 		return nil, status.Error(codes.PermissionDenied, err.Error())
+	}
+	// requested_name 只在 agent 显式传了 -name 时才有值（默认不发），因此
+	// 重复 enroll 不会覆盖管理员改过的节点名。名字只作展示，写失败不阻断
+	// 注册，但必须记日志——否则运维会以为改名成功了。
+	if req.RequestedName != "" {
+		if !validNodeName(req.RequestedName) {
+			return nil, status.Error(codes.InvalidArgument,
+				"请求的节点名不合法（字母或数字开头，仅允许 ._-，最长 64 字符）")
+		}
+		if err := g.h.repo.UpdateNode(ctx, nodeID, map[string]any{"name": req.RequestedName}); err != nil {
+			log.Printf("[agent-hub] 节点 %d 采用注册名 %q 失败（保留原名称）: %v", nodeID, req.RequestedName, err)
+		} else {
+			nodeName = req.RequestedName
+		}
 	}
 	certPEM, keyPEM, err := g.h.certs.IssueClientCert(confirmed)
 	if err != nil {

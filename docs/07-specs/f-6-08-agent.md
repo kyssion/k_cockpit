@@ -1,7 +1,8 @@
 # F-6-08 节点 agent（真实通道与领域执行）
 
-- 状态：生效中（P0~P2 已交付；**2026-11-04 补齐**：控制面下发 120 个 OpKind、注册表 123 项，缺口 0；mock 传输与演示数据已删除，见 §2.1 与 [ADR-0013](../06-decisions/0013-remove-mock-transport.md)）
-- 关联：[f-6-01](f-6-01-node.md)（接入与通道协议）· [ADR-0005](../06-decisions/0005-control-plane-node-agent-architecture.md) · [`internal/agentproto/agent.proto`](../../internal/agentproto/agent.proto)（线上契约唯一来源）
+- 状态：In Progress（P0~P5 执行器已全量注册；全量真机验收与发布见 ROADMAP §5.2）
+- 负责人：—
+- 关联：[f-6-01](f-6-01-node-onboarding.md)（接入与通道协议）· [ADR-0005](../06-decisions/0005-control-plane-node-agent-architecture.md) · [`internal/agentproto/agent.proto`](../../internal/agentproto/agent.proto)（线上契约唯一来源）
 
 ## 1. 已交付（P0，通道骨架）
 
@@ -64,7 +65,7 @@ cleanup 波及目标侧定义与 NVRAM。跨节点分片中转（relay 循环）
 
 ### 2.1 mock 兜底项补齐（2026-11-04 完成）
 
-控制面 `internal/service` 实际下发 120 个 OpKind，`NewRegistry` 原注册 86 项；差额 37 项在 mock 下走 `Execute` 默认分支返回 `Success=true`，真实 agent 下会返回「未实现」。已按 VM → 模板 → 镜像 → 网络 → 存储/宿主分批补齐，注册表当前 **123 项，控制面引用缺口 0**。
+控制面 `internal/service` 实际下发 120 个 OpKind，`NewRegistry` 原注册 86 项；差额 37 项在 mock 下走 `Execute` 默认分支返回 `Success=true`，真实 agent 下会返回「未实现」。已按 VM → 模板 → 镜像 → 网络 → 存储/宿主分批补齐，注册表当前 **124 项，控制面引用缺口 0**（含 2026-11-04 新增的 `vm.console.update`）。
 
 **已接通（单测通过，真机待验）**：
 - VM 6 项：`vm.adopt`、`vm.xml.apply`、`vm.disk.change`、`vm.disk.resize`、`vm.disks.independent`、`vm.interface.change`
@@ -109,7 +110,7 @@ cleanup 波及目标侧定义与 NVRAM。跨节点分片中转（relay 循环）
 
 ## 3. 实现约束（继承既有决策）
 
-- agent 是**唯一直接操作 libvirt/KVM 与宿主系统**的角色（ADR-0005）；libvirt 客户端用纯 Go 实现（无 CGO，交叉编译 linux/arm64），`virsh` 命令降级。
+- agent 是**唯一直接操作 libvirt/KVM 与宿主系统**的角色（ADR-0005）；节点侧通过 `virsh` 命令操作 libvirt（无 CGO 依赖，可交叉编译 linux/arm64），命令输出由 `internal/nodeagent/sys/` 的解析器还原为结构体，真机脱敏 fixture 见 `sys/testdata/`。
 - 危险操作自带**节点侧**保险（uplink/端口镜像看门狗）；`firewall.rollback` 不允许失败；`host_firewall` 先写入后收紧。
 - 幂等收敛类操作下发期望状态而非增量；`vm.xml.apply` 校验用 libvirt 校验器；源侧迁移数据在目标确认前不删。
 - 阶段 Key 沿用既有阶段词汇（前端时间线已按此渲染）；`Total=0` 表示总数未知。

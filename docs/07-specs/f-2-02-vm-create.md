@@ -1,7 +1,7 @@
 # 功能规格：虚拟机创建向导
 
-- 状态：**Ready**
-- 负责人：<!-- TODO -->
+- 状态：**Implemented**
+- 负责人：—
 - 创建日期：2026-09-15
 - 覆盖需求：**F-2-02**（创建向导，P0）
 - 关联：[`PRD.md`](../01-product/PRD.md) §4 域 2 · [`FRONTEND.md`](../02-architecture/FRONTEND.md) §5.3.2（9 步定义与联动规则）/ §6.4（长表单）/ §6.5（规则同源）· [`ARCHITECTURE.md`](../02-architecture/ARCHITECTURE.md) §4.2（创建虚拟机流程）· [`DATA_MODEL.md`](../02-architecture/DATA_MODEL.md) §4.6 `vm` / §4.8 `vm_interface` / §4.9 `vm_credential`

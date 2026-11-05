@@ -6,6 +6,8 @@
 
 本文记录**我们相对 QVMConsole 还缺什么**，以及补齐的顺序与进度。
 
+> **状态说明（2026-11-04）**：§2 的 G-01 ~ G-28 条目停留在 2026-09-22 的基线，其「未开始」标记**已过时**——实际进度以 [`ROADMAP.md`](ROADMAP.md) 与 [`DEMO_PLAN.md`](DEMO_PLAN.md) §7 为准（G-01 ~ G-54 均已收口，对应实现见 `internal/service/{compute,network,storage,ops}` 与 `internal/nodeagent`）。本文件保留原始差距分析用于追溯，不再作为进度事实来源。
+
 **与其它文档的分工**：
 
 | 文档 | 回答 |

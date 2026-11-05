@@ -56,10 +56,17 @@ docs(architecture): 补充缓存层设计说明
 ## 4. 代码提交前检查（必做）
 
 ```bash
-# TODO: 技术栈确定后补充实际命令
-# 格式检查
-# 静态检查
-# 单元测试
+# 后端（仓库根目录）
+gofmt -l cmd internal   # 应无输出
+go vet ./...
+go test ./...
+
+# 前端
+cd web
+pnpm exec tsc -b
+pnpm lint
+pnpm test
+pnpm build
 ```
 
 提交前必须保证：

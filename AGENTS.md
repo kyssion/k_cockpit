@@ -12,9 +12,9 @@
 | 项目 | 内容 |
 |---|---|
 | 名称 | `k_cockpit` |
-| 一句话描述 | <!-- TODO: 一句话说明这个项目做什么 --> |
-| 当前阶段 | 初始化（Pre-alpha） |
-| 主要负责人 | <!-- TODO: 填写 owner + 联系方式 --> |
+| 一句话描述 | KVM/QEMU 多宿主机虚拟化管理控制台（控制面 + 节点 agent） |
+| 当前阶段 | M5 进行中（真实 agent 与正式发布，见 `docs/01-product/ROADMAP.md`） |
+| 主要负责人 | 未指定（由项目 owner 填写） |
 | 需求文档 | [`docs/01-product/PRD.md`](docs/01-product/PRD.md) |
 | 技术方案 | [`docs/02-architecture/ARCHITECTURE.md`](docs/02-architecture/ARCHITECTURE.md) |
 
@@ -71,8 +71,9 @@
 # 安装依赖
 go mod download
 
-# 本地开发（默认走 SQLite，无需预先准备数据库）
+# 本地开发（默认走 SQLite；服务启动不做自动迁移，首次/模型变更后需先建表）
 cp .env.example .env
+go run ./cmd/dev-init
 go run ./cmd/server
 
 # 构建

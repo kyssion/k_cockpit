@@ -9,6 +9,7 @@ package nodeagent
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"k_cockpit/internal/nodeagent/sys"
@@ -92,6 +93,101 @@ func setTagAttr(tag, attr, value string) string {
 		q = `"`
 	}
 	return tag[:end] + " " + attr + "=" + q + value + q + tag[end:]
+}
+
+// findGraphicsElement 定位指定协议的 <graphics .../> 自闭合标签。
+//
+// 返回标签在整份 XML 中的起止下标与原文。libvirt dumpxml 的 graphics
+// 始终是自闭合标签（没有子元素），因此按 "/>" 收尾即可。
+func findGraphicsElement(xml, protocol string) (start, end int, tag string, ok bool) {
+	offset := 0
+	for offset < len(xml) {
+		i := strings.Index(xml[offset:], "<graphics")
+		if i < 0 {
+			return -1, -1, "", false
+		}
+		start = offset + i
+		rest := xml[start:]
+		j := strings.Index(rest, "/>")
+		if j < 0 {
+			return -1, -1, "", false
+		}
+		tag = rest[:j+2]
+		if attrValue(tag, "type") == protocol {
+			return start, start + len(tag), tag, true
+		}
+		offset = start + len(tag)
+	}
+	return -1, -1, "", false
+}
+
+// applyConsoleGraphics 在域定义上应用一次控制台配置。
+//
+// enabled=false 删除该协议的 graphics 元素；true 时确保元素存在并更新
+// 监听地址、端口与密码。返回 changed=false 表示这次变更在 XML 上没有
+// 产生任何差异（幂等调用不该反复 define）。
+func applyConsoleGraphics(
+	xml, protocol string, enabled bool, listen string, port int, password string,
+) (string, bool) {
+	start, end, tag, found := findGraphicsElement(xml, protocol)
+
+	if !enabled {
+		if !found {
+			return xml, false
+		}
+		// 连同缩进与换行一起删掉：只删标签会留下空行，
+		// 下次 dumpxml 里多出一段空白，diff 会把它当成一次改动。
+		lineStart := start
+		for lineStart > 0 && (xml[lineStart-1] == ' ' || xml[lineStart-1] == '\t') {
+			lineStart--
+		}
+		if lineStart > 0 && xml[lineStart-1] == '\n' {
+			lineStart--
+		}
+		removeEnd := end
+		if removeEnd < len(xml) && xml[removeEnd] == '\n' {
+			removeEnd++
+		}
+		return xml[:lineStart] + xml[removeEnd:], true
+	}
+
+	if !found {
+		// 元素不存在时补一个：关闭控制台会把它删掉，重新开启必须能回来。
+		fragment := "<graphics type='" + protocol + "'"
+		if port > 0 {
+			fragment += " port='" + strconv.Itoa(port) + "' autoport='no'"
+		} else {
+			fragment += " port='-1' autoport='yes'"
+		}
+		fragment += " listen='" + listen + "'"
+		if password != "" {
+			fragment += " passwd='" + xmlEsc(password) + "'"
+		}
+		fragment += "/>"
+		i := strings.Index(xml, "</devices>")
+		if i < 0 {
+			return xml, false
+		}
+		return xml[:i] + "    " + fragment + "\n  " + xml[i:], true
+	}
+
+	newTag := setTagAttr(tag, "listen", listen)
+	if port > 0 {
+		newTag = setTagAttr(newTag, "autoport", "no")
+		newTag = setTagAttr(newTag, "port", strconv.Itoa(port))
+	} else {
+		// 端口交给 libvirt 分配：控制面没有端口时硬塞 5900 会让同宿主机上
+		// 的第二台机器起不来，而那是一个"保存成功、开机失败"的坑。
+		newTag = setTagAttr(newTag, "autoport", "yes")
+		newTag = setTagAttr(newTag, "port", "-1")
+	}
+	if password != "" {
+		newTag = setTagAttr(newTag, "passwd", xmlEsc(password))
+	}
+	if newTag == tag {
+		return xml, false
+	}
+	return xml[:start] + newTag + xml[end:], true
 }
 
 // elementText 取 <name>…</name> 的文本（用于域 XML 的域名校验）。
