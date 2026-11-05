@@ -34,7 +34,6 @@ export function FirewallPage() {
   const [nodeID, setNodeID] = useState(0)
   const [draft, setDraft] = useState<PolicyView | null>(null)
   const [whitelistText, setWhitelistText] = useState('')
-  const [regionsText, setRegionsText] = useState('')
   const [ruleOpen, setRuleOpen] = useState(false)
   const [warnings, setWarnings] = useState<string[] | null>(null)
   const [error, setError] = useState('')
@@ -74,7 +73,6 @@ export function FirewallPage() {
     if (policy.data) {
       setDraft(policy.data)
       setWhitelistText(policy.data.whitelist.join('\n'))
-      setRegionsText(policy.data.geoip_regions.join(','))
     }
   }
 
@@ -84,7 +82,6 @@ export function FirewallPage() {
         enabled: current?.enabled,
         default_action: current?.default_action,
         whitelist: splitList(whitelistText),
-        geoip_regions: splitList(regionsText),
       }),
     onSuccess: (view) => {
       setDraft(view)
@@ -253,13 +250,9 @@ export function FirewallPage() {
 
           <div className="flex flex-col gap-3">
             <WhitelistInput value={whitelistText} onChange={setWhitelistText} />
-            <Input
-              label="允许的区域（可选）"
-              value={regionsText}
-              placeholder="JP,SG —— 留空表示不按区域限制"
-              onChange={(e) => setRegionsText(e.target.value)}
-              hint="区域数据不总是准确。若你的来源被误判，你会连不上面板——把管理 IP 加进白名单。"
-            />
+            <p className="text-xs text-ink-3">
+              来源地区限制当前未实现（节点侧缺少 GeoIP 能力），因此不提供该入口；请改用上方白名单按 IP / CIDR 限制来源。
+            </p>
           </div>
 
           <div className="flex items-center justify-between gap-3">
@@ -272,7 +265,6 @@ export function FirewallPage() {
                 onClick={() => {
                   setDraft(policy.data ?? null)
                   setWhitelistText(policy.data?.whitelist.join('\n') ?? '')
-                  setRegionsText(policy.data?.geoip_regions.join(',') ?? '')
                 }}
               >
                 撤销修改

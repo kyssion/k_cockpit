@@ -102,6 +102,7 @@ NNNN-动词短语.md
 | [0011](0011-mock-power-state.md) | mock 增加电源生命周期的最小状态（修订 0007 的实现口径） | Superseded by [0013](0013-remove-mock-transport.md) | 2026-09-30 |
 | [0012](0012-layered-internal-structure.md) | internal 按层组织（router/handler/service/repository/model），取代 0010 的顶级组织方式 | Accepted | 2026-10-06 |
 | [0013](0013-remove-mock-transport.md) | 移除 mock 传输与演示数据，只保留真实 gRPC 通道 | Accepted | 2026-11-04 |
+| [0014](0014-node-channel-and-agent-lifecycle.md) | 节点间通道与 agent 生命周期（live 迁移 / relay / 证书 / 升级 / GeoIP 的待决议题） | Proposed | 2026-11-05 |
 
 > **新增 ADR 后必须在此表登记。**
 

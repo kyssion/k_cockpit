@@ -215,9 +215,9 @@ type PortForward struct {
 	// AllowedIPs 是允许访问的来源地址（逗号分隔）。
 	// 为空表示**不限制**——这是一个安全性上的重要默认，界面必须显式提示。
 	AllowedIPs *string `gorm:"type:text"`
-	// AllowedRegions 是允许的来源地区。当前**尚未生效**：它需要节点侧具备
-	// GeoIP 能力，而那一层还没实现。保留字段是为了让界面能诚实地显示
-	// 「该功能尚未生效」，而不是把它藏起来。
+	// AllowedRegions 是历史列：来源地区白名单从未接线（无写入、无下发、无
+	// 消费），已从不对外契约移除。保留列只为兼容旧数据，不做迁移删除；
+	// 若将来实现 GeoIP，需先按 ADR-0014 完成依赖准入与节点侧实现。
 	AllowedRegions *string `gorm:"size:255"`
 
 	// ⚠️ **GORM 陷阱**（同 model/schedule.go 的 Enabled）：`default:true` 时

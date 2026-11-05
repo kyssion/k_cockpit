@@ -94,6 +94,10 @@ func (h *HostFirewall) CreateRule(ctx context.Context, c *app.RequestContext) {
 		api.Fail(c, api.InvalidParameter("请求参数不合法"))
 		return
 	}
+	if len(req.GeoipRegions) > 0 {
+		api.Fail(c, api.ValidationFailed("来源地区条件（geoip_regions）尚未实现：节点侧缺少 GeoIP 能力，该条件不会生效；请改用 IP / CIDR 白名单"))
+		return
+	}
 	user := auth.CurrentUser(c)
 	info := auth.ClientInfoOf(c)
 

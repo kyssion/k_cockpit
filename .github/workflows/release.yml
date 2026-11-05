@@ -1,0 +1,69 @@
+# 发布制品流水线：**只出制品，不部署**。
+#
+# 部署目标（分发端点 / 目标主机清单 / 回滚方案）尚未确定，因此这里不写任何
+# 部署步骤；产出物按 DEPLOYMENT.md §2 的布局打包，供人工分发或后续接入。
+# 制品内容与构建参数都来自仓库既有约定，不引入新的第三方依赖。
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # 创建 Release 并上传制品
+
+jobs:
+  artifacts:
+    name: 构建并发布制品
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: 安装前端依赖并构建
+        run: |
+          pnpm --dir web install --frozen-lockfile
+          pnpm --dir web build
+
+      - name: 构建多平台产物
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          LDFLAGS="-s -w -X k_cockpit/internal/platform/version.panelVersion=${VERSION} -X k_cockpit/internal/platform/version.buildTime=${BUILD_TIME}"
+          for ARCH in amd64 arm64; do
+            OUT="dist/linux-${ARCH}"
+            mkdir -p "$OUT"
+            CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/server" ./cmd/server
+            CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/agent" ./cmd/agent
+            CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -trimpath -o "$OUT/migrate" ./cmd/migrate
+            # STATIC_DIR 默认 public；不拷前端产物会得到一个「只有 API、启动还不报错」的包。
+            cp -r web/dist "$OUT/public"
+            cp -r internal/platform/database/migrations "$OUT/migrations"
+            cp deploy/agent/k_cockpit-agent.service "$OUT/"
+            tar -czf "k_cockpit_${VERSION}_linux-${ARCH}.tar.gz" \
+              -C "$OUT" server agent migrate public migrations k_cockpit-agent.service
+          done
+          sha256sum k_cockpit_*.tar.gz > SHA256SUMS
+
+      - name: 创建 Release 并上传制品
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+        run: gh release create "$VERSION" k_cockpit_*.tar.gz SHA256SUMS --generate-notes --title "$VERSION"

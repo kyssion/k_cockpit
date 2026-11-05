@@ -523,9 +523,7 @@ type PortForwardView struct {
 	TargetPort int     `json:"target_port"`
 	// AllowedIPs 为空表示**不限制来源**。界面必须显式提示这一点。
 	AllowedIPs *string `json:"allowed_ips,omitempty"`
-	// AllowedRegions 当前尚未生效（需要节点侧 GeoIP），界面应如实标注。
-	AllowedRegions *string `json:"allowed_regions,omitempty"`
-	Enabled        bool    `json:"enabled"`
+	Enabled    bool    `json:"enabled"`
 	// Applied 为 false 表示规则尚未下发，即**当前并不生效**。
 	Applied       bool       `json:"applied"`
 	LastAppliedAt *time.Time `json:"last_applied_at,omitempty"`
@@ -555,7 +553,7 @@ func (s *Service) PortForwards(
 		out = append(out, PortForwardView{
 			ID: r.ID, Protocol: r.Protocol, HostPort: r.HostPort,
 			TargetIP: r.TargetIP, TargetPort: r.TargetPort,
-			AllowedIPs: r.AllowedIPs, AllowedRegions: r.AllowedRegions,
+			AllowedIPs:    r.AllowedIPs,
 			Enabled:       r.Enabled,
 			Applied:       r.LastAppliedAt != nil,
 			LastAppliedAt: r.LastAppliedAt,
@@ -573,6 +571,9 @@ type AddPortForwardRequest struct {
 	TargetPort int
 	// AllowedIPs 为空表示不限制来源。
 	AllowedIPs string
+	// AllowedRegions 已从对外契约移除；保留字段是为了把「直接调 API 传这个
+	// 已废弃条件」变成明确报错，而不是静默丢弃后看起来保存成功。
+	AllowedRegions string
 }
 
 // allocateHostPort 从设置的范围里取一个节点内未被占用的端口。
@@ -621,6 +622,10 @@ func (s *Service) AddPortForward(
 	ctx context.Context, vmID int64, req AddPortForwardRequest,
 	v authz.Viewer, operatorName, clientIP string,
 ) (*model.Task, error) {
+	if strings.TrimSpace(req.AllowedRegions) != "" {
+		return nil, api.ValidationFailed(
+			"来源地区白名单（allowed_regions）尚未实现：节点侧缺少 GeoIP 能力，该条件不会生效；请使用 allowed_ips")
+	}
 	vm, err := s.load(ctx, vmID, v)
 	if err != nil {
 		return nil, err

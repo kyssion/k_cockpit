@@ -1103,6 +1103,9 @@ type addPortForwardRequest struct {
 	TargetIP   string `json:"target_ip"`
 	TargetPort int    `json:"target_port"`
 	AllowedIPs string `json:"allowed_ips"`
+	// AllowedRegions 已从对外契约移除；仍显式接收是为了把「有人直接调 API
+	// 传这个字段」变成明确报错，而不是 c.Bind 静默丢弃后看起来保存成功。
+	AllowedRegions string `json:"allowed_regions"`
 }
 
 // AddPortForward 新增端口转发（API-065）。
@@ -1125,7 +1128,7 @@ func (h *VM) AddPortForward(ctx context.Context, c *app.RequestContext) {
 	t, err := h.svc.AddPortForward(ctx, id, vm.AddPortForwardRequest{
 		Protocol: req.Protocol, HostPort: req.HostPort,
 		TargetIP: req.TargetIP, TargetPort: req.TargetPort,
-		AllowedIPs: req.AllowedIPs,
+		AllowedIPs: req.AllowedIPs, AllowedRegions: req.AllowedRegions,
 	}, authz.ViewerOf(c), user.Username, info.IP)
 	if err != nil {
 		api.Fail(c, err)

@@ -37,8 +37,6 @@ export interface PortForward {
   target_port: number
   /** 为空表示**不限制来源**。界面必须显式提示这一点。 */
   allowed_ips?: string
-  /** 当前尚未生效（需要节点侧 GeoIP 能力），界面应如实标注。 */
-  allowed_regions?: string
   enabled: boolean
   /** 为 false 表示规则尚未下发，即**当前并不生效**。 */
   applied: boolean

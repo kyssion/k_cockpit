@@ -160,7 +160,8 @@ systemctl enable --now k_cockpit-agent
 
 - live 热迁移因需要节点间 libvirt 互信凭据、与 ADR-0005 冲突而**诚实阻断**（已交付 offline / warm）；
 - 跨节点迁移 relay、agent 自动升级与遥测仍待后续批次；模板 tar 包通道已接通，待真机验收；
-- 单控制面实例；多实例需先外部化会话、任务队列与实时总线。
+- **发布制品（2026-11-05）**：push `v*` tag 触发 `.github/workflows/release.yml`，产出 linux/amd64 与 arm64 两个 tarball（server / agent / migrate / public 前端产物 / migrations / agent systemd 单元）与 `SHA256SUMS`，并创建 GitHub Release。流水线**只出制品不部署**：分发端点、目标主机清单与回滚方案仍待确定，见 [ADR-0014](../06-decisions/0014-node-channel-and-agent-lifecycle.md)。
+- 单控制面实例：PostgreSQL 形态启动时会取会话级 advisory lock（`internal/platform/database/instancelock.go`），第二个实例会**明确启动失败**而不是双写。要求 `DB_MAX_OPEN_CONNS >= 2`（一条被锁独占）、连接不经 PgBouncer transaction pooling（会话级锁与它不兼容）、`ConnMaxLifetime` 大于 5 分钟的保活间隔；SQLite 本地开发形态不启用锁，仅记日志。多实例部署仍需先外部化会话、任务队列与实时总线，单实例锁**不等于**支持多实例。
 
 ## 变更记录
 
@@ -168,3 +169,4 @@ systemctl enable --now k_cockpit-agent
 |---|---|
 | 2026-09-28 | 初版：控制面的构建、安装、迁移、升级、回滚与上线清单（agent 侧待落地） |
 | 2026-11-04 | 移除 mock 传输；补充 agent 安装/enroll/systemd 章节与当前能力边界 |
+| 2026-11-05 | 补充 PostgreSQL 单实例锁的行为、连接池与 PgBouncer 约束 |

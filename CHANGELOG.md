@@ -18,6 +18,7 @@
 ## [Unreleased]
 
 ### Added
+- **第二批收口（2026-11-05）**：新增 PostgreSQL 会话级单实例锁（`instancelock.go`，SQLite 开发形态明确降级并记录约束）；新增 tag 触发的 `release.yml`（linux amd64/arm64 制品 + `SHA256SUMS`，**只出制品不部署**）；新增 [ADR-0014（Proposed）](docs/06-decisions/0014-node-channel-and-agent-lifecycle.md) 登记 live 热迁移 / relay / 证书续期 / agent 自动升级 / GeoIP 的候选方案与前置条件；GeoIP 未实现能力改为诚实阻断：端口转发 `allowed_regions` 从对外契约移除并拒绝旧字段、防火墙三个写入 `geoip_regions` 的入口明确拒绝（节点侧无消费方）、前端移除无效的地区输入。
 - **本地开发建库入口（2026-11-05）**：新增 `go run ./cmd/dev-init`，按 GORM 模型幂等建出本地 SQLite 全套表。此前 `AGENTS.md` 的「`cp .env.example .env && go run ./cmd/server`」会得到一个没有任何表的库（服务启动不做自动迁移，唯一建表入口 `cmd/e2e-init` 是 E2E 专用且拒绝已存在库）；`AGENTS.md`、`DATA_MODEL.md`、`DEVELOPMENT.md` 已同步。
 - **注册阶段协议版本校验（2026-11-05）**：`RegisterRequest.protocol_version` 此前 agent 上报、控制面不校验，proto 却承诺 N-1 兼容。现在签发证书前按 `hub.protocolVersionSupported` 拒绝不兼容版本（当前仅接受 1），补单测。
 - **注册名与宿主机名不再空转（2026-11-05）**：`k_cockpit-agent enroll -name NAME` 现在会把 `requested_name` 送到控制面用于节点命名并回显（传输层做格式校验，写失败不阻断注册）；心跳里的 `hostname` 落到 `node.hostname`（迁移 `0051`）并在节点视图带出，空值不覆盖旧值。

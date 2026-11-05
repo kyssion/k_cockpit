@@ -84,4 +84,6 @@
 
 ## 8. 明确不在本清单内（需先有决策或环境）
 
-live 热迁移需节点间通道与凭据模型的 ADR；agent 自动升级、证书续期/吊销、单实例锁、`repository` 分层属架构待办；SPICE 需节点探测上报；GeoIP 白名单需 GeoIP 能力与依赖评估；正式发布流水线需部署目标与回滚方案。这些项**不因本清单勾选而视为完成**。
+live 热迁移、跨节点 relay、agent 自动升级、证书续期 / 吊销与 GeoIP 依赖的候选方案与前置条件登记在 [ADR-0014（Proposed）](../06-decisions/0014-node-channel-and-agent-lifecycle.md)，**决策前不实现**。SPICE 需节点探测上报；`repository` 分层按域分批迁入（每域一个 commit）。
+
+已在本清单外并行落地、无需新决策的两项：**PostgreSQL 单实例锁**（`cmd/server` 启动时取会话级 advisory lock，验收项为「同库启动第二个实例应明确失败」）与 **tag 触发的发布制品流水线**（`release.yml` 只出多平台制品，不部署；部署目标与回滚方案仍待确定）。这些项**不因本清单勾选而视为完成**。

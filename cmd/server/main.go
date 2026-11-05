@@ -99,6 +99,13 @@ func main() {
 	// 最后：defer 先注册者后执行，这一条最早注册，正好最后关闭。
 	defer func() { _ = a.logger.Close() }()
 	a.openDB()
+	// 双开保护要在任何周期组件启动之前拿到；defer 注册在 stopBackground
+	// 之前，退出时先停后台再放锁，避免新实例已启动而旧实例还在写库。
+	releaseInstanceLock, err := database.AcquireInstanceLock(context.Background(), a.db, a.cfg.DB)
+	if err != nil {
+		log.Fatalf("获取单实例锁失败: %v", err)
+	}
+	defer releaseInstanceLock()
 
 	a.setupAuth()
 	a.setupAgent()

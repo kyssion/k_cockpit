@@ -2,6 +2,7 @@ package vm_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,6 +60,20 @@ func TestBindDHCPReservationCarriesMACAndBridge(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("超时：未下发 vm.staticip.change")
+	}
+}
+
+func TestAddPortForwardRejectsUnimplementedRegions(t *testing.T) {
+	svc, _, _ := newTestEnvWithClient(t, &stubClient{
+		exec: func(_ context.Context, _ agent.Operation) (*agent.Result, error) {
+			return &agent.Result{Success: true}, nil
+		},
+	})
+	_, err := svc.AddPortForward(context.Background(), 1, vm.AddPortForwardRequest{
+		Protocol: "tcp", HostPort: 8080, TargetPort: 80, AllowedRegions: "JP",
+	}, authz.Viewer{IsAdmin: true}, "tester", "127.0.0.1")
+	if err == nil || !strings.Contains(err.Error(), "尚未实现") {
+		t.Fatalf("未实现的地区白名单应明确拒绝，实际 err=%v", err)
 	}
 }
 
