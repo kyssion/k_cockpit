@@ -520,6 +520,10 @@ build/
 # 14. IDE / 编辑器
 # ------------------------------------------------------------
 
+# AI 编码工具的工作目录（会话记忆、任务与规则缓存），属本地产物，不入库
+.codebuddy/
+.workbuddy/
+
 # JetBrains (IntelliJ IDEA / WebStorm / PyCharm / GoLand ...)
 .idea/
 !.idea/.gitignore
