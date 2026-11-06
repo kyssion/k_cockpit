@@ -46,7 +46,9 @@ jobs:
         run: |
           set -euo pipefail
           BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          LDFLAGS="-s -w -X k_cockpit/internal/platform/version.panelVersion=${VERSION} -X k_cockpit/internal/platform/version.buildTime=${BUILD_TIME}"
+          # agent 的版本由 nodeagent.buildVersion 单独承载；只注入控制面的
+          # 变量会让正式包里 agent 心跳与 `agent version` 恒显示 dev。
+          LDFLAGS="-s -w -X k_cockpit/internal/platform/version.panelVersion=${VERSION} -X k_cockpit/internal/platform/version.buildTime=${BUILD_TIME} -X k_cockpit/internal/nodeagent.buildVersion=${VERSION}"
           for ARCH in amd64 arm64; do
             OUT="dist/linux-${ARCH}"
             mkdir -p "$OUT"

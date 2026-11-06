@@ -20,6 +20,11 @@ import (
 
 func newEnv(t *testing.T) (*gorm.DB, *platformcheck.Service) {
 	t.Helper()
+	return newEnvWith(t, newStubClient())
+}
+
+func newEnvWith(t *testing.T, client *stubClient) (*gorm.DB, *platformcheck.Service) {
+	t.Helper()
 	db, err := database.Open(config.DB{
 		Driver: config.DriverSQLite,
 		Path:   filepath.Join(t.TempDir(), "pc.db"),
@@ -41,7 +46,6 @@ func newEnv(t *testing.T) (*gorm.DB, *platformcheck.Service) {
 		t.Fatalf("建表失败: %v", err)
 	}
 	db.Create(&model.Node{ID: 1, Name: "node-1"})
-	client := newStubClient()
 	recorder := audit.NewRecorder(db)
 	q := task.NewQueue(db, recorder, task.Options{})
 	q.Register(platformcheck.NewExecutor(db, client))
@@ -100,6 +104,53 @@ func TestPendingNotCountedAsDrift(t *testing.T) {
 	for _, it := range result.Items {
 		if it.Target == "vnet-pending" {
 			t.Error("pending 的策略不该进入自检——它本来就还没下发")
+		}
+	}
+}
+
+// TestUnverifiableNotCountedAsDrift 覆盖节点「查不了」的情形。
+//
+// 公网 IP 绑定这类期望项在节点侧没有可定位的标识，回 Present=false 只是
+// 「没查」而不是「配置丢了」——计成偏差会让用户反复点修复且永远修不好。
+func TestUnverifiableNotCountedAsDrift(t *testing.T) {
+	client := newStubClient()
+	base := newStubClient()
+	client.exec = func(ctx context.Context, op agent.Operation) (*agent.Result, error) {
+		switch op.Kind {
+		case agent.OpPlatformCheck:
+			return &agent.Result{Success: true, Data: map[string]any{
+				agent.PlatformCheckKey: []agent.PlatformCheckResult{
+					{ID: 1, Unverifiable: true, Actual: "无法定位规则"},
+					{ID: 2, Present: false, Actual: "无对应流表"},
+				},
+			}}, nil
+		case agent.OpOVSStatus:
+			// 网络底座本身不产生偏差，Drifts 只反映期望项的判定。
+			return &agent.Result{Success: true, Data: map[string]any{
+				agent.OVSStatusKey: agent.OVSStatus{
+					Available: true, ServiceActive: true, OpenFlow13: true, MeterAvailable: true,
+				},
+			}}, nil
+		}
+		return base.Execute(ctx, op)
+	}
+	db, svc := newEnvWith(t, client)
+	seedActivePolicy(t, db, "vnet0", model.PortSecurityActive)
+	seedActivePolicy(t, db, "vnet1", model.PortSecurityActive)
+
+	result, err := svc.Check(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("自检失败: %v", err)
+	}
+	if result.Unverified != 1 {
+		t.Errorf("无法核对的项应单独计数，实际 %d", result.Unverified)
+	}
+	if result.Drifts != 1 {
+		t.Errorf("只有真正缺失的项算偏差，实际 %d", result.Drifts)
+	}
+	for _, it := range result.Items {
+		if it.Target == "vnet0" {
+			t.Error("无法核对的项不应作为偏差进入检查清单")
 		}
 	}
 }

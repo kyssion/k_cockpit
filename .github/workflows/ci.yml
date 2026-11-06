@@ -106,7 +106,7 @@ jobs:
         run: pnpm build
 
   e2e:
-    name: E2E 冒烟（Playwright，mock 栈）
+    name: E2E 冒烟（Playwright，独立控制面 + SQLite）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

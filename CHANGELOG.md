@@ -78,6 +78,8 @@
   控制面只保留 gRPC 反向长连接。测试改为每个包自写最小 stub，不再共享全局 mock。
 
 ### Fixed
+- **平台自检不再产生恒定假偏差（2026-11-05）**：节点侧 `platform.check` 此前除端口安全外一律回 `Present=false` +「随 P3 接入」，公网 IP 绑定与端口镜像会被永远报成配置丢失。现在按镜像名精确核对 OVS Mirror 行；无法按 Target 定位的项标记 `Unverifiable`，控制面单独计入 `unverified`、不计入 `drifts` 且生成不了修复项（`API.md` API-344 同步）。补节点侧与控制面两侧单元测试。
+- **发布包 agent 版本号注入（2026-11-05）**：`release.yml` 此前只注入控制面版本变量，tag 产物里 agent 心跳与 `agent version` 恒显示 `dev`；补 `-X k_cockpit/internal/nodeagent.buildVersion`（本地以 `v9.9.9-verify` 构建验证通过），并修正 CI 中已过期的「mock 栈」job 名。
 - **优雅停机补齐（2026-11-05）**：后台循环与任务队列改用同一个可取消 ctx，`stopBackground` 先取消并等待全部循环退出，再逐个调用自带 `Stop` 的组件，最后 `Queue.Stop()` 等在途任务跑完；此前 `Queue.Stop()` 从未被调用、`scheduler.Stop()` 存在却被注释误判为「没有 Stop」、6/10 个循环无人收尾。
 - **CI 覆盖率门禁与权限契约对账（2026-11-05）**：后端 CI 改用 `go test -coverprofile` 并对整体行覆盖设 25% 防下降下限（实测 28.5%，不引入新依赖）；新增 `TestAdminAPIRoutesMatchRouter` 静态比对接口文档的 admin 清单与路由 `adminOnly` 声明，并修正 `GET /network/client-ip` 被误标为管理员、移除已删除的 `dev` 模块标签。
 - **文档与配置事实校准（2026-11-05）**：13 份规格状态回填为 `Implemented` / `In Progress` 并新增状态定义与验收勾选口径（164 条 AC 仍按 M5 证据回填，不批量打勾）；8 份实质完整的草稿文档改为生效；`TECH_STACK.md` 的协议「待定」改为 gRPC + Protobuf 并标注未落地的前端选型；`API.md` 两项「规划中」改为「已废弃（由现有接口承接）」；`SECURITY_REVIEW.md` §3 改写为 M5 复查方法与待办状态；修正 `.env.example` 的 `SMTP_USER` 错名、删除 19 个无消费方的死变量并补登记实际读取的变量；`ROADMAP` / `CAPABILITY_MAP` / `README` / `AGENTS.md` / `DEVELOPMENT.md` / `CONTRIBUTING.md` 的过期表述与 TODO 一并回填。

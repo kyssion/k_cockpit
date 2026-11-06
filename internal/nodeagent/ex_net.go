@@ -158,9 +158,10 @@ func dhcpLeases(ctx context.Context, op agent.Operation, report Reporter) (*agen
 
 // platformCheck 实现 platform.check（期望状态 vs 实际状态）。
 //
-// P1 的实付校验能力以「OVS 端口存在性」为主；端口安全流表、公网 NAT 规则
-// 的深度校验随 P3 网络能力接入。此时该操作在控制面侧通常没有期望项可查
-// （那些功能尚未开通），实现保持薄而正确。
+// 逐项核对的前提是节点能按 Target 定位对象：端口安全有网口名、端口镜像
+// 有镜像名（节点侧 Mirror 行名为 kc-mir-<name>）。公网 IP 绑定只带控制面
+// 记录 id，节点规则却按公网 IP 登记，无从定位——这类项标记 Unverifiable，
+// 由控制面单独计数，避免「查不了」被当成「配置丢了」的恒定假偏差。
 func platformCheck(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	report(Stage{Key: "check", Name: "逐项核对", Index: 1, Total: 1})
 	var expectations []agent.PlatformExpectation
@@ -169,18 +170,30 @@ func platformCheck(ctx context.Context, op agent.Operation, report Reporter) (*a
 	}
 	results := make([]agent.PlatformCheckResult, 0, len(expectations))
 	for _, e := range expectations {
-		r := agent.PlatformCheckResult{ID: e.ID, Present: false, Actual: "该类别的深度校验随网络能力（P3）接入"}
+		r := agent.PlatformCheckResult{ID: e.ID}
 		switch e.Kind {
 		case "port_security":
 			// Target 是网口引用：能确认 OVS 上是否有这个口。
 			if _, err := sys.OVSInterfaceBridge(ctx, e.Target); err == nil {
 				r.Present = true
-				r.Actual = "端口存在于 OVS（流表深度校验随 P3 接入）"
+				r.Actual = "端口存在于 OVS（流表深度校验尚未接入）"
 			} else {
 				r.Actual = "OVS 上没有该端口"
 			}
+		case "port_mirror":
+			name := "kc-mir-" + e.Target
+			if mirrorRowExists(ctx, name) {
+				r.Present = true
+				r.Actual = "OVS 上存在镜像行 " + name
+			} else {
+				r.Actual = "OVS 上没有镜像行 " + name
+			}
+		case "public_ip":
+			r.Unverifiable = true
+			r.Actual = "绑定的 Target 是控制面记录 id，节点规则按公网 IP 登记，无法逐项核对"
 		default:
-			r.Actual = "该类别的校验随 " + e.Kind + " 能力分期接入"
+			r.Unverifiable = true
+			r.Actual = "节点无法按 " + e.Kind + " 的 Target 定位规则，未核对"
 		}
 		results = append(results, r)
 	}

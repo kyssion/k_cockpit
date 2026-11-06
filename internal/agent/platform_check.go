@@ -115,6 +115,11 @@ type PlatformCheck struct {
 	// 它是自检最核心的一个数字：环境缺什么是"装没装"的问题，而偏差是
 	// "我们以为它在，其实它不在"——后者不报警、不被发现，直到用户自己撞上。
 	Drifts int
+	// Unverified 是节点**无法核对**的期望项数量。
+	//
+	// 与偏差分开：节点拿不到可定位的标识时，回答"不存在"会制造恒定假偏差，
+	// 回答"存在"则是假成功。这类项既不计入 Drifts，也不装作检查通过。
+	Unverified int
 }
 
 // CheckItem 是一项检查结果。
@@ -201,4 +206,10 @@ type PlatformCheckResult struct {
 	Present bool
 	// Actual 是对实际状态的人话描述（「无对应流表」/「已存在 3 条规则」）。
 	Actual string
+	// Unverifiable 为 true 表示节点按当前契约无法定位这条期望对应的对象。
+	//
+	// 例如公网 IP 绑定的 Target 是控制面记录 id，而节点规则按公网 IP 登记——
+	// 此时 Present=false 只代表「没查」，不代表「配置丢了」。控制面须把这类
+	// 项与偏差分开；默认 false 保证旧节点的结果仍按原语义处理。
+	Unverifiable bool
 }

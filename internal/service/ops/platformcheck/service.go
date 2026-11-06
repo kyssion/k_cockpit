@@ -137,6 +137,12 @@ func (s *Service) Check(ctx context.Context, nodeID int64) (*agent.PlatformCheck
 	out := &agent.PlatformCheck{Items: []agent.CheckItem{}}
 	for _, e := range expectations {
 		got := byID[e.ID]
+		// 节点按当前契约定位不了的对象，既不是「配置丢了」（计偏差会让用户
+		// 反复点修复），也不能装作检查通过。单独计数，不生成检查项。
+		if got.Unverifiable {
+			out.Unverified++
+			continue
+		}
 		item := agent.CheckItem{
 			Category: categoryOf(e.Kind), Target: e.Target,
 			Expected: "存在", Actual: got.Actual,
