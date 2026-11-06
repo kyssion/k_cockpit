@@ -36,8 +36,26 @@ func userAndNode(c *app.RequestContext) (userID, nodeID int64) {
 	return userID, int64(api.QueryInt(c, "node_id"))
 }
 
+// requireNodeID 校验查询参数里的 node_id 已指定；缺失时写回 400 并返回 false。
+//
+// 本组接口的 node_id 走 query（与同类 storage_volume.go 一致），不读 body：
+// QueryInt 对缺值返回 0，服务层会据此报「节点不存在」404，调用方无从分辨
+// 是自己漏传参数还是节点真的没了。与其让一个 404 去误导，不如在入口明确
+// 拒绝并给出可执行的提示。保持 userAndNode 签名不变，避免为这一个校验
+// 牵动它全部的调用点。
+func requireNodeID(c *app.RequestContext) bool {
+	if api.QueryInt(c, "node_id") > 0 {
+		return true
+	}
+	api.Fail(c, api.InvalidParameter("必须指定 node_id"))
+	return false
+}
+
 // Get 返回存储空间状态（API-140）。
 func (h *UserStorage) Get(ctx context.Context, c *app.RequestContext) {
+	if !requireNodeID(c) {
+		return
+	}
 	userID, nodeID := userAndNode(c)
 
 	view, err := h.svc.Get(ctx, userID, nodeID)
@@ -50,6 +68,9 @@ func (h *UserStorage) Get(ctx context.Context, c *app.RequestContext) {
 
 // Ensure 开通存储空间（API-141）。
 func (h *UserStorage) Ensure(ctx context.Context, c *app.RequestContext) {
+	if !requireNodeID(c) {
+		return
+	}
 	userID, nodeID := userAndNode(c)
 
 	user := auth.CurrentUser(c)
@@ -65,6 +86,9 @@ func (h *UserStorage) Ensure(ctx context.Context, c *app.RequestContext) {
 
 // ListFiles 返回文件列表（API-142）。
 func (h *UserStorage) ListFiles(ctx context.Context, c *app.RequestContext) {
+	if !requireNodeID(c) {
+		return
+	}
 	userID, nodeID := userAndNode(c)
 
 	items, err := h.svc.ListFiles(ctx, userID, nodeID, c.Query("category"))
@@ -80,6 +104,9 @@ func (h *UserStorage) DeleteFile(ctx context.Context, c *app.RequestContext) {
 	id, err := api.NamedPathID(c, "id", "文件 ID")
 	if err != nil {
 		api.Fail(c, err)
+		return
+	}
+	if !requireNodeID(c) {
 		return
 	}
 	userID, nodeID := userAndNode(c)
@@ -101,6 +128,9 @@ func (h *UserStorage) Download(ctx context.Context, c *app.RequestContext) {
 	id, err := api.NamedPathID(c, "id", "文件 ID")
 	if err != nil {
 		api.Fail(c, err)
+		return
+	}
+	if !requireNodeID(c) {
 		return
 	}
 	userID, nodeID := userAndNode(c)

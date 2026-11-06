@@ -71,10 +71,14 @@ func ContentDisposition(name string) string {
 		url.PathEscape(name)
 }
 
-// PageParams 解析分页参数并回落默认值（page=1 / page_size=20）。
+// maxPageSize 是 API.md §2 规定的每页条数上限。超过它的值一律收敛到 100，
+// 而不是原样回显并进入 SQL LIMIT：契约要能挡住 999999 这类值。
+const maxPageSize = 100
+
+// PageParams 解析分页参数并回落默认值（page=1 / page_size=20，上限 100）。
 //
-// 与 QueryInt 同一取舍：写错的分页参数回落到第一页，而不是把用户挡在
-// 一个错误页上。
+// 与 QueryInt 同一取舍：写错的分页参数回落到可用值，而不是把用户挡在
+// 一个错误页上——所以超上限也是钳制为 100，而非返回 400。
 func PageParams(c *app.RequestContext) (int, int) {
 	page, pageSize := QueryInt(c, "page"), QueryInt(c, "page_size")
 	if page <= 0 {
@@ -82,6 +86,9 @@ func PageParams(c *app.RequestContext) (int, int) {
 	}
 	if pageSize <= 0 {
 		pageSize = 20
+	}
+	if pageSize > maxPageSize {
+		pageSize = maxPageSize
 	}
 	return page, pageSize
 }

@@ -120,7 +120,11 @@ type Page struct {
 // 上限存在的理由是**这个查询没有天然的边界**：审计流水只增不减，而"全部"
 // 会在一两年后变成几十万条。给一个上限并明确告诉调用方"被截断了"，比悄悄
 // 返回前 N 条要好。
-const maxPageSize = 200
+//
+// 取 100 是为了与 API.md §2 的契约一致（第 2 轮 KNOWN-001：此前是 200，
+// 于是同一个 page_size=999999 在审计列表上返回 200 条、在别的列表上返回
+// 100 条，而文档只写了一个数）。
+const maxPageSize = 100
 
 // List 查询审计流水。
 func (s *Service) List(ctx context.Context, f Filter, v authz.Viewer) (*Page, error) {
@@ -178,6 +182,10 @@ func (s *Service) List(ctx context.Context, f Filter, v authz.Viewer) (*Page, er
 		return nil, api.Internal()
 	}
 
+	// 这里的回落与钳制是**兜底**：HTTP 入口已经用 api.PageParams 按 §2 的
+	// 契约（默认 20 / 上限 100）归一过了，所以这一段只对直接调用服务层的
+	// 场景（对账脚本、内部调用）生效。留着它不是重复，而是让"审计结果被
+	// 截断"这件事在**任何**调用路径上都不会静默发生。
 	page, size := f.Page, f.PageSize
 	if page <= 0 {
 		page = 1
@@ -212,7 +220,7 @@ func (s *Service) List(ctx context.Context, f Filter, v authz.Viewer) (*Page, er
 		Truncated: truncated,
 	}
 	if truncated {
-		out.Note = "单页最多返回 200 条，结果已截断——请缩小时间范围或增加筛选条件"
+		out.Note = "单页最多返回 100 条，结果已截断——请缩小时间范围或增加筛选条件"
 	}
 	return out, nil
 }

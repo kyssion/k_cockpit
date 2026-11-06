@@ -207,11 +207,17 @@ func (s *Service) PrecheckXML(
 		out.Errors = []string{result.Message}
 		return out, nil
 	}
-	if info, ok := result.Data[agent.VMXMLValidateKey].(agent.VMXMLValidateInfo); ok {
-		out.Valid = info.Valid
-		out.Errors = info.Errors
-		out.Warnings = info.Warnings
+	info, ok := result.Data[agent.VMXMLValidateKey].(agent.VMXMLValidateInfo)
+	if !ok {
+		// 节点回报成功却给不出可解析的校验结果：这是**内部解码/协议故障**，
+		// 不是「用户提交的 XML 非法」。绝不能留 Valid=false 静默放行——那会把
+		// 内部故障伪装成用户输入错误，还带出一条空的 422 文案。这里明确报错，
+		// 让排查看向解码器与节点返回格式，而不是让用户反复改一份本来合法的 XML。
+		return nil, api.Unavailable("节点校验结果格式异常，无法判定定义是否合法")
 	}
+	out.Valid = info.Valid
+	out.Errors = info.Errors
+	out.Warnings = info.Warnings
 	return out, nil
 }
 
@@ -237,7 +243,14 @@ func (s *Service) UpdateXML(
 		// 校验不过就不下发。**这是"改坏一台机器"的唯一防线**——在节点上
 		// 先 validate 再 define，而 define 本身是原子的（失败不改动现有
 		// 定义），因此不需要控制面自己写回滚。
-		return precheck, api.ValidationFailed("定义未通过校验：" + strings.Join(precheck.Errors, "；"))
+		reason := strings.Join(precheck.Errors, "；")
+		if reason == "" {
+			// 兜底：任何路径都不返回「有错误码、无原因」的「定义未通过校验：」。
+			// 节点判为不合法却没给明细时，说清这一点，用户/排障者才知道该去
+			// 看节点侧校验器，而不是对着空文案猜自己改坏了哪一行。
+			reason = "节点未返回校验详情"
+		}
+		return precheck, api.ValidationFailed("定义未通过校验：" + reason)
 	}
 	if precheck.Diff.Identical {
 		// 没有变化就不下发：一次 define 会触发节点侧完整的重新定义，而

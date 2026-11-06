@@ -78,6 +78,7 @@
   控制面只保留 gRPC 反向长连接。测试改为每个包自写最小 stub，不再共享全局 mock。
 
 ### Fixed
+- **第 1–2 轮 E2E 缺链修复（2026-11-06）**：`page_size` 上限钳制为 100（此前大值直接进 SQL LIMIT，分页不真收敛）；XML 写路径补校验；`my-storage` 参数校验收口；审计日志 `/api/v1/audit` 补分页（此前无分页、自钳 200 条，超过就静默截断）；并发扩缩容后 `disk_gb` 投影与节点 qcow2 实际大小对账（采集器此前只增不减，resize 并发后两侧长期分叉）。
 - **平台自检不再产生恒定假偏差（2026-11-05）**：节点侧 `platform.check` 此前除端口安全外一律回 `Present=false` +「随 P3 接入」，公网 IP 绑定与端口镜像会被永远报成配置丢失。现在按镜像名精确核对 OVS Mirror 行；无法按 Target 定位的项标记 `Unverifiable`，控制面单独计入 `unverified`、不计入 `drifts` 且生成不了修复项（`API.md` API-344 同步）。补节点侧与控制面两侧单元测试。
 - **发布包 agent 版本号注入（2026-11-05）**：`release.yml` 此前只注入控制面版本变量，tag 产物里 agent 心跳与 `agent version` 恒显示 `dev`；补 `-X k_cockpit/internal/nodeagent.buildVersion`（本地以 `v9.9.9-verify` 构建验证通过），并修正 CI 中已过期的「mock 栈」job 名。
 - **优雅停机补齐（2026-11-05）**：后台循环与任务队列改用同一个可取消 ctx，`stopBackground` 先取消并等待全部循环退出，再逐个调用自带 `Stop` 的组件，最后 `Queue.Stop()` 等在途任务跑完；此前 `Queue.Stop()` 从未被调用、`scheduler.Stop()` 存在却被注释误判为「没有 Stop」、6/10 个循环无人收尾。

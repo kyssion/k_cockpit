@@ -50,6 +50,14 @@ var typedDecoders = map[agent.OpKind]map[string]decodeFunc{
 	agent.OpVMSnapshotCreate: {"domain_name": passthroughString, "size_bytes": passthroughNumber},
 	agent.OpVMNVRAMRepair:    {agent.NVRAMDataKey: into(agent.NVRAMRepairInfo{})},
 	agent.OpVMCDROMApply:     {agent.CDROMDataKey: into(agent.CDROMInfo{})},
+	// 第 2 轮 NEW-001：执行器要读节点回传的**实测**容量（Applied / NewGB）。
+	// 漏登记时断言失败，执行器只能退回请求值——而请求值在并发扩容下
+	// 恰恰是不可信的那一个（它说的是"我想要多少"，不是"盘现在多大"）。
+	agent.OpVMDiskResize: {agent.VMDiskDataKey: into(agent.VMDiskResizeInfo{})},
+	// validate 分支回传 VMXMLValidateInfo；define 分支 Data 为空
+	//（decodeResultData 对 ""/"{}" 直接返回 nil），两个动作共用一个 Kind
+	// 不会互相干扰。漏登记会让服务层断言失败、把内部故障伪装成「XML 非法」。
+	agent.OpVMXMLApply: {agent.VMXMLValidateKey: into(agent.VMXMLValidateInfo{})},
 	// 存储（P4）
 	agent.OpStoragePoolCreate:      {"mount_path": passthroughString, agent.StatusDataKey: passthroughString},
 	agent.OpStoragePoolConfig:      {agent.PoolConfigDataKey: into(agent.PoolConfigResult{})},
@@ -91,6 +99,19 @@ var typedDecoders = map[agent.OpKind]map[string]decodeFunc{
 	agent.OpDHCPLeases:    {agent.DHCPLeasesKey: into([]agent.DHCPLease{})},
 	agent.OpPlatformCheck: {agent.PlatformCheckKey: into([]agent.PlatformCheckResult{})},
 	agent.OpMigrateAssess: {agent.MigrateAssessDataKey: into(agent.MigrateAssessInfo{})},
+	// 系统性排查补齐（第 1 轮 DEF-001 根因延伸）：以下 OpKind 的结果由服务层
+	// 以类型断言消费结构体/切片，节点侧经 JSON 往返后若未登记解码器就会退化成
+	// map[string]any / []any，断言静默失败——与 vm.xml.apply 是同一类故障。
+	// 逐条按「操作 → 键 → 节点返回类型」核对后登记，见 04-decoder-audit.md。
+	agent.OpImageImport:          {agent.ImageImportDataKey: into(agent.ImageImportInfo{})},
+	agent.OpImageParse:           {agent.ImageParseDataKey: into(agent.ImagePreview{})},
+	agent.OpTemplatePrepare:      {agent.TemplateDataKey: into(agent.TemplateInfo{})},
+	agent.OpVMAdopt:              {agent.VMAdoptDataKey: into(agent.VMAdoptInfo{})},
+	agent.OpVMGuest:              {agent.GuestDataKey: into(agent.GuestInfo{})},
+	agent.OpCaptureFetch:         {agent.CaptureContentKey: into(agent.ExportContent{})},
+	agent.OpPortSecurityPrecheck: {agent.PortSecurityPrecheckKey: into(agent.PortSecurityPrecheck{})},
+	agent.OpPublicIPPreview:      {agent.PublicIPPreviewKey: into(agent.PublicIPPreview{})},
+	agent.OpStoragePoolScan:      {agent.VolumeListKey: into([]string{})},
 }
 
 // into 返回「解码进 sample 同型结构」的解码器（sample 只用于取类型）。

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strings"
+	"sync"
 
 	"gorm.io/gorm"
 
@@ -87,6 +89,26 @@ func (s *Service) ResizeDisk(
 				"关机状态的机器，扩完之后还需要你进来宾自己扩分区。")
 	}
 
+	// **先在途检查，再入队**（第 2 轮 NEW-001）。
+	//
+	// 在此之前，同一台机器的并发扩容会各自入队一个任务，而它们都去改同一张
+	// 盘：真机上 10 个并发请求让控制面记着 3 GB，节点上却是 11 GiB。队列的
+	// 资源锁只保证这些任务**串行执行**，不阻止它们被创建——于是用户拿到 10
+	// 个"已受理"，实际只有第一个能改变容量。
+	//
+	// 锁把「检查 → 入队」做成一个原子动作：不加锁时两个请求可以同时通过
+	// 检查，然后各插一条在途任务，等于没检查。
+	resizeGuard.Lock()
+	defer resizeGuard.Unlock()
+
+	if busy, err := s.hasActiveResize(ctx, vm.ID); err != nil {
+		return nil, err
+	} else if busy {
+		// 文案要说**下一步做什么**：「已有任务」三个字本身不告诉用户该等
+		// 还是该去别处看一眼。
+		return nil, api.Conflict("该虚拟机已有扩容任务进行中，请等待完成后再试")
+	}
+
 	t, err := s.queue.Enqueue(ctx, task.Spec{
 		Type:         model.TaskVMDiskResize,
 		NodeID:       vm.NodeID,
@@ -112,11 +134,13 @@ func (s *Service) ResizeDisk(
 		return nil, err
 	}
 
-	if err := s.db.WithContext(ctx).Model(&model.VM{}).
-		Where("id = ?", vm.ID).Update("disk_gb", newGB).Error; err != nil {
-		log.Printf("[vm] 更新磁盘容量失败 id=%d: %v", vm.ID, err)
-		return nil, api.Internal()
-	}
+	// **这里不再预写 disk_gb。**
+	//
+	// 旧实现在入队之后立刻把 disk_gb 更新成 newGB，理由是"让界面马上看到
+	// 新容量"。那不是投影，是猜测：节点上那个镜像文件此刻还是原来的大小，
+	// 而 10 个并发请求会依次覆盖，最后一个说了算——于是控制面记着一个谁都
+	// 没实现过的数字。真实容量由执行器在节点确认之后写（见
+	// DiskResizeExecutor.Run），并由采集器的域扫描持续对账。
 
 	s.record(ctx, audit.Entry{
 		OperatorID: v.UserID, OperatorName: operatorName,
@@ -138,6 +162,39 @@ func (s *Service) ResizeDisk(
 	}, nil
 }
 
+// resizeGuard 串行化「检查在途扩容 → 入队」这一小段临界区。
+//
+// 它保护的**不是**磁盘操作本身（那是队列的资源锁与节点侧的事），而是控制面
+// 上的一个检查-然后-写入窗口：两个并发请求可以同时看到"没有在途任务"，然后
+// 各插一条，检查就白做了。临界区里只有一次 COUNT 和一次 INSERT，代价可以
+// 忽略；真正耗时的部分都在队列里跑。
+//
+// 单进程部署下这把锁够用。多实例部署需要的是数据库层的唯一约束（"同一 VM
+// 同时只能有一条在途扩容任务"），那不在本次范围内。
+var resizeGuard sync.Mutex
+
+// hasActiveResize 报告该虚拟机是否已有在途的扩容任务。
+//
+// unknown 也算在途：它表示「执行中但结果未知」，节点上那张盘可能正在被
+// qemu-img 改写。此时放行第二个任务，等于让两个 qemu-img 同时操作同一个
+// 镜像文件——那不只是数字不对，是可能把盘写坏。队列的资源锁同样把 unknown
+// 视为占用（见 task.hasRunningOn），这里与它保持一致。
+func (s *Service) hasActiveResize(ctx context.Context, vmID int64) (bool, error) {
+	var n int64
+	err := s.db.WithContext(ctx).Model(&model.Task{}).
+		Where("type = ? AND resource_type = ? AND resource_id = ? AND status IN ?",
+			model.TaskVMDiskResize, "vm", vmID,
+			[]string{model.TaskPending, model.TaskRunning, model.TaskUnknown}).
+		Count(&n).Error
+	if err != nil {
+		// 查不到时**不放行**：在无法确认的情况下再下发一次改盘操作，
+		// 是这里能犯的最严重的错误。
+		log.Printf("[vm] 查询在途扩容任务失败 vm=%d: %v", vmID, err)
+		return false, api.Internal()
+	}
+	return n > 0, nil
+}
+
 // DiskResizeExecutor 执行关机状态下的磁盘扩容。
 type DiskResizeExecutor struct {
 	db    *gorm.DB
@@ -152,7 +209,12 @@ func NewDiskResizeExecutor(db *gorm.DB, client agent.Client) *DiskResizeExecutor
 // Type 返回处理的任务类型。
 func (e *DiskResizeExecutor) Type() string { return model.TaskVMDiskResize }
 
-// Run 下发扩容。
+// Run 下发扩容，并在节点确认之后把**真实**容量写回投影。
+//
+// 写回是这里唯一的目的地：disk_gb 不是控制面自己的配置，而是节点事实的
+// 投影。入队时预写（旧实现）与节点回传之间隔着一次真实的 qemu-img，中间
+// 任何一步都可能不成立——所以只有执行完、拿到节点实测结果，这个数字才能
+// 被写下去。
 func (e *DiskResizeExecutor) Run(ctx context.Context, t *model.Task) error {
 	if t.Params == nil {
 		return api.Internal()
@@ -166,6 +228,8 @@ func (e *DiskResizeExecutor) Run(ctx context.Context, t *model.Task) error {
 	if t.NodeID != nil {
 		nodeID = *t.NodeID
 	}
+	requestedGB, hasRequested := numberAsInt(p["new_gb"])
+	oldGB, hasOld := numberAsInt(p["old_gb"])
 
 	result, err := e.agent.Execute(ctx, agent.Operation{
 		Kind:   agent.OpVMDiskResize,
@@ -177,23 +241,100 @@ func (e *DiskResizeExecutor) Run(ctx context.Context, t *model.Task) error {
 		return api.Unavailable("节点不可达，磁盘未扩容")
 	}
 	if !result.Success {
-		// **失败时把记录改回去。**
+		// **没有预写，所以没有要回滚的东西**（第 2 轮 NEW-001）。
 		//
-		// 与别处"失败保留状态"不同：磁盘容量是我们自己的记录，而节点上
-		// 那张盘并没有变大。留着新值会让界面显示一个不存在的容量——用户
-		// 看到"500 GB"而去来宾里找那 300 GB，找不到。
-		if newGB, ok := numberAsInt(p["new_gb"]); ok {
-			if oldGB, ok2 := numberAsInt(p["old_gb"]); ok2 {
-				if err := e.db.WithContext(ctx).Model(&model.VM{}).
-					Where("id = ? AND disk_gb = ?", t.ResourceID, newGB).
-					Update("disk_gb", oldGB).Error; err != nil {
-					log.Printf("[vm] 回滚磁盘容量失败 vm=%d: %v", t.ResourceID, err)
-				}
-			}
-		}
+		// 旧实现在这里把 disk_gb 从 new_gb 改回 old_gb——那一步的前提正是
+		// 入队时的预写。预写取消之后这段回滚不只多余，而是有害的：只要
+		// disk_gb 恰好等于 new_gb（用户先手工改过一次、或采集器已经对账到
+		// 这个值），一次失败的任务就会把一个**正确**的容量改回旧值，制造出
+		// 一个与节点不符的投影——正是这条缺陷的表现本身。
 		return api.ValidationFailed(result.Message)
 	}
+
+	realGB, ok := diskResizeOutcome(result, requestedGB, hasRequested)
+	if !ok {
+		msg := strings.TrimSpace(result.Message)
+		if msg == "" {
+			msg = "节点未确认扩容结果，磁盘容量未变更"
+		}
+		return api.ValidationFailed(msg)
+	}
+
+	e.writeBack(ctx, t, realGB, oldGB, hasOld)
 	return nil
+}
+
+// diskResizeOutcome 从节点结果里取「真实的扩容结果」。
+//
+// 优先用节点回传的 NewGB：那是它在 qemu-img 之后**实测**过的容量
+// （见 nodeagent.vmDiskResize 的 QemuImgSize 校验），而不是我们请求的值。
+// 并发扩容时请求值恰恰是最不可信的那个——10 个请求里只有第一个真正改变了
+// 文件，后面的目标值都比文件当前容量还小。
+//
+// ok 为 false 表示「没有任何可信的结论」，调用方**不得**写投影。
+func diskResizeOutcome(result *agent.Result, requestedGB int, hasRequested bool) (int, bool) {
+	info, has := result.Data[agent.VMDiskDataKey].(agent.VMDiskResizeInfo)
+	if !has {
+		// 节点没回 vm_disk（旧版 agent，或解码器未登记）：退回请求值。
+		//
+		// 这是唯一一处「相信请求而不是实测」的地方，因此必须留日志——
+		// 否则将来排查容量不符时，看不出这一次到底是实测还是猜的。
+		if !hasRequested {
+			return 0, false
+		}
+		log.Printf("[vm] 节点未返回扩容结果，按请求值回写 disk_gb=%d", requestedGB)
+		return requestedGB, true
+	}
+	if !info.Applied {
+		// 节点明确说「没扩」。此时写投影会把一次未发生的扩容记成事实。
+		return 0, false
+	}
+	if info.NewGB <= 0 {
+		// 扩了但没报容量：无法确认真实值，宁可不写，等采集器的域扫描收敛。
+		return 0, false
+	}
+	return info.NewGB, true
+}
+
+// writeBack 用**条件更新**把真实容量写回投影。
+//
+// 条件里带 old_gb（入队那一刻的容量）：扩容期间 disk_gb 可能已经被另一条
+// 路径改过——采集器的域扫描对账出真实容量，或用户又发起过一次扩容。无条件
+// Update 会把这些更正确的值覆盖成一个基于旧假设的值。
+//
+// RowsAffected == 0 表示「记录已经不是预期的样子」：此时**不覆盖**，交给
+// 采集器收敛。节点侧确实扩了，所以任务本身仍然算成功——把任务判失败会让
+// 用户以为盘没变大，从而再操作一次。
+//
+// 写库失败同样只记日志：节点上的盘已经变大了，把任务标成失败是错的结论，
+// 而投影会在下一轮域扫描（≤70s）里被纠正。
+func (e *DiskResizeExecutor) writeBack(
+	ctx context.Context, t *model.Task, realGB, oldGB int, hasOld bool,
+) {
+	var vmID int64
+	if t.ResourceID != nil {
+		vmID = *t.ResourceID
+	}
+	if vmID == 0 {
+		log.Printf("[vm] 任务 %d 缺少资源 ID，无法回写磁盘容量", t.ID)
+		return
+	}
+
+	q := e.db.WithContext(ctx).Model(&model.VM{}).Where("id = ?", vmID)
+	if hasOld {
+		q = q.Where("disk_gb = ?", oldGB)
+	}
+	res := q.Update("disk_gb", realGB)
+	if res.Error != nil {
+		log.Printf("[vm] 回写磁盘容量失败 vm=%d new=%d: %v", vmID, realGB, res.Error)
+		return
+	}
+	if res.RowsAffected == 0 && hasOld {
+		// 投影已被别的路径改过：日志里要带上 old/new，否则看不出来是
+		// 「谁赢了」——这正是这次缺陷最难查的那一部分。
+		log.Printf("[vm] 磁盘容量已被改动，跳过回写 vm=%d 期望旧值=%d 实测新值=%d",
+			vmID, oldGB, realGB)
+	}
 }
 
 func numberAsInt(v any) (int, bool) {

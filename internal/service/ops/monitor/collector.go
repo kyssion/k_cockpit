@@ -218,13 +218,28 @@ func (c *Collector) syncRuntime(ctx context.Context, node *model.Node) {
 		if exists && d.State != "" {
 			state = d.State
 		}
+		updates := map[string]any{
+			"status":         state,
+			"present":        exists,
+			"last_synced_at": now,
+		}
+		// 磁盘容量也在这里对账（第 2 轮 NEW-001）。
+		//
+		// disk_gb 与 status 是同一类东西：**节点事实的投影**，不是控制面自己
+		// 的配置。真实容量在 qemu-img 维护的镜像文件里，控制面只是记着它。
+		// 以前这一轮同步只写 status，于是任何一次失败的写回都会永久留在面板
+		// 上（真机复现：节点 11 GiB、面板 3 GB），而用户没有任何入口能把它
+		// 改回来——投影必须能自愈，否则写入路径上的每个 bug 都会变成长期
+		// 错误数据。
+		//
+		// 只在域确实存在且容量大于 0 时才写：域不存在时 d 是零值，写 0 会把
+		// 一台机器的容量清成 0——那比不更新更坏。
+		if exists && d.DiskGB > 0 {
+			updates["disk_gb"] = d.DiskGB
+		}
 		if err := c.db.WithContext(ctx).Model(&model.VM{}).
 			Where("id = ?", vms[i].ID).
-			Updates(map[string]any{
-				"status":         state,
-				"present":        exists,
-				"last_synced_at": now,
-			}).Error; err != nil {
+			Updates(updates).Error; err != nil {
 			log.Printf("[monitor] 同步 VM %d 状态失败: %v", vms[i].ID, err)
 		}
 	}

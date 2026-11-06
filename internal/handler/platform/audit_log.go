@@ -27,9 +27,16 @@ func NewAuditLog(svc *auditlog.Service) *AuditLog {
 // 之后无论谁加新的查询入口，都绕不过那一条判断——而把它写在这里，等于
 // 每加一个入口就要记得重写一遍。
 func (h *AuditLog) List(ctx context.Context, c *app.RequestContext) {
+	// 分页走统一解析（第 2 轮 KNOWN-001）。
+	//
+	// 此前这里直接读 QueryInt，于是两个行为同时偏离 API.md §2（"默认 20，
+	// 最大 100"）：不传 page_size 时落到服务层的默认 50，传 999999 时按服务层
+	// 上限 200 返回。分页是**跨域契约**，只在这一个入口另写一份解析，迟早与
+	// 别处对不上——而"这个列表的默认条数和别处不一样"几乎不会被发现。
+	pageNo, pageSize := api.PageParams(c)
 	f := auditlog.Filter{
-		Page:         api.QueryInt(c, "page"),
-		PageSize:     api.QueryInt(c, "page_size"),
+		Page:         pageNo,
+		PageSize:     pageSize,
 		OperatorID:   int64(api.QueryInt(c, "operator_id")),
 		ResourceType: c.Query("resource_type"),
 		Action:       c.Query("action"),

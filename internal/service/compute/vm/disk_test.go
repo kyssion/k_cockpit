@@ -126,10 +126,16 @@ func TestGrowSucceeds(t *testing.T) {
 		t.Error("必须标出「来宾里还要扩分区」——不提醒的话用户会以为扩容失败")
 	}
 
-	var vm model.VM
-	db.First(&vm, vid)
-	if vm.DiskGB != 200 {
-		t.Errorf("记录应更新为 200，实际 %d", vm.DiskGB)
+	// **入队之后投影不应变化**（第 2 轮 NEW-001）。
+	//
+	// 这条断言以前是反的：它要求 ResizeDisk 立刻把 disk_gb 写成 200，而那
+	// 正是缺陷本身——此刻节点上那个镜像文件还是 100 GB。真实容量由执行器在
+	// 节点确认之后写回（见 DiskResizeExecutor.Run），而这里的队列根本没启动
+	// （Enqueue 只落一条 pending 记录）。
+	var got model.VM
+	db.First(&got, vid)
+	if got.DiskGB != 100 {
+		t.Errorf("入队不应改动 disk_gb（要等节点确认），实际 %d", got.DiskGB)
 	}
 }
 
