@@ -38,13 +38,20 @@ type Alert struct {
 	NodeID *int64
 
 	// Kind 是告警种类（见 internal/alert 包的常量）。
-	Kind string `gorm:"size:32;not null"`
+	//
+	// **三列一起构成唯一键**（uniq_alert_kind_resource）：同一对象的同一种
+	// 问题只有一行。只把 resource_id 打进索引是错的——那会让「同一个 id、
+	// 不同种类」的告警互相冲突，而评估器查的是三列，查不到就 Create，
+	// 于是永远撞唯一约束、永远进不到更新分支（第 3 轮 DEF-R4-01：真机
+	// 126 次/60s 的 UNIQUE constraint failed，把 SQLite 单写者占死）。
+	// 迁移 0029 里本来就是对的三列定义，是模型漏了两列导致测试库/真库分叉。
+	Kind string `gorm:"size:32;not null;uniqueIndex:uniq_alert_kind_resource,priority:1"`
 	// Level 取值 warning / danger。
 	Level string `gorm:"size:16;not null"`
 
 	// ResourceType / ResourceID 定位到具体对象；没有单一对象时用 0。
-	ResourceType string `gorm:"size:32;not null;default:''"`
-	ResourceID   int64  `gorm:"not null;default:0;uniqueIndex:uniq_alert_kind_resource,priority:2"`
+	ResourceType string `gorm:"size:32;not null;default:'';uniqueIndex:uniq_alert_kind_resource,priority:2"`
+	ResourceID   int64  `gorm:"not null;default:0;uniqueIndex:uniq_alert_kind_resource,priority:3"`
 	ResourceName string `gorm:"size:128"`
 
 	Title  string `gorm:"size:255;not null"`

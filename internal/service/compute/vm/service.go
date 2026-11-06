@@ -166,6 +166,16 @@ type View struct {
 	// 给一个点了必然报错的按钮，只会让人以为修复失败了。
 	Firmware string `json:"firmware,omitempty"`
 
+	// Init 是「来宾是否已经可用」的明确结论（第 3 轮 DEF-R3-17）。
+	//
+	// 以前这里什么都没有：接口不返回 init，客户端拿到的就是 `{}`——用户
+	// 分不清「这台机器还在初始化」与「它永远不会就绪（来宾里没有 agent）」。
+	// 两者在界面上长得一样，而处置方式完全相反：前者该等，后者该去装 agent。
+	//
+	// 结论由控制面**已经掌握的投影**算出，不做实时探测：GET 是高频接口，
+	// 每次都去问节点会把列表页变成探测风暴。
+	Init InitView `json:"init"`
+
 	// HasConsole 表示该虚拟机是否有可用的控制台（display != none）。
 	//
 	// 为 false 时界面应隐藏控制台入口，而不是给一个点了打不开的按钮
@@ -1352,8 +1362,68 @@ func applyFilter(query *gorm.DB, f ListFilter) *gorm.DB {
 // toView 构造对外视图。
 //
 // lock 允许为 nil（未加锁，且多数虚拟机连记录都没有）。
+// InitView 是「来宾就绪」的明确结论。
+//
+// 存在的理由是一个真实的误判（第 3 轮 DEF-R3-17）：接口以前不返回这一块，
+// 客户端拿到 `{}` 之后无法区分"还在初始化"与"永远好不了"，于是要么白等，
+// 要么把一台其实只是没装 agent 的机器当成坏了。
+type InitView struct {
+	// Ready 表示来宾里的自动化能力**现在**可用（运行中 + agent 已连上）。
+	Ready bool `json:"ready"`
+	// State 是机器可读的状态：ready / starting / agent_unavailable / stopped / unknown。
+	//
+	// 与 Ready 并存是把"为什么不可用"和"可不可用"分开：只给一个布尔值的话，
+	// 用户仍然不知道该等还是该动手。
+	State string `json:"state"`
+	// Reason 是给用户看的一句话（只在未就绪时非空）。
+	Reason string `json:"reason,omitempty"`
+}
+
+// 来宾就绪状态取值。
+const (
+	InitStateReady            = "ready"
+	InitStateStarting         = "starting"
+	InitStateAgentUnavailable = "agent_unavailable"
+	InitStateStopped          = "stopped"
+	InitStateUnknown          = "unknown"
+)
+
+// initView 由虚拟机投影算出就绪结论。判据全部来自本表，不探测节点。
+func initView(vm *model.VM) InitView {
+	switch {
+	case vm.Status == model.VMStatusRunning && vm.GuestAgent:
+		return InitView{Ready: true, State: InitStateReady}
+	case vm.Status == model.VMStatusRunning:
+		// 运行中但 agent 没连上：可能是它还没起来（starting），也可能是
+		// 来宾里根本没装（agent_unavailable）。投影分不出这两者，因此
+		// 说法上要**同时**给出两种可能，而不是赌一个。
+		return InitView{
+			State: InitStateAgentUnavailable,
+			Reason: "来宾里没有可用的 QEMU Guest Agent：可能是它尚未启动，" +
+				"也可能是镜像里没有安装（来宾内改密、读 IP、就绪探测都依赖它）。" +
+				"请确认来宾已安装并启动 qemu-guest-agent",
+		}
+	case vm.Status == model.VMStatusStopped:
+		return InitView{
+			State:  InitStateStopped,
+			Reason: "虚拟机已关机，来宾自动化需要机器运行中",
+		}
+	case vm.Status == model.VMStatusUnknown:
+		return InitView{
+			State:  InitStateUnknown,
+			Reason: "虚拟机状态未知（节点可能离线），无法判断来宾是否就绪",
+		}
+	default:
+		return InitView{
+			State:  InitStateStarting,
+			Reason: "虚拟机正在启动或处于过渡状态，来宾尚未就绪",
+		}
+	}
+}
+
 func toView(vm *model.VM, lock *model.VMLock, now time.Time, threshold time.Duration) View {
 	view := View{
+		Init:         initView(vm),
 		ID:           vm.ID,
 		NodeID:       vm.NodeID,
 		Name:         vm.Name,

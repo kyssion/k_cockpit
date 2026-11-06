@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"strconv"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -359,6 +361,18 @@ func (s *Service) ChangeDisk(
 		// 按默认规则自己定），只在明确"耗尽"时才改写。
 		if info, ok := s.probePCIeSlots(ctx, vm); ok {
 			if bus, degraded := SlotFallbackFor(info); degraded {
+				// 降级会换掉设备名前缀（virtio 的 vdX → scsi 的 sdX）。
+				// 请求里显式指定了设备名时，**不能悄悄改**（第 3 轮 DEF-R3-08）：
+				// 用户会在 fstab / 脚本里引用这个名字。这里在受理阶段就拒绝并
+				// 告诉他降级后该用什么名字，而不是让节点侧抛一句"前缀不匹配"
+				// ——那句话不解释"为什么我明明请求的是 virtio"。
+				if req.Dev != "" && !devNameFitsBus(req.Dev, bus) {
+					return nil, api.InvalidParameter(fmt.Sprintf(
+						"该虚拟机的 PCIe 槽位已耗尽，本次挂载会自动降级到 %s 总线；"+
+							"你请求的设备名 %s 属于原总线，降级后应使用 %s 开头的名字（例如 %s）。"+
+							"请改用该名字，或先清理空闲槽位后重试",
+						bus, req.Dev, devPrefixOfBus(bus), devPrefixOfBus(bus)+"b"))
+				}
 				params["bus"] = bus
 				params["slot_fallback"] = true
 			}
@@ -375,10 +389,12 @@ func (s *Service) ChangeDisk(
 		if err != nil {
 			return nil, err
 		}
+		found := false
 		for i := range disks {
 			if disks[i].Dev != req.Dev {
 				continue
 			}
+			found = true
 			if disks[i].IsSystem {
 				return nil, api.ValidationFailed("系统盘不可卸载")
 			}
@@ -386,6 +402,16 @@ func (s *Service) ChangeDisk(
 				return nil, api.Conflict(
 					"该设备在运行中不支持热插拔，请先关机再卸载")
 			}
+		}
+		// **设备不存在要明确拒绝**（第 6 轮 DEF-R6-02）。
+		//
+		// 原来这个循环里没有"没匹配到"的分支：请求一个不存在的设备名时
+		// 什么都没检查，任务照常入队、节点什么都没做、接口回 200 success，
+		// `dumpxml` 前后完全一致。用户无法分辨「已经卸掉」与「本来就没有」，
+		// 而这两种情况该做的事完全不同（一个该去挂盘、一个该去查为什么没生效）。
+		// 与 shares 卸载（DEF-R3-09）同一口径：不存在 → 404。
+		if !found {
+			return nil, api.NotFound("该虚拟机上没有名为 " + req.Dev + " 的磁盘")
 		}
 
 	case agent.DiskActionBus:
@@ -587,6 +613,28 @@ func (s *Service) probePCIeSlots(ctx context.Context, vm *model.VM) (agent.PCIeI
 	}
 	info, ok := result.Data[agent.PCIeDataKey].(agent.PCIeInfo)
 	return info, ok
+}
+
+// devPrefixOfBus 返回某总线要求的数据盘设备名前缀（与节点侧同一口径）。
+func devPrefixOfBus(bus string) string {
+	switch bus {
+	case "virtio":
+		return "vd"
+	case "scsi", "sata":
+		return "sd"
+	case "ide":
+		return "hd"
+	}
+	return ""
+}
+
+// devNameFitsBus 判断设备名是否与总线匹配；总线没有固定前缀时不做限制。
+func devNameFitsBus(dev, bus string) bool {
+	want := devPrefixOfBus(bus)
+	if want == "" {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(dev), want)
 }
 
 // SlotFallbackFor 判定是否需要槽位降级，返回降级后的总线。

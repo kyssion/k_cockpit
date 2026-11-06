@@ -14,6 +14,16 @@ const OpNodeNetwork OpKind = "node.network"
 // 分支。动作由 Params["action"] 指定（create / update / delete）。
 const OpVPCSwitchChange OpKind = "vpc.switch.change"
 
+// SwitchBridgeCreatedKey 是 vpc.switch.change 结果里「这座桥是不是本任务建的」。
+//
+// 为什么需要它：控制面写记录失败（同名 / 同 VLAN）时要回滚节点侧刚建的桥，
+// 但**不能**把别人先建好的桥删掉。`ovs-vsctl --may-exist add-br` 把「本来就
+// 存在」与「刚建出来」都算成功，只有节点自己知道是哪一种，所以由它回报。
+//
+// 缺键（旧版 agent）时控制面按「不是本任务建的」处理：宁可留一座桥让用户
+// 手工清，也不要删掉一座正在承载业务的桥。
+const SwitchBridgeCreatedKey = "bridge_created"
+
 // NetworkKey 是 OpNodeNetwork 结果中承载网络后端信息的键。
 const NetworkKey = "network"
 

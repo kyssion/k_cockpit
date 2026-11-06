@@ -124,6 +124,35 @@ type ConsoleUpdate struct {
 	Exposed *bool
 }
 
+// maxVNCPasswordLen 是 VNC 协议的**硬限制**：口令最多 8 个字节。
+//
+// 这是协议决定的（RFB 的口令固定 8 字节），不是我们的偏好。超长口令 libvirt
+// 会拒绝，但拒绝的位置与说法不一致（第 3 轮 DEF-R4-02 实测）：
+//   - 未启用控制台时走另一条入口，得到 400「控制台密码最长 8 位（这是 VNC 协议的限制）」；
+//   - 已启用时口令被原样下发，libvirt 回来的是 422 加英文原文
+//     `VNC password is 18 characters long, only 8 permitted`。
+//
+// 同一个约束、两种状态码、两套文案，用户会以为是两件事。现在统一在
+// UpdateConsole 入口判一次，两条分支共用同一句话。
+//
+// **按字节计**而不是 rune：libvirt 与 RFB 都按字节数算，一个 8 字符的中文口令
+// 是 24 字节，下发必然被拒——用 rune 计数会让这条校验形同虚设。
+const maxVNCPasswordLen = 8
+
+// validateConsolePassword 校验控制台口令；非 VNC 协议不适用（SPICE 无此限制）。
+func validateConsolePassword(protocol string, pw *string) error {
+	if protocol != ConsoleProtocolVNC || pw == nil {
+		return nil
+	}
+	if len(*pw) > maxVNCPasswordLen {
+		// 沿用既有那句文案（400 / InvalidParameter）：这是**输入不合法**，
+		// 不是"服务端校验没过"。两条分支现在共用这一句。
+		return api.InvalidParameter(
+			"控制台密码最长 8 位（这是 VNC 协议的限制；按字节计算，一个中文字符算 3 位）")
+	}
+	return nil
+}
+
 // ConsoleSession 是一次控制台会话。
 type ConsoleSession struct {
 	ID        string
@@ -419,6 +448,12 @@ func (s *Service) UpdateConsole(
 	if protocol != ConsoleProtocolSPICE {
 		protocol = ConsoleProtocolVNC
 	}
+
+	// 口令长度在**入口**统一校验（第 3 轮 DEF-R4-02）：启用 / 未启用两条分支
+	// 共用同一句文案与同一个状态码。
+	if err := validateConsolePassword(protocol, req.Password); err != nil {
+		return nil, err
+	}
 	isSPICE := protocol == ConsoleProtocolSPICE
 	prefix := protocol + "_"
 
@@ -664,10 +699,11 @@ func (s *Service) setConsolePassword(ctx context.Context, vmID int64, password s
 	if password == "" {
 		return api.InvalidParameter("密码不能为空")
 	}
-	if len(password) > 8 {
-		// VNC 协议的认证在多数实现上只使用前 8 个字符，接受更长的密码
-		// 会给用户「我设了长密码」的错觉，而实际生效的只是前 8 位。
-		return api.InvalidParameter("控制台密码最长 8 位（这是 VNC 协议的限制）")
+	// 长度规则**只在这一处定义**（validateConsolePassword），这里复用而不是
+	// 再写一遍：第 3 轮 DEF-R4-02 的根因就是同一个约束散在两处（入口没校验，
+	// 这里校验，于是启用/未启用两条分支给出不同状态码与文案）。
+	if err := validateConsolePassword(ConsoleProtocolVNC, &password); err != nil {
+		return err
 	}
 	if s.encKey == nil {
 		return api.Internal()

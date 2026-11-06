@@ -25,10 +25,19 @@ func vmTemplateRebase(ctx context.Context, op agent.Operation, report Reporter) 
 	return templateReparent(ctx, report, op.Target, parent, 1, "已把 backing 切换到上级")
 }
 
-// vmTemplateFlatten 实现 template.flatten：把当前模板拉平到上级（无上级则拉成独立盘）。
+// vmTemplateFlatten 实现 template.flatten：把模板的差异**合并进自身**，产出独立盘。
+//
+// **不能把 parent 传下去**（第 3 轮 DEF-R3-03）：那样做的语义是 rebase——把
+// backing 指向某块父盘，派生链一点没变，只是换了个父。真机上表现为
+// `flatten` 之后 `qemu-img info` 的 `backing file:` 仍在，与 rebase 完全等价，
+// 于是"拉平"这个功能从来没生效过。
+//
+// 拉平 = 把整条链（父盘 + 自己的差异）合并成一份独立 qcow2：这里走
+// flattenStandalone（qemu-img convert 到临时文件 → 校验 backing 为空 →
+// 原子改名替换）。parent_disk_path 参数保留但不使用，是为了兼容老调用方
+// 与任务参数形状。
 func vmTemplateFlatten(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
-	parent := strParam(op.Params, "parent_disk_path")
-	return templateReparent(ctx, report, op.Target, parent, 1, "已拉平模板盘")
+	return templateReparent(ctx, report, op.Target, "", 1, "已拉平模板盘（不再依赖父盘）")
 }
 
 // vmTemplatePromoteChild 实现 template.promote_child：把子模板改挂到当前模板的上级。

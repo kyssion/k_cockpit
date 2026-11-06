@@ -95,30 +95,116 @@ func setTagAttr(tag, attr, value string) string {
 	return tag[:end] + " " + attr + "=" + q + value + q + tag[end:]
 }
 
-// findGraphicsElement 定位指定协议的 <graphics .../> 自闭合标签。
+// graphicsElement 是 <graphics> 元素在文档中的位置。
 //
-// 返回标签在整份 XML 中的起止下标与原文。libvirt dumpxml 的 graphics
-// 始终是自闭合标签（没有子元素），因此按 "/>" 收尾即可。
-func findGraphicsElement(xml, protocol string) (start, end int, tag string, ok bool) {
+// **必须区分「开标签」与「整段元素」**：libvirt 的 dumpxml 输出里 graphics
+// 通常**带子元素**：
+
+//	<graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1'>
+//	  <listen type='address' address='127.0.0.1'/>
+//	</graphics>
+//
+// 旧实现按第一个 "/>" 收尾，于是把内层 <listen/> 也算了进来。改属性时
+// 落到内层标签上，产出 `</input> </graphics>` 这类标签错配，define 直接被
+// libvirt 拒绝（第 3 轮 DEF-R3-18：改控制台口令 100% 失败）。
+type graphicsElement struct {
+	// start..openEnd 是开标签（含 <graphics 与收尾的 '>' 或 '/>'）。
+	start, openEnd int
+	// end 是整段元素的结束下标（自闭合 = openEnd；带子元素 = 闭标签之后）。
+	end int
+	// openTag 是开标签原文，属性修改只允许作用在它上面。
+	openTag string
+}
+
+// findGraphicsElement 定位指定协议的 graphics 元素。
+//
+// 开标签的结束位置按**引号感知**扫描（属性值里可能有 '>'），子元素按
+// `</graphics>` 收尾（graphics 不会嵌套，首个闭标签即匹配）。
+// 结构损坏时返回 false——宁可不改，也不要拼出一份更坏的定义。
+func findGraphicsElement(xmlText, protocol string) (graphicsElement, bool) {
 	offset := 0
-	for offset < len(xml) {
-		i := strings.Index(xml[offset:], "<graphics")
+	for offset < len(xmlText) {
+		i := strings.Index(xmlText[offset:], "<graphics")
 		if i < 0 {
-			return -1, -1, "", false
+			return graphicsElement{}, false
 		}
-		start = offset + i
-		rest := xml[start:]
-		j := strings.Index(rest, "/>")
+		start := offset + i
+		after := start + len("<graphics")
+		// 必须是 <graphics 后接空白或 '>'，避免匹配 <graphicsfoo
+		if after < len(xmlText) && !isSpaceOrGT(xmlText[after]) {
+			offset = after
+			continue
+		}
+		openEnd, ok := xmlTagEnd(xmlText, start)
+		if !ok {
+			return graphicsElement{}, false
+		}
+		openTag := xmlText[start:openEnd]
+		offset = openEnd
+		if attrValue(openTag, "type") != protocol {
+			continue
+		}
+
+		el := graphicsElement{start: start, openEnd: openEnd, openTag: openTag}
+		if strings.HasSuffix(strings.TrimSpace(openTag), "/>") {
+			el.end = openEnd
+			return el, true
+		}
+		j := strings.Index(xmlText[openEnd:], "</graphics>")
 		if j < 0 {
-			return -1, -1, "", false
+			return graphicsElement{}, false
 		}
-		tag = rest[:j+2]
-		if attrValue(tag, "type") == protocol {
-			return start, start + len(tag), tag, true
-		}
-		offset = start + len(tag)
+		el.end = openEnd + j + len("</graphics>")
+		return el, true
 	}
-	return -1, -1, "", false
+	return graphicsElement{}, false
+}
+
+// isSpaceOrGT 判断字符是否是标签名后的分隔符。
+func isSpaceOrGT(c byte) bool {
+	return c == '>' || c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '/'
+}
+
+// xmlTagEnd 返回从 start 起的标签结束下标（'>' 之后），跳过引号内的内容。
+func xmlTagEnd(s string, start int) (int, bool) {
+	var quote byte
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case c == '>':
+			return i + 1, true
+		}
+	}
+	return 0, false
+}
+
+// syncListenChild 把 graphics 子元素里的 <listen type='address' address='…'/>
+// 同步成目标地址。
+//
+// 为什么必须同步：libvirt 的 dumpxml 会同时写出 `listen='…'` **属性**和
+// `<listen>` **子元素**，而子元素的优先级更高。只改属性的话，界面上"对外暴露"
+// 显示成功、实际监听地址没变——一个安全相关的静默失效。
+func syncListenChild(inner, listen string) string {
+	i := strings.Index(inner, "<listen")
+	if i < 0 {
+		return inner
+	}
+	end := strings.IndexByte(inner[i:], '>')
+	if end < 0 {
+		return inner
+	}
+	tag := inner[i : i+end+1]
+	newTag := setTagAttr(tag, "address", listen)
+	if newTag == tag {
+		return inner
+	}
+	return inner[:i] + newTag + inner[i+end+1:]
 }
 
 // applyConsoleGraphics 在域定义上应用一次控制台配置。
@@ -127,28 +213,28 @@ func findGraphicsElement(xml, protocol string) (start, end int, tag string, ok b
 // 监听地址、端口与密码。返回 changed=false 表示这次变更在 XML 上没有
 // 产生任何差异（幂等调用不该反复 define）。
 func applyConsoleGraphics(
-	xml, protocol string, enabled bool, listen string, port int, password string,
+	xmlText, protocol string, enabled bool, listen string, port int, password string,
 ) (string, bool) {
-	start, end, tag, found := findGraphicsElement(xml, protocol)
+	el, found := findGraphicsElement(xmlText, protocol)
 
 	if !enabled {
 		if !found {
-			return xml, false
+			return xmlText, false
 		}
 		// 连同缩进与换行一起删掉：只删标签会留下空行，
 		// 下次 dumpxml 里多出一段空白，diff 会把它当成一次改动。
-		lineStart := start
-		for lineStart > 0 && (xml[lineStart-1] == ' ' || xml[lineStart-1] == '\t') {
+		lineStart := el.start
+		for lineStart > 0 && (xmlText[lineStart-1] == ' ' || xmlText[lineStart-1] == '\t') {
 			lineStart--
 		}
-		if lineStart > 0 && xml[lineStart-1] == '\n' {
+		if lineStart > 0 && xmlText[lineStart-1] == '\n' {
 			lineStart--
 		}
-		removeEnd := end
-		if removeEnd < len(xml) && xml[removeEnd] == '\n' {
+		removeEnd := el.end
+		if removeEnd < len(xmlText) && xmlText[removeEnd] == '\n' {
 			removeEnd++
 		}
-		return xml[:lineStart] + xml[removeEnd:], true
+		return xmlText[:lineStart] + xmlText[removeEnd:], true
 	}
 
 	if !found {
@@ -164,14 +250,15 @@ func applyConsoleGraphics(
 			fragment += " passwd='" + xmlEsc(password) + "'"
 		}
 		fragment += "/>"
-		i := strings.Index(xml, "</devices>")
+		i := strings.Index(xmlText, "</devices>")
 		if i < 0 {
-			return xml, false
+			return xmlText, false
 		}
-		return xml[:i] + "    " + fragment + "\n  " + xml[i:], true
+		return xmlText[:i] + "    " + fragment + "\n  " + xmlText[i:], true
 	}
 
-	newTag := setTagAttr(tag, "listen", listen)
+	// **只改开标签**：子元素（<listen>）原样保留，再单独同步它的地址。
+	newTag := setTagAttr(el.openTag, "listen", listen)
 	if port > 0 {
 		newTag = setTagAttr(newTag, "autoport", "no")
 		newTag = setTagAttr(newTag, "port", strconv.Itoa(port))
@@ -184,10 +271,13 @@ func applyConsoleGraphics(
 	if password != "" {
 		newTag = setTagAttr(newTag, "passwd", xmlEsc(password))
 	}
-	if newTag == tag {
-		return xml, false
+
+	inner := xmlText[el.openEnd:el.end]
+	newInner := syncListenChild(inner, listen)
+	if newTag == el.openTag && newInner == inner {
+		return xmlText, false
 	}
-	return xml[:start] + newTag + xml[end:], true
+	return xmlText[:el.start] + newTag + newInner + xmlText[el.end:], true
 }
 
 // elementText 取 <name>…</name> 的文本（用于域 XML 的域名校验）。
@@ -373,6 +463,22 @@ func addFDCController(xml string) string {
 		return xml
 	}
 	return xml[:i] + "    <controller type='fdc' index='0'/>\n  " + xml[i:]
+}
+
+// devPrefixForBus 返回某总线要求的数据盘设备名前缀。
+//
+// 空串表示"这种总线没有固定前缀"（例如 usb/sata 上的可移动介质），
+// 此时调用方不做前缀校验。
+func devPrefixForBus(bus string) string {
+	switch bus {
+	case "virtio":
+		return "vd"
+	case "scsi", "sata":
+		return "sd"
+	case "ide":
+		return "hd"
+	}
+	return ""
 }
 
 // nextFreeDevForBus 按总线类型找第一个空闲的数据盘设备名。

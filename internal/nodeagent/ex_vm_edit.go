@@ -117,7 +117,7 @@ func defineXML(ctx context.Context, xmlText string) error {
 // 节点侧没有额外的“托管集合”状态：控制面的记录就是托管集合，节点只负责
 // 提供唯一且稳定的对账键。真正的状态上报与指标采集按域扫描，不依赖标记。
 func vmAdopt(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
-	report(Stage{Key: "resolve_uuid", Name: "读取域标识", Index: 1, Total: 1})
+	report(Stage{Key: "resolve_uuid", Name: "读取域标识", Index: 1, Total: 2})
 	uuid, err := sys.DomainUUID(ctx, op.Target)
 	if err != nil {
 		return failResult("读取域 UUID 失败: " + err.Error()), nil
@@ -125,6 +125,29 @@ func vmAdopt(ctx context.Context, op agent.Operation, report Reporter) (*agent.R
 	if strings.TrimSpace(uuid) == "" {
 		return failResult("节点未返回域 UUID"), nil
 	}
+
+	// **纳管时补 guest agent 通道**（第 3 轮 DEF-R3-16）。
+	//
+	// 存量域都是在本缺陷修好之前建的，XML 里没有 channel——不补的话，纳管来的
+	// 机器来宾内改密/读 IP/就绪探测永远不可达，而"纳管成功"的提示会让用户
+	// 以为一切就绪。补的是**持久配置**（define），运行中的域要重启才生效，
+	// 这一点要在消息里说清楚。
+	report(Stage{Key: "ensure_agent_channel", Name: "补齐来宾代理通道", Index: 2, Total: 2})
+	if xmlText, err := sys.DumpXML(ctx, op.Target, false); err == nil {
+		if patched, changed := ensureGuestAgentChannel(xmlText); changed {
+			if err := defineXML(ctx, patched); err != nil {
+				return failResult("补齐来宾代理通道失败: " + err.Error()), nil
+			}
+		} else if !hasGuestAgentChannel(xmlText) {
+			// 结构不认识（不是标准 domain 定义）：不阻断纳管，但要如实说。
+			return &agent.Result{
+				Success: true,
+				Message: "节点已登记该域；未能解析域定义，来宾代理通道未补齐，请手工检查",
+				Data:    map[string]any{agent.VMAdoptDataKey: agent.VMAdoptInfo{UUID: strings.TrimSpace(uuid)}},
+			}, nil
+		}
+	}
+
 	return &agent.Result{
 		Success: true,
 		Message: "节点已登记该域",
@@ -143,6 +166,12 @@ func vmXMLApply(ctx context.Context, op agent.Operation, report Reporter) (*agen
 	if name := elementText(xmlText, "name"); name != "" && name != op.Target {
 		return failResult(fmt.Sprintf("域定义里的名称 %q 与目标 %q 不一致", name, op.Target)), nil
 	}
+
+	// 用户编辑的 XML 里通常没有 guest agent 通道（它是"看不见的"一行），
+	// 直接 define 会把通道编辑掉——那之后来宾内操作全部不可达
+	// （第 3 轮 DEF-R3-16）。因此**校验与落盘都用补齐后的这份**：让用户
+	// 看到的校验结果与最终生效的定义是同一份内容。
+	xmlText, _ = ensureGuestAgentChannel(xmlText)
 
 	path, cleanup, err := writeTempXML("xml-"+op.Target, xmlText)
 	if err != nil {
@@ -444,7 +473,32 @@ func diskAttach(ctx context.Context, op agent.Operation, report Reporter, runnin
 			return failResult("添加 virtio-scsi 控制器失败: " + err.Error()), nil
 		}
 	}
-	dev := nextFreeDevForBus(xmlText, bus)
+	// **请求里的设备名必须被采纳**（第 3 轮 DEF-R3-08）。
+	//
+	// 旧实现无条件调用 nextFreeDevForBus，于是请求 `dev=vdb` 时实际拿到
+	// `<target dev='sdb' bus='scsi'/>` —— 请求被静默改写，任务还报 success。
+	// 用户按自己请求的名字去 fstab / 脚本里引用，装完系统才发现盘名不对。
+	//
+	// 现在的规则：
+	//   - 请求为空 → 按总线找第一个空闲名（原行为）；
+	//   - 请求与总线前缀不匹配（vd↔virtio、sd↔scsi/sata、hd↔ide）→ **明确报错**
+	//     并说明本次实际会用什么总线，让用户自己决定改设备名还是换总线；
+	//   - 请求的名字已被占用 → **明确报错**（不偷偷换一个）。
+	dev := strParam(op.Params, "dev")
+	if dev == "" {
+		dev = nextFreeDevForBus(xmlText, bus)
+	} else {
+		if want := devPrefixForBus(bus); want != "" && !strings.HasPrefix(dev, want) {
+			return failResult(fmt.Sprintf(
+				"请求的设备名 %s 与本次使用的总线 %s 不匹配（%s 总线要求 %s 开头的设备名）；"+
+					"请改用 %s 开头的名字，或调整总线类型", dev, bus, bus, want, want)), nil
+		}
+		for _, d := range sys.ParseDomainDisks(xmlText) {
+			if strings.EqualFold(d.Dev, dev) {
+				return failResult("设备名 " + dev + " 已被这台虚拟机上的另一块盘占用，请换一个"), nil
+			}
+		}
+	}
 	frag := diskFragment(dev, bus, source, "qcow2")
 	path, cleanup, err := writeTempXML("disk-"+op.Target, frag)
 	if err != nil {

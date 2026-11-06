@@ -5,6 +5,7 @@ package nodeagent
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -250,6 +251,13 @@ func storageFileCommit(ctx context.Context, op agent.Operation, report Reporter)
 	relPath := strParam(op.Params, "rel_path")
 	size, _ := op.Params["size"].(float64)
 	staged := strParam(op.Params, "staged")
+	// link_from_rel 是「秒传」用到的来源相对路径（第 3 轮 DEF-R3-05）。
+	//
+	// 秒传的语义是"同一份内容登记成两条记录"，所以目标路径上**必须真的有
+	// 一份文件**。旧实现只写了 DB 记录、没有建立任何文件，于是接口回
+	// `instant=true` 与一个新 rel_path，而那个路径 `os.path.isfile=false`，
+	// 之后按它取文件、装系统、导出全部失败。
+	linkFrom := strParam(op.Params, "link_from_rel")
 
 	dst := filepath.Join(userdataRoot, relPath)
 	// relPath 带 ../ 会逃出存储根（guest 可读写宿主任意路径）——越界拒绝。
@@ -259,7 +267,16 @@ func storageFileCommit(ctx context.Context, op agent.Operation, report Reporter)
 	if err := osMkdirAllErr(filepath.Dir(dst)); err != nil {
 		return failResult(err.Error()), nil
 	}
-	if staged != "" {
+	switch {
+	case linkFrom != "":
+		src := filepath.Join(userdataRoot, linkFrom)
+		if !strings.HasPrefix(src, userdataRoot+"/") {
+			return failResult("来源路径越出用户存储根: " + linkFrom), nil
+		}
+		if err := linkOrCopyFile(src, dst); err != nil {
+			return failResult("秒传落地失败: " + err.Error()), nil
+		}
+	case staged != "":
 		if err := osRename(staged, dst); err != nil {
 			return failResult("移动暂存文件失败: " + err.Error()), nil
 		}
@@ -276,6 +293,33 @@ func storageFileCommit(ctx context.Context, op agent.Operation, report Reporter)
 			Message: "文件已落盘",
 		},
 	}}, nil
+}
+
+// linkOrCopyFile 把 src 落到 dst：优先硬链接，跨设备/不支持时回退为复制。
+//
+// 为什么优先硬链接：秒传的全部意义是"不搬字节"。同一用户存储根内的两个
+// 文件通常在同一文件系统上，硬链接是零拷贝且原子（要么有要么没有），
+// 也不会出现"复制到一半失败留下半个文件"。
+//
+// 为什么必须有复制回退：存储根可能跨设备（bind mount、独立分区、overlay
+// 与网络文件系统都不支持硬链接）。只有硬链接的话，这些环境上秒传会直接
+// 失败——而用户看到的是"上传失败"，不是"不支持秒传"。
+//
+// **目标已存在时拒绝**：秒传不该悄悄覆盖同名文件（DB 唯一约束会拒绝这条
+// 记录，若我们先覆盖了文件，等于把用户已有的内容替换掉而记录没变）。
+func linkOrCopyFile(src, dst string) error {
+	if _, err := osStat(dst); err == nil {
+		return fmt.Errorf("目标位置已存在文件: %s", filepath.Base(dst))
+	}
+	if _, err := osStat(src); err != nil {
+		return fmt.Errorf("来源文件不存在: %w", err)
+	}
+	if err := osLink(src, dst); err != nil {
+		// 跨设备（EXDEV）或不支持硬链接的文件系统：回退为复制。
+		log.Printf("[nodeagent] 硬链接失败，回退为复制 src=%s dst=%s: %v", src, dst, err)
+		return copyFileSync(src, dst)
+	}
+	return nil
 }
 
 // storageFileRead 实现 storage.file.read：按相对路径取回文件内容。
@@ -317,9 +361,42 @@ func vmShareMount(ctx context.Context, op agent.Operation, report Reporter) (*ag
 	}
 	// 域 XML 的 <filesystem> 段调整需要关机+更新定义，P2 的 XML 通道已可
 	// 完成（vm.xml.apply）；这里做源目录准备与 tag 登记。
+	//
+	// **卸载要求共享真的存在**（第 3 轮 DEF-R3-09）：原来无论 action 是什么
+	// 都直接返回 success，于是"卸载一个从未挂载过的 tag"也是成功——用户无法
+	// 分辨"已经卸掉"与"本来就没有"，而这两种情况该做的事完全不同。
+	if action != "mount" {
+		if tag == "" {
+			return failResult("缺少共享标识（tag），无法确认要卸载哪一个"), nil
+		}
+		xmlText, err := sys.DumpXML(ctx, op.Target, false)
+		if err != nil {
+			return failResult("读取域定义失败: " + err.Error()), nil
+		}
+		if !shareTagExists(xmlText, tag) {
+			return failResult("该虚拟机上没有名为 " + tag + " 的共享挂载，无需卸载"), nil
+		}
+	}
 	return &agent.Result{Success: true, Data: map[string]any{
 		agent.ShareDataKey: agent.ShareInfo{Tag: tag, Message: "共享目录已就绪（域定义经 XML 通道调整）"},
 	}}, nil
+}
+
+// shareTagExists 判断域定义里是否已有该 tag 的 9p 共享。
+//
+// 只做字符串层面的存在性判断：这段 XML 由 libvirt 生成，`<filesystem>` 的
+// 形状固定（type/mode 属性 + source dir + target dir），不值得为一个
+// 存在性检查引入完整解析。
+func shareTagExists(xmlText, tag string) bool {
+	for _, line := range strings.Split(xmlText, "\n") {
+		if !strings.Contains(line, "dir='") && !strings.Contains(line, `dir="`) {
+			continue
+		}
+		if strings.Contains(line, "dir='"+tag+"'") || strings.Contains(line, `dir="`+tag+`"`) {
+			return true
+		}
+	}
+	return false
 }
 
 // removeFstabEntriesContaining 从 fstab 删除所有含指定路径的行。

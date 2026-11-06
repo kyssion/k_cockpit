@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // virshBase 是只读系统实例连接的前缀。agent 以 root 运行，-r 足够。
@@ -19,6 +20,43 @@ var virshBase = []string{"-r", "-c", "qemu:///system"}
 
 func virsh(ctx context.Context, args ...string) (string, error) {
 	return Run(ctx, "virsh", append(append([]string{}, virshBase...), args...)...)
+}
+
+// virshWriteBase 是**可写**系统连接的前缀（不带 -r）。
+//
+// 个别命令在只读连接上会被 libvirt 直接拒绝，最典型的是
+// `qemu-agent-command`：真机返回
+// `operation forbidden: read only access prevents virDomainQemuAgentCommand`。
+// 这类调用必须走可写连接（agent 以 root 运行，权限上没有额外门槛）。
+var virshWriteBase = []string{"-c", "qemu:///system"}
+
+// virshTimeout 是 virsh 的可控超时版本，给"可能因为对端不在而卡住"的调用用
+// （典型是 qemu-agent-command：agent 没在听时客户端会一直等）。
+//
+// 走**可写**连接，理由见 virshWriteBase。
+func virshTimeout(ctx context.Context, timeout time.Duration, args ...string) (string, error) {
+	return RunTimeout(ctx, timeout, "virsh", append(append([]string{}, virshWriteBase...), args...)...)
+}
+
+// guestAgentProbeTimeout 是 guest-ping 的超时。
+//
+// guest-ping 是本地 virtio-serial 上的一个往返（正常情况下毫秒级）；2s 还没
+// 回来说明对端没有在听（agent 没装、没启动，或通道没连上）。给再长只会把
+// 运行态采集循环拖住——那是每轮都要跑一次的路径。
+const guestAgentProbeTimeout = 2 * time.Second
+
+// GuestAgentConnected 报告来宾里的 QEMU Guest Agent 现在是否可达。
+//
+// 判据就是「宿主能不能跟它说上话」：`virsh qemu-agent-command <dom>` 发一个
+// guest-ping。这是**唯一的**权威判据——`<channel>` 存在、socket 建出来了、
+// 甚至 `<target state='connected'>` 都只说明传输层连上了，来宾里的 qemu-ga
+// 有没有真的应答，只有 ping 得通才算数。
+//
+// 只对 running 的域调用：停机域不可能有 agent 在跑，调用只会拿到一条报错。
+func GuestAgentConnected(ctx context.Context, domain string) bool {
+	_, err := virshTimeout(ctx, guestAgentProbeTimeout,
+		"qemu-agent-command", domain, `{"execute":"guest-ping"}`)
+	return err == nil
 }
 
 // DomainEntry 是 virsh list --all 的一行。

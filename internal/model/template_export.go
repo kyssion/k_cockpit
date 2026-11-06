@@ -35,6 +35,14 @@ type TemplateExport struct {
 	Filename  string `gorm:"size:255;not null"`
 	SizeBytes int64  `gorm:"not null;default:0"`
 
+	// SHA256 是导出包的**内容摘要**，节点在打包时算出（控制面拿到它要先把
+	// 几十 GB 传过来再算，没有意义）。
+	//
+	// 以前节点回传了这个值、控制面直接丢掉了（第 3 轮 DEF-R3-01）：接口里
+	// 看不到摘要，用户无法在导入前核对包是否被改动过，也无法把摘要抄给
+	// 别人做完整性校验。指针是为了兼容历史行（那时还没有这一列）。
+	SHA256 *string `gorm:"size:64"`
+
 	Status string  `gorm:"size:16;not null;default:pending"`
 	Error  *string `gorm:"size:255"`
 

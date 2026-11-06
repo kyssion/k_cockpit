@@ -270,6 +270,14 @@ func (s createSpec) BuildDomainXML() string {
 		b.WriteString("    <input type='mouse' bus='ps2'/>\n")
 	}
 	b.WriteString("    <console type='pty'/>\n")
+	// QEMU guest agent 通道（virtio-serial）。来宾内改密、读 IP、就绪探测、
+	// 自动弹介质都走它；没有它 `virsh qemu-agent-command` 直接报
+	// "QEMU guest agent is not configured"（第 3 轮 DEF-R3-16）。
+	// 控制器与通道的顺序同 virsh dumpxml：控制器在前。
+	if !hasVirtioSerialController(b.String()) {
+		b.WriteString("    <controller type='virtio-serial' index='0'/>\n")
+	}
+	b.WriteString(guestAgentChannelXML("    "))
 	b.WriteString("    <memballoon model='virtio'/>\n")
 	if w := s.Watchdog; w != "" && w != "none" {
 		fmt.Fprintf(&b, "    <watchdog model='i6300esb' action='%s'/>\n", xmlEsc(w))

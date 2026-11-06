@@ -71,3 +71,35 @@ func sha256OfFile(path string) string {
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
+
+// osLink 建立硬链接（秒传落地的首选方式）。
+func osLink(oldPath, newPath string) error { return os.Link(oldPath, newPath) }
+
+// copyFileSync 复制文件并 fsync（硬链接不可用时的回退）。
+//
+// 必须 fsync：秒传完成后调用方立刻就会返回"已上传"，而记录一旦写下，
+// 用户就可能去读这个文件。不落盘的复制在断电/崩溃后会变成一个**长度为 0
+// 的"成功"文件**——那比失败难查得多。用 O_EXCL 建目标：绝不覆盖已有文件。
+func copyFileSync(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return err
+	}
+	return out.Close()
+}

@@ -79,6 +79,29 @@
 
 ### Fixed
 - **第 1–2 轮 E2E 缺链修复（2026-11-06）**：`page_size` 上限钳制为 100（此前大值直接进 SQL LIMIT，分页不真收敛）；XML 写路径补校验；`my-storage` 参数校验收口；审计日志 `/api/v1/audit` 补分页（此前无分页、自钳 200 条，超过就静默截断）；并发扩缩容后 `disk_gb` 投影与节点 qcow2 实际大小对账（采集器此前只增不减，resize 并发后两侧长期分叉）。
+- **网络：计数重置命令非法、上行口被吞、dnsmasq 抢占 53、软删记录占住唯一索引（2026-11-06）**：
+  ① `network.counter.reset` 用 `ovs-vsctl --all clear Interface statistics`，而 `clear` **没有 `--all` 选项**——这个功能从上线起每次都返回 422；改为先取接口名再逐个 `clear`，并改用 `ovs-vsctl` 真正支持的 `--no-headings --format=csv`。
+  ② `vpc.switch.change` 把 `uplink_if` 读出来却从未使用，交换机建好却没有上行口（任务还报 success）；现在 `ovs-vsctl --may-exist add-port` + `ip link set up`，失败时**回滚刚建的桥**，删除时显式 `del-port`。另加一道闸：拒绝把承载默认路由的网卡当上行口（接进 OVS 会当场切断管理连接且摘口不恢复 IP）。
+  ③ 每张交换机的 dnsmasq 配置没关 DNS，第二台实例必然抢占 `127.0.0.1:53` 启动即退，而旧代码只看 `Start()` 是否报错就判定成功（假成功）；现在 conf 加 `port=0`，并在启动后用 3×100ms 窗口确认进程真的存活，失败则清理 pidfile 并报错。
+  ④ `vpc_switch` 的唯一索引不排除软删行，同名重建必然撞约束且失败后**在宿主机留下悬空桥**；索引改为 `WHERE deleted_at IS NULL` 的部分唯一索引，冲突时按节点回报的「这座桥是否本任务创建」回滚，不误删他人在用的桥。
+- **模板：导出摘要缺失、关键字搜索 500、拉平只换父盘、软删同名重导必失败（2026-11-06）**：
+  ① 导出包的 `sha256` 节点侧算好了、控制面直接丢掉，用户无法在导入前核对完整性；补 `template_export.sha256` 列并在导出视图透出（历史记录为空串）。
+  ② `GET /templates?keyword=` 用 `ILIKE`（PostgreSQL 专有），真机是 SQLite → 一直 500；改为 `LOWER(name) LIKE ?`。
+  ③ `template.flatten` 把同名 parent 原样传下去，等价于 rebase——派生链一点没变只是换了个父，「拉平」从未生效；改为走 `qemu-img convert` 到临时文件、校验无 backing 后原子替换。
+  ④ 模板是软删除，而无条件唯一索引让它永久占名：预览（GORM 自动过滤软删行）说「可以导入」、落库却必然冲突。索引改为部分唯一索引，预览与导入执行器共用同一个同名判定（显式写 `deleted_at IS NULL`），文案也只有一处。
+- **存储与磁盘：裸二进制分片被拦、秒传只写记录不落盘、设备名被静默改名、卸载不存在设备报成功、负数容量被受理、OVF 容量单位丢失（2026-11-06）**：
+  ① 上传守卫的 Content-Type 白名单缺 `application/octet-stream`，分片 PUT 一律 403（只有"客户端恰好不声明"才通得过）；补上。
+  ② 秒传命中时只 `Create` 一条指向新路径的记录，磁盘上什么都没有，接口却回 `instant=true`；现在先在节点侧硬链接（跨设备回退为 `io.Copy` + `fsync`），**节点确认后才写记录**，摘要不一致即失败。
+  ③ 挂载磁盘时无条件按总线生成设备名，请求的 `dev` 从未被读（请求 `vdb` 实际得到 `sdb`）；现在采纳请求值，前缀与总线不匹配或名字被占用都返回明确错误；槽位耗尽导致总线降级时，在受理阶段就解释降级并给出替代名。
+  ④ 卸载一个从未挂载过的共享返回 success，用户无法分辨「已经卸掉」与「本来就没有」；改为查域定义确认该 tag 存在，否则 404。**磁盘卸载是同一条路径上的第二个洞**：请求一个不存在的设备名时校验循环整圈没匹配到，任务照常入队、节点什么都没做、接口回 200 success；同样改为 404，并保留"系统盘不可卸载/不可热插拔"两条既有守卫与"存在的盘仍能正常卸载"的正向路径。
+  ⑤ ZRAM 容量的两个判断都是"大于某值才算错"，负数两边都不满足 → 入队后节点又跳过设置，任务成功而容量没变；补负数下界。
+  ⑥ OVF 的 `capacity` 没有按 `capacityAllocationUnits` 换算：`capacity="8" + "byte * 2^30"`（= 8 GiB）被当成 8 **字节**、向上取整成 1 GB；改按单位换算（byte/2^10…2^40 与词形写法，空格与大小写不敏感）。
+- **控制台：graphics 带子元素时被写坏、口令长度校验分裂（2026-11-06）**：
+  ① 改控制台配置按"第一个 `/>`"定位 `<graphics>`，而 libvirt 的 graphics 带 `<listen/>` 子元素——`passwd` 被插到内层标签上，产出的 XML 标签错配，**改口令 100% 失败**。改为区分开标签与整段元素、只改开标签、子元素原样保留，并同步 `<listen>` 子元素地址（否则"对外暴露"显示成功而实际监听不变）。
+  ② VNC 口令上限 8 字节，但校验只写在保存密码那条分支，已启用时超长口令被原样下发给 libvirt，回来是 422 + 一句英文原文；现在在入口统一校验（**按字节**计：8 个中文 = 24 字节必须拒），两条分支共用同一句中文文案，SPICE 豁免。
+- **来宾代理：域定义里从来没有 guest agent 通道（2026-11-06）**：创建、纳管、改 XML 三条产生域定义的路径都没有 `<channel type='unix'>`，来宾内改密 / 读 IP / 就绪探测 / 自动弹介质全部不可达（`virsh qemu-agent-command` 直接报 `guest agent is not configured`）。现在三条路径统一补齐 virtio-serial 控制器与通道（通道只写 `source mode='bind'`，socket 路径交给 libvirt 按域分配，不绑发行版路径）；改 XML 时**校验与落盘用同一份补齐后的定义**。既有域不会被静默重定义，需重新纳管或编辑 XML 保存才会获得通道另外**"agent 到底连上没有"这个信号以前根本没有人写**（`vm.guest_agent` 恒为 false，于是 `init.ready` 永远翻不过来——真机上 agent 在 t=40s 就连通了，面板 240s 里 20 次采样全是 `agent_unavailable`）；现在每轮指标采集（60s）对运行中的域探一次 `guest-ping` 并写进投影，采不到指标时不写（不拿"没采到"冒充"不可用"）。
+- **接口：`GET /vms/:id` 说不清"来宾到底能不能用"（2026-11-06）**：此前不返回 `init`，客户端拿到空对象，分不清「正在初始化」与「永远不会就绪（来宾里没有 agent）」。现在返回 `init{ready,state,reason}`，`state` 取 `ready / starting / agent_unavailable / stopped / unknown`；`agent_unavailable` 的说明**同时包含"没启动"与"没安装"两种可能**（控制面投影分不出这两者，写死一种就是误导）。
+- **告警：唯一索引只有 `resource_id`，评估器永久冲突重试（2026-11-06）**：`alert` 的唯一索引在模型里只声明了 `resource_id`（迁移是正确三列，两处分叉），于是"同一 id、不同种类"的告警插不进去，评估器查不到就 Create、撞约束就 continue、下一秒重试——真机 126 次/60s 的 `UNIQUE constraint failed`，把 SQLite 单写者占死（连应急改密都拿不到写锁）。索引改回三列的部分唯一口径，写入改为 `OnConflict` upsert（保持"仅当原为 cleared 才重置 first_at/确认信息"的语义），并给"开启中告警量偏大"加一行日志。
 - **平台自检不再产生恒定假偏差（2026-11-05）**：节点侧 `platform.check` 此前除端口安全外一律回 `Present=false` +「随 P3 接入」，公网 IP 绑定与端口镜像会被永远报成配置丢失。现在按镜像名精确核对 OVS Mirror 行；无法按 Target 定位的项标记 `Unverifiable`，控制面单独计入 `unverified`、不计入 `drifts` 且生成不了修复项（`API.md` API-344 同步）。补节点侧与控制面两侧单元测试。
 - **发布包 agent 版本号注入（2026-11-05）**：`release.yml` 此前只注入控制面版本变量，tag 产物里 agent 心跳与 `agent version` 恒显示 `dev`；补 `-X k_cockpit/internal/nodeagent.buildVersion`（本地以 `v9.9.9-verify` 构建验证通过），并修正 CI 中已过期的「mock 栈」job 名。
 - **优雅停机补齐（2026-11-05）**：后台循环与任务队列改用同一个可取消 ctx，`stopBackground` 先取消并等待全部循环退出，再逐个调用自带 `Stop` 的组件，最后 `Queue.Stop()` 等在途任务跑完；此前 `Queue.Stop()` 从未被调用、`scheduler.Stop()` 存在却被注释误判为「没有 Stop」、6/10 个循环无人收尾。

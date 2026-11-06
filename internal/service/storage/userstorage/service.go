@@ -765,15 +765,53 @@ func (s *Service) FindByDigest(
 	return &file, nil
 }
 
-// instantCopy 在秒传命中时为目标路径登记一条新记录。
+// instantCopy 在秒传命中时把内容落到新路径，并登记一条新记录。
 //
-// **不复制内容**：磁盘上的文件按内容寻址，两条记录指向同一份数据。
-// 但记录是**独立**的——用户删掉其中一条时，另一条必须仍然可用，因此
-// 引用计数由节点侧维护（控制面看不到谁在引用同一份数据）。
+// **记录必须对应一份真实存在的文件**（第 3 轮 DEF-R3-05）：旧实现只
+// Create 了一条指向新 rel_path 的记录，磁盘上什么都没建，于是接口回
+// `instant=true` + 新路径，而该路径 `isfile=false`——之后按它取文件、
+// 导入镜像、建虚拟机全部失败，且失败点在离秒传很远的地方。
+//
+// 落地方式是**节点侧硬链接**（跨设备回退为复制）：秒传的意义就是不搬字节；
+// 两条记录各自独立，删一条不影响另一条（节点侧按路径管理，不做引用计数）。
+// 节点落地失败则整个请求失败——不允许出现"有记录、无文件"。
 func (s *Service) instantCopy(
 	ctx context.Context, src *model.StorageFile, relPath, filename, category string,
 	userID, nodeID int64,
 ) (*model.StorageFile, error) {
+	srcSum := ""
+	if src.SHA256 != nil {
+		srcSum = *src.SHA256
+	}
+	if s.agent != nil {
+		result, err := s.agent.Execute(ctx, agent.Operation{
+			Kind:   agent.OpStorageFileCommit,
+			NodeID: nodeID,
+			Target: relPath,
+			Params: map[string]any{
+				"rel_path":      relPath,
+				"size":          src.SizeBytes,
+				"checksum":      srcSum,
+				"link_from_rel": src.RelPath,
+			},
+		})
+		if err != nil {
+			return nil, api.Unavailable("节点不可达，秒传未生效（未产生记录）")
+		}
+		if !result.Success {
+			return nil, api.ValidationFailed(result.Message)
+		}
+		if info, ok := result.Data[agent.StorageFileDataKey].(agent.StorageFileInfo); ok {
+			// 节点实际写出的内容必须与来源摘要一致：不一致说明链接/复制
+			// 拿到了坏数据，此时登记记录等于把一个损坏文件当成功交给用户。
+			if info.Checksum != "" && srcSum != "" && !strings.EqualFold(info.Checksum, srcSum) {
+				log.Printf("[userstorage] 秒传内容校验不一致 rel=%s 来源=%s 节点=%s",
+					relPath, srcSum, info.Checksum)
+				return nil, api.ValidationFailed("秒传失败：目标文件内容与来源不一致")
+			}
+		}
+	}
+
 	now := s.now()
 	file := model.StorageFile{
 		NodeID: nodeID, UserID: &userID,

@@ -155,6 +155,19 @@ type VMStats struct {
 	DiskReadKbps  float64
 	DiskWriteKbps float64
 
+	// GuestAgent 表示**本轮采样时**来宾里的 QEMU Guest Agent 是否可达。
+	//
+	// 放在每轮的 VM 指标里，而不是运行态扫描里（第 6 轮 DEF-R6-01）：
+	// 运行态扫描（node.domains）每 5 个采集节拍才跑一次 = 5 分钟，而
+	// `GET /vms/:id` 的 `init.ready` 要让用户等 5 分钟才翻过来，
+	// 实测窗口（240s）里一次都不会变。本操作**每轮都对每台运行中的 VM
+	// 调用**（60s），探测一次本地 guest-ping 的边际成本可忽略。
+	//
+	// 这个信号以前在协议里根本不存在：控制面 `vm.guest_agent` 没有任何
+	// 写入方，恒为 false，于是 init 永远是 agent_unavailable——
+	// 来宾侧 agent 早就连通了，面板 4 分钟里 20 次采样全都没翻。
+	GuestAgent bool
+
 	// UptimeSeconds 是域已经运行的时间；0 表示未运行。
 	UptimeSeconds int64
 }

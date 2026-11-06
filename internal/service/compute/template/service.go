@@ -120,7 +120,13 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]View, error) {
 		query = query.Where("status = ?", model.TemplateReady)
 	}
 	if kw := strings.TrimSpace(f.Keyword); kw != "" {
-		query = query.Where("name ILIKE ?", "%"+kw+"%")
+		// **不能用 ILIKE**（第 3 轮 DEF-R3-02）：那是 PostgreSQL 专有语法，
+		// SQLite 上直接报 SQL 错误 → 整个列表接口 500。而真机就是 SQLite，
+		// 也就是说"按关键字搜模板"从来没有成功过一次。
+		// `LOWER(...) LIKE LOWER(...)` 在两种数据库上都能跑，且语义等价
+		// （大小写不敏感的子串匹配）。vm 列表的搜索也是这么写的，口径统一。
+		pattern := "%" + strings.ToLower(kw) + "%"
+		query = query.Where("LOWER(name) LIKE ?", pattern)
 	}
 
 	if !f.Viewer.IsAdmin {

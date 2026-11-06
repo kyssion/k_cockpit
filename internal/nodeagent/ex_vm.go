@@ -66,6 +66,12 @@ func vmStats(ctx context.Context, op agent.Operation, report Reporter) (*agent.R
 		stats.DiskReadKbps = float64(b.DiskReadBytes-a.DiskReadBytes) / 1024
 		stats.DiskWriteKbps = float64(b.DiskWriteBytes-a.DiskWriteBytes) / 1024
 		stats.MemTotalMB = b.MemTotalMB
+		// 来宾代理可达性随手探一次（第 6 轮 DEF-R6-01）：本操作只对**运行中**
+		// 的虚拟机调用，而 agent 只可能在运行中的来宾里应答。判据是
+		// `virsh qemu-agent-command … guest-ping` 能不能通——通道存在、
+		// socket 建出来、`<target state='connected'>` 都只说明传输层连上了，
+		// 来宾里的 qemu-ga 有没有真的应答，只有 ping 得通才算数。
+		stats.GuestAgent = sys.GuestAgentConnected(ctx, op.Target)
 	}
 	return &agent.Result{Success: true, Data: map[string]any{agent.StatsDataKey: stats}}, nil
 }

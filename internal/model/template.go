@@ -47,8 +47,8 @@ type Template struct {
 	ID int64 `gorm:"primaryKey"`
 	// NodeID 模板是**节点内**的资源：磁盘文件就在那个节点的存储池里，
 	// 跨节点使用需要先导出再导入。
-	NodeID int64  `gorm:"not null;uniqueIndex:uniq_template_node_name,priority:1"`
-	Name   string `gorm:"size:64;not null;uniqueIndex:uniq_template_node_name,priority:2"`
+	NodeID int64  `gorm:"not null;uniqueIndex:uniq_template_node_name,priority:1,where:deleted_at IS NULL"`
+	Name   string `gorm:"size:64;not null;uniqueIndex:uniq_template_node_name,priority:2,where:deleted_at IS NULL"`
 
 	// ParentID 指向制备它的来源模板，用于链式克隆。
 	//

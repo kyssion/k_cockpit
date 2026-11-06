@@ -322,24 +322,84 @@ func vmNetworkCounterReset(ctx context.Context, op agent.Operation, report Repor
 			}},
 		}, nil
 	}
-	if _, err := sys.Run(ctx, "ovs-vsctl", "--all", "clear", "Interface", "statistics"); err != nil {
+
+	reset, err := resetOVSInterfaceCounters(ctx, sys.Run)
+	if err != nil {
 		return failResult("重置 OVS 计数器失败: " + err.Error()), nil
 	}
-	// 统计接口行数只用于回显"重置了几个"；失败不影响结果。
-	count := 0
-	if out, err := sys.Run(ctx, "ovs-vsctl", "list", "Interface"); err == nil {
-		for _, line := range strings.Split(out, "\n") {
-			if strings.HasPrefix(strings.TrimSpace(line), "_uuid") {
-				count++
-			}
-		}
+	return counterResetResult(reset), nil
+}
+
+// counterResetResult 把「重置了几个」翻译成给用户看的结果。
+//
+// 0 与失败是两件事：0 表示宿主机上根本没有 OVS 接口（新节点、还没建过桥），
+// 那是正常状态；报失败会让人以为节点坏了。因此文案必须分开。
+func counterResetResult(reset int) *agent.Result {
+	msg := "计数器已归零"
+	if reset == 0 {
+		msg = "没有可重置的 OVS 接口计数器"
 	}
 	return &agent.Result{
 		Success: true,
 		Data: map[string]any{agent.CounterResetDataKey: agent.CounterResetInfo{
-			Reset: count, Message: "计数器已归零",
+			Reset: reset, Message: msg,
 		}},
-	}, nil
+	}
+}
+
+// resetOVSInterfaceCounters 逐个 Interface 清空 statistics，返回重置了几个。
+//
+// **不能写成 `ovs-vsctl --all clear Interface statistics`**（第 3 轮真机缺陷
+// NET-06）：`clear` 的语法是 `clear table record column...`，它要的是一个
+// 具体的 record，**没有 `--all` 选项**（`--all` 属于 `destroy` 那一类）。
+// 写成 --all 的后果是命令直接报错——接口每次都返回 422，而这个功能从来没
+// 成功过一次。
+//
+// 因此先取名字列表，再逐个 clear。名字列表为空不是错误：宿主机上还没建过
+// 任何 OVS 接口时，这就是"没有需要重置的东西"，失败会让用户以为节点坏了。
+func resetOVSInterfaceCounters(ctx context.Context, run cmdRunner) (int, error) {
+	// `--no-headings` + `--format=csv`：ovs-vsctl **没有** `csv,noheader` 这种写法
+	// （那是 ovs-ofctl / ovsdb-client 的口径，真机验证 `unknown output format
+	// "csv,noheader"`）。首版修复就踩了这个坑——只有真机能发现，fake runner
+	// 断言不到 CLI 语法，因此这里保留 `--no-headings` 的显式写法，并让解析器
+	// 兜住"万一输出了表头"的情况。
+	out, err := run(ctx, "ovs-vsctl", "--columns=name", "--no-headings",
+		"--format=csv", "list", "Interface")
+	if err != nil {
+		return 0, err
+	}
+	names := parseOVSInterfaceNames(out)
+	reset := 0
+	for _, name := range names {
+		if _, err := run(ctx, "ovs-vsctl", "clear", "Interface", name, "statistics"); err != nil {
+			// 消息里必须带接口名：不知道是哪个口失败时，排查只能靠猜。
+			return reset, fmt.Errorf("接口 %s: %w", name, err)
+		}
+		reset++
+	}
+	return reset, nil
+}
+
+// parseOVSInterfaceNames 解析 `--format=csv` 的输出：一行一个名字。
+//
+// 两个容错点：
+//   - 表头：老版本或不认 `--no-headings` 时会先输出一行 `name`，必须跳过，
+//     否则会多清一次并让"重置了几个"多 1；
+//   - 引号与空行：名字含特殊字符时 CSV 会给它加引号；没有任何接口时输出为空。
+func parseOVSInterfaceNames(out string) []string {
+	var names []string
+	for i, line := range strings.Split(out, "\n") {
+		name := strings.TrimSpace(line)
+		name = strings.Trim(name, "\"")
+		if name == "" {
+			continue
+		}
+		if i == 0 && name == "name" {
+			continue // 表头
+		}
+		names = append(names, name)
+	}
+	return names
 }
 
 // vmNetworkGlobalBandwidth 实现 network.global_bandwidth.apply（上行 TBF）。

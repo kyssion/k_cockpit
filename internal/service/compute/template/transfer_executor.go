@@ -91,6 +91,9 @@ func (e *ExportExecutor) Run(ctx context.Context, t *model.Task) error {
 			"rel_path":   relPath,
 			"filename":   filename,
 			"size_bytes": info.SizeBytes,
+			// 摘要随导出结果一起落库（第 3 轮 DEF-R3-01）：节点算了、控制面
+			// 以前直接丢掉，于是接口里没有它。
+			"sha256": info.SHA256,
 		}).Error; err != nil {
 		log.Printf("[template] 写入导出产物失败 id=%d: %v", p.ExportID, err)
 	}
@@ -242,9 +245,22 @@ func (e *ImportExecutor) Run(ctx context.Context, t *model.Task) error {
 		tpl.DefaultFirmware = &v
 	}
 
+	// 落库前用**与预览同一个函数**再判一次（第 3 轮 DEF-R3-06）。
+	//
+	// 预览与这里之间隔着一次任务派发，期间可能真的有人建了同名模板；而
+	// 唯一索引是最后一道兜底。三处（预览 / 这里 / 索引）判定口径必须一致，
+	// 否则用户会看到"预览说能导、导入说重名"。
+	if taken, err := templateNameTaken(e.db.WithContext(ctx), tpl.NodeID, tpl.Name); err != nil {
+		log.Printf("[template] 导入前检查模板重名失败: %v", err)
+		return api.Internal()
+	} else if taken {
+		return api.Conflict(templateNameTakenMessage(tpl.Name))
+	}
+
 	if err := e.db.WithContext(ctx).Create(&tpl).Error; err != nil {
 		if isDuplicateKey(err) {
-			return api.Conflict("该节点上已存在同名模板「" + name + "」")
+			// 兜底文案与预览、与上面的前置检查**逐字相同**。
+			return api.Conflict(templateNameTakenMessage(name))
 		}
 		log.Printf("[template] 写入导入的模板失败: %v", err)
 		return api.Internal()

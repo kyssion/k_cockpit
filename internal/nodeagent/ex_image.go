@@ -33,8 +33,15 @@ type ovfEnvelope struct {
 
 	DiskSection struct {
 		Disks []struct {
-			Capacity int64  `xml:"capacity,attr"`
-			FileRef  string `xml:"fileRef,attr"`
+			Capacity int64 `xml:"capacity,attr"`
+			// CapacityAllocationUnits 是容量的**单位**（第 3 轮 DEF-R3-07）。
+			//
+			// OVF 允许 capacity 用字节以外的单位表达，例如
+			// `capacity="8" capacityAllocationUnits="byte * 2^30"`——那就是 8 GiB。
+			// 只看 capacity 会把它当成 8 **字节** → 向上取整成 1 GB，正是真机上
+			// 观测到的 `disk_gb=1`。
+			CapacityAllocationUnits string `xml:"capacityAllocationUnits,attr"`
+			FileRef                 string `xml:"fileRef,attr"`
 		} `xml:"Disk"`
 	} `xml:"DiskSection"`
 
@@ -51,6 +58,37 @@ type ovfEnvelope struct {
 			} `xml:"Item"`
 		} `xml:"VirtualHardwareSection"`
 	} `xml:"VirtualSystem"`
+}
+
+// ovfCapacityBytes 把 OVF 的 capacity + capacityAllocationUnits 换算成字节。
+//
+// 单位缺省是 **byte**（OVF 规范）。规范里常用的写法还有
+// `byte * 2^30`（GiB）、`byte * 2^20`（MiB）、`megabyte`/`gigabyte` 等。
+// 不认识单位时按字节处理并**照原值使用**（宁可小也不要凭空放大），
+// 由调用方的"最大盘文件大小"兜底逻辑兜住明显不合理的值。
+func ovfCapacityBytes(capacity int64, units string) int64 {
+	if capacity <= 0 {
+		return 0
+	}
+	// 把所有空白去掉再比对：规范里的写法是 `byte * 2^30`，但生成工具
+	// 也可能写出 `byte*2^30` / `BYTE  *  2^30`。空格的有无不是语义差异。
+	u := strings.ToLower(strings.Join(strings.Fields(units), ""))
+	mult := int64(1)
+	switch u {
+	case "", "byte", "bytes":
+		mult = 1
+	case "kilobyte", "kilobytes", "byte*2^10":
+		mult = 1 << 10
+	case "megabyte", "megabytes", "byte*2^20":
+		mult = 1 << 20
+	case "gigabyte", "gigabytes", "byte*2^30":
+		mult = 1 << 30
+	case "terabyte", "terabytes", "byte*2^40":
+		mult = 1 << 40
+	default:
+		mult = 1
+	}
+	return capacity * mult
 }
 
 // vmImageParse 实现 image.parse。
@@ -153,8 +191,8 @@ func parseOVA(ctx context.Context, path string) (agent.ImagePreview, error) {
 
 	var capacity int64
 	for _, d := range env.DiskSection.Disks {
-		if d.Capacity > capacity {
-			capacity = d.Capacity
+		if b := ovfCapacityBytes(d.Capacity, d.CapacityAllocationUnits); b > capacity {
+			capacity = b
 		}
 	}
 	if capacity == 0 {

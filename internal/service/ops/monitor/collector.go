@@ -349,7 +349,26 @@ func (c *Collector) collectNodeVMs(ctx context.Context, node *model.Node, at tim
 			written++
 		}
 
-		// 3) 累计运行时长与流量。
+		// 3) 来宾代理可达性写进投影（第 6 轮 DEF-R6-01）。
+		//
+		// 这个字段以前**没有任何写入方**，恒为 false，于是 `GET /vms/:id` 的
+		// `init.ready` 永远翻不过来——真机上 agent 在 t=40s 就连通了，面板
+		// 240s 里 20 次采样全是 agent_unavailable。
+		//
+		// 写在这里而不是运行态扫描（node.domains）里：那一轮每 5 个节拍才
+		// 跑一次（=5 分钟），而本函数**每轮都对每台运行中的 VM 跑一次**
+		// （60s）。用户在等的是一个"它到底起来没有"的结论，5 分钟的滞后
+		// 与 4 分钟就放弃的耐心相比没有意义。
+		//
+		// 只在指标采到时写：采不到说明这台机器当前联系不上，那时把
+		// guest_agent 写成 false 是拿"采不到"冒充"agent 不可用"。
+		if err := c.db.WithContext(ctx).Model(&model.VM{}).
+			Where("id = ?", vm.ID).
+			Update("guest_agent", s.GuestAgent).Error; err != nil {
+			log.Printf("[monitor] 写入来宾代理状态失败 vm=%d: %v", vm.ID, err)
+		}
+
+		// 4) 累计运行时长与流量。
 		//
 		// 这两件事只能在"采到指标的那一刻"做：它们是**区间增量**，而区间
 		// 长度就是采样间隔。放进别的流程里会让增量与实际经过的时间对不上。

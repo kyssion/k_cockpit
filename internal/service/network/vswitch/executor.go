@@ -3,6 +3,7 @@ package vswitch
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"time"
 
@@ -97,7 +98,7 @@ func (e *SwitchChangeExecutor) Run(ctx context.Context, t *model.Task) error {
 
 	switch p.Action {
 	case "create":
-		return e.createRecord(ctx, &p)
+		return e.createRecord(ctx, &p, result)
 	case "update":
 		return e.updateRecord(ctx, &p, result)
 	case "delete":
@@ -117,7 +118,9 @@ func (e *SwitchChangeExecutor) Run(ctx context.Context, t *model.Task) error {
 	}
 }
 
-func (e *SwitchChangeExecutor) createRecord(ctx context.Context, p *switchParams) error {
+func (e *SwitchChangeExecutor) createRecord(
+	ctx context.Context, p *switchParams, result *agent.Result,
+) error {
 	sw := model.VpcSwitch{
 		NodeID:     p.NodeID,
 		Name:       specStr(p.Spec, "name"),
@@ -139,13 +142,7 @@ func (e *SwitchChangeExecutor) createRecord(ctx context.Context, p *switchParams
 
 	if err := e.db.WithContext(ctx).Create(&sw).Error; err != nil {
 		if isDuplicateKey(err) {
-			// 受理时已经查过，走到这里说明是并发创建。网桥在宿主机上
-			// 已经建好了，此时报失败会让用户以为白干一场——但保留一条
-			// 重名记录又会让后续按名字查找拿到不确定的一条。
-			//
-			// 因此这里**报冲突并说明现状**：这是少数几种「必须让用户知道
-			// 需要人工收尾」的情况之一。
-			return api.Conflict("同名或同 VLAN 的交换机已在节点上建立，请刷新后确认")
+			return e.conflictWithNodeRollback(ctx, p, result)
 		}
 		log.Printf("[network] 写入交换机记录失败: %v", err)
 		return api.Internal()
@@ -153,6 +150,67 @@ func (e *SwitchChangeExecutor) createRecord(ctx context.Context, p *switchParams
 
 	log.Printf("[network] 已创建交换机 id=%d node=%d name=%s bridge=%s",
 		sw.ID, sw.NodeID, sw.Name, sw.BridgeName)
+	return nil
+}
+
+// conflictWithNodeRollback 处理「节点已建好、数据库写不进去」这种情况。
+//
+// 第 3 轮真机缺陷 DEF-R3-12 的形状是：软删记录占着唯一索引 → 创建任务失败 →
+// 节点上那座桥留了下来，谁也不知道它的存在。因此这里在返回 409 之前先把
+// 节点侧刚建的东西**逆操作**回去，让「失败」在两侧都是干净的。
+//
+// 关键前提：只能删**本任务创建的**桥。`ovs-vsctl --may-exist add-br` 对
+// 「本来就存在」也返回成功，所以是否本任务创建由节点在结果里回报
+// （agent.SwitchBridgeCreatedKey）。回报为否或缺键时一律不动——删掉一座
+// 正在承载业务的桥，比留一座空桥严重得多。
+func (e *SwitchChangeExecutor) conflictWithNodeRollback(
+	ctx context.Context, p *switchParams, result *agent.Result,
+) error {
+	created := false
+	if result != nil && result.Data != nil {
+		created, _ = result.Data[agent.SwitchBridgeCreatedKey].(bool)
+	}
+	if !created {
+		log.Printf("[network] 交换机记录冲突，网桥 %s 非本任务创建，不做回滚", p.BridgeName)
+		return api.Conflict("同名或同 VLAN 的交换机已在节点上存在，请刷新后确认")
+	}
+
+	if err := e.rollbackBridge(ctx, p); err != nil {
+		// 逆操作也失败：**不要静默吞掉**。告诉用户桥名与手工清理命令，
+		// 否则残留只有知道桥名的人才找得到。
+		log.Printf("[network] 回滚网桥失败 bridge=%s: %v", p.BridgeName, err)
+		return api.Conflict(fmt.Sprintf(
+			"同名或同 VLAN 的交换机已存在，请刷新后确认；"+
+				"本次在节点上创建的网桥 %s 回滚失败（%v），"+
+				"请在该节点执行 `ovs-vsctl --if-exists del-br %s` 清理",
+			p.BridgeName, err, p.BridgeName))
+	}
+	log.Printf("[network] 交换机记录冲突，已回滚网桥 %s", p.BridgeName)
+	return api.Conflict("同名或同 VLAN 的交换机已存在，请刷新后确认（本次创建的网桥已回滚）")
+}
+
+// rollbackBridge 让节点把这台交换机拆掉（与 delete 动作同一套逆操作）。
+//
+// 复用 OpVPCSwitchChange 的 delete 分支而不是在这里另写一串 ovs-vsctl：
+// 拆桥的顺序（dnsmasq → NAT → 上行口 → 桥）只有一处维护，否则两处迟早分叉，
+// 而分叉的表现是"删除留下了半座桥"。
+func (e *SwitchChangeExecutor) rollbackBridge(ctx context.Context, p *switchParams) error {
+	op := agent.Operation{
+		Kind:   agent.OpVPCSwitchChange,
+		NodeID: p.NodeID,
+		Target: p.BridgeName,
+		Params: map[string]any{"action": "delete"},
+	}
+	if p.Spec != nil {
+		op.Params["spec"] = p.Spec
+	}
+	res, err := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, op)
+	if err != nil {
+		return err
+	}
+	if !res.Success {
+		return fmt.Errorf("%s", res.Message)
+	}
 	return nil
 }
 

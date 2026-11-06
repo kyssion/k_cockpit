@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
@@ -98,7 +99,44 @@ func (s *Service) Evaluate(ctx context.Context) (int, error) {
 				Status:  model.AlertActive,
 				FirstAt: now, LastAt: now,
 			}
-			if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
+			// **upsert 兜底**（第 3 轮 DEF-R4-01）。
+			//
+			// 旧实现是"查不到就 Create"：一旦唯一索引的列与查询列不一致（模型
+			// 少了 kind/resource_type），或两个评估实例并发，Create 必然撞唯一
+			// 约束 → continue → 下一秒重试。真机上是 126 次/60s 的
+			// `UNIQUE constraint failed: alert.resource_id`，SQLite 单写者被
+			// 这条重试链占死（连应急改密都拿不到写锁）。
+			//
+			// OnConflict 的列必须与唯一索引**三列完全一致**，否则不会命中冲突分支。
+			// DoUpdates 用 CASE 保持原有语义：只有原先是 cleared 才重置
+			// first_at / status / 确认信息——无条件重置会把"这个告警从什么时候
+			// 开始"每轮都冲掉，而那是处理紧迫程度的唯一依据。
+			// （SQL 的 SET 表达式读的是**旧行**，所以后面的 CASE 看到的是旧 status。）
+			if err := s.db.WithContext(ctx).Clauses(clause.OnConflict{
+				Columns: []clause.Column{
+					{Name: "kind"}, {Name: "resource_type"}, {Name: "resource_id"},
+				},
+				DoUpdates: clause.Assignments(map[string]any{
+					"node_id":       w.NodeID,
+					"level":         w.Level,
+					"title":         w.Title,
+					"detail":        w.Detail,
+					"last_at":       now,
+					"resource_name": w.ResourceName,
+					"status": gorm.Expr(
+						"CASE WHEN status = ? THEN ? ELSE status END",
+						model.AlertCleared, model.AlertActive),
+					"first_at": gorm.Expr(
+						"CASE WHEN status = ? THEN ? ELSE first_at END",
+						model.AlertCleared, now),
+					"ack_by": gorm.Expr(
+						"CASE WHEN status = ? THEN NULL ELSE ack_by END", model.AlertCleared),
+					"ack_at": gorm.Expr(
+						"CASE WHEN status = ? THEN NULL ELSE ack_at END", model.AlertCleared),
+					"cleared_at": gorm.Expr(
+						"CASE WHEN status = ? THEN NULL ELSE cleared_at END", model.AlertCleared),
+				}),
+			}).Create(&row).Error; err != nil {
 				log.Printf("[alert] 写入告警失败 kind=%s: %v", w.Kind, err)
 				continue
 			}
@@ -117,6 +155,13 @@ func (s *Service) Evaluate(ctx context.Context) (int, error) {
 		[]string{model.AlertActive, model.AlertAcked}).Find(&open).Error; err != nil {
 		log.Printf("[alert] 查询开启中的告警失败: %v", err)
 		return changed, nil
+	}
+	// 量大的时候留一行日志：几千条开启中的告警意味着一轮要发几千条 UPDATE，
+	// 而 SQLite 是单写者——这不是错误，但它正是"面板变慢"时要先看到的那一行
+	// （第 3 轮真机上 4991 条孤儿告警就是这么被发现的）。
+	if len(open) > 200 {
+		log.Printf("[alert] 本轮需要收尾 %d 条开启中的告警（量偏大：多半是历史遗留的孤儿告警，"+
+			"收尾后可自行恢复）", len(open))
 	}
 	for i := range open {
 		a := &open[i]

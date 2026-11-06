@@ -27,10 +27,16 @@ type ExportView struct {
 	TemplateName string `json:"template_name"`
 	Filename     string `json:"filename"`
 	SizeBytes    int64  `json:"size_bytes"`
-	Status       string `json:"status"`
-	Error        string `json:"error,omitempty"`
-	CreatedAt    string `json:"created_at"`
-	FinishedAt   string `json:"finished_at,omitempty"`
+	// SHA256 是导出包的内容摘要（第 3 轮 DEF-R3-01）。
+	//
+	// 透出它的理由：导入前要能核对"这个包是不是我导出的那个"。摘要在节点
+	// 打包时就算好了，控制面只是把它存下来并原样给出去——节点侧的校验逻辑
+	// 一点没动。历史记录（这一列还没有时导出的）会是空串，界面据此显示"—"。
+	SHA256     string `json:"sha256"`
+	Status     string `json:"status"`
+	Error      string `json:"error,omitempty"`
+	CreatedAt  string `json:"created_at"`
+	FinishedAt string `json:"finished_at,omitempty"`
 }
 
 // Export 受理一次模板导出（F-3-05）。
@@ -341,18 +347,59 @@ func (s *Service) ImportPreview(
 		return view, nil
 	}
 	// 同名检查：导入之后名字必须唯一，而这个冲突**现在**就能判定。
-	var dup int64
-	if err := s.db.WithContext(ctx).Model(&model.Template{}).
-		Where("node_id = ? AND name = ?", file.NodeID, info.Manifest.Name).
-		Count(&dup).Error; err != nil {
+	//
+	// 与导入执行器共用 templateNameTaken（第 3 轮 DEF-R3-06）：两处各写一份
+	// 查询的结局是"预览说能导、落库必然失败"——以前预览靠 GORM 自动过滤
+	// 软删行，而唯一索引不排除软删行，两边对"同名"的定义不同。
+	taken, err := templateNameTaken(s.db.WithContext(ctx), file.NodeID, info.Manifest.Name)
+	if err != nil {
 		log.Printf("[template] 检查模板重名失败: %v", err)
 		return nil, api.Internal()
 	}
-	if dup > 0 {
+	if taken {
 		view.CanImport = false
-		view.Reason = "该节点上已有同名模板「" + info.Manifest.Name + "」，请先改名或删除现有的那个"
+		view.Reason = templateNameTakenMessage(info.Manifest.Name)
 	}
 	return view, nil
+}
+
+// templateNameTaken 报告该节点上是否已有**当前存在**的同名模板。
+//
+// **软删行不算占位**（与 vpc_switch 的 DEF-R3-12 同一口径）：模板删除是软删，
+// 记录要留给审计与历史任务引用，但名字应该能被重新使用。
+//
+// 显式写 `deleted_at IS NULL` 而不是依赖 GORM 的自动过滤：自动过滤是"看不见
+// 的行为"，一旦模型换成 `*time.Time`（本项目有多处）它就静默失效了——而这
+// 里正是那种失效会变成"预览与实际相反"的地方。
+//
+// 同一个函数被**预览**与**导入执行器**共用，两处判定必须给出同一个答案。
+func templateNameTaken(q *gorm.DB, nodeID int64, name string) (bool, error) {
+	if name == "" {
+		return false, nil
+	}
+	var dup int64
+	if err := q.Model(&model.Template{}).
+		Where("node_id = ? AND name = ? AND deleted_at IS NULL", nodeID, name).
+		Count(&dup).Error; err != nil {
+		return false, err
+	}
+	return dup > 0, nil
+}
+
+// templateNameTakenMessage 是同名冲突的**唯一**文案。
+//
+// 预览与执行器各写一句的后果是同一个冲突在界面上有两种说法，用户会以为是
+// 两件不同的事。
+func templateNameTakenMessage(name string) string {
+	return "该节点上已有同名模板「" + name + "」，请先改名或删除现有的那个"
+}
+
+// strDeref 取可空字符串的值（nil → 空串）。
+func strDeref(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // ImportRequest 是一次导入请求。
@@ -506,6 +553,7 @@ func toExportView(e *model.TemplateExport) ExportView {
 		ID: e.ID, NodeID: e.NodeID, TemplateID: e.TemplateID,
 		TemplateName: e.TemplateName, Filename: e.Filename,
 		SizeBytes: e.SizeBytes, Status: e.Status,
+		SHA256:    strDeref(e.SHA256),
 		CreatedAt: e.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 	if e.Error != nil {

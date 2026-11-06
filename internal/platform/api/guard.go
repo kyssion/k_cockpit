@@ -58,6 +58,14 @@ var allowedContentTypes = []string{
 	"multipart/form-data",               // 分片上传之外的表单场景
 	"application/x-www-form-urlencoded", // curl -d 未显式指定时的默认值
 	"text/plain",
+	// **裸二进制体**（第 3 轮 DEF-R3-04）。
+	//
+	// 分片上传的客户端（含 `curl --data-binary`、fetch 的 Blob 体）会显式声明
+	// `application/octet-stream`，而它在旧白名单里没有 → 403。上面那段注释
+	// 本来就写着「分片上传发的是不带 Content-Type 的裸二进制体」，但真实客户端
+	// **会**带上这个头，注释与实现自相矛盾：不带的能过、带的被拒——一个只能
+	// 靠"客户端恰好不声明"才成立的放行。
+	"application/octet-stream",
 }
 
 // scannerProbes 是已知扫描器路径前缀/文件名（小写）。

@@ -34,15 +34,21 @@ const NetworkDefaultName = "default"
 type VpcSwitch struct {
 	ID int64 `gorm:"primaryKey"`
 	// NodeID 参与两个唯一索引：同节点内交换机名唯一、VLAN ID 唯一。
-	NodeID  int64 `gorm:"not null;uniqueIndex:uniq_vpc_switch_node_name,priority:1;uniqueIndex:uniq_vpc_switch_node_vlan,priority:1"`
+	//
+	// **两个索引都带 `where:deleted_at IS NULL`**（与迁移 0052 一致）：
+	// 删除交换机是软删除，无条件的唯一索引会让一条已删记录永久占住名字，
+	// 同名重建在写记录这一步必然撞约束（第 3 轮真机缺陷 DEF-R3-12）。
+	// 测试库由 AutoMigrate 按模型建，模型漏写这个条件时两条库的约束行为
+	// 会分叉——正是 model/security_group.go 里记过的那次教训。
+	NodeID  int64  `gorm:"not null;uniqueIndex:uniq_vpc_switch_node_name,priority:1,where:deleted_at IS NULL;uniqueIndex:uniq_vpc_switch_node_vlan,priority:1,where:deleted_at IS NULL"`
+	Name    string `gorm:"size:64;not null;uniqueIndex:uniq_vpc_switch_node_name,priority:2,where:deleted_at IS NULL"`
 	OwnerID *int64
-	Name    string `gorm:"size:64;not null;uniqueIndex:uniq_vpc_switch_node_name,priority:2"`
 	Mode    string `gorm:"size:16;not null;default:empty"`
 	// BridgeName 是宿主机上的网桥名。
 	BridgeName string `gorm:"size:64;not null"`
 	// VlanID 在节点内唯一（uniq_vpc_switch_node_vlan），可为空。
 	// 空值不参与唯一性判定，因此多个不划 VLAN 的交换机不会互相冲突。
-	VlanID *int `gorm:"column:vlan_id;uniqueIndex:uniq_vpc_switch_node_vlan,priority:2"`
+	VlanID *int `gorm:"column:vlan_id;uniqueIndex:uniq_vpc_switch_node_vlan,priority:2,where:deleted_at IS NULL"`
 	// column 必须显式声明：GORM 的命名策略把 `CIDR` 转成了 `c_id_r`
 	// （`CIDR` 不在它的常见缩写词表里，被按大写边界切开了），而迁移建的列
 	// 叫 `cidr`。详见 model/vm.go 中 VCPU 的同款说明。

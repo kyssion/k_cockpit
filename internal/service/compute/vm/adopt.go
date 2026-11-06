@@ -54,7 +54,14 @@ func (s *Service) UnmanagedDomains(
 		if knownSet[d.Name] {
 			continue
 		}
-		out = append(out, UnmanagedDomain(d))
+		// 显式逐字段转换而不是 `UnmanagedDomain(d)`：DomainInfo 会随协议演进
+		// 增加字段（例如本轮加的 guest_agent），整体转换会让每一次契约扩展都
+		// 在这里编译失败；而这个视图**只该暴露"待纳管"需要的信息**——
+		// agent 可达性是纳管之后的运行态，与"要不要纳管它"无关。
+		out = append(out, UnmanagedDomain{
+			Name: d.Name, State: d.State, VCPU: d.VCPU,
+			MemoryMB: d.MemoryMB, DiskGB: d.DiskGB, Autostart: d.Autostart,
+		})
 	}
 	return out, nil
 }

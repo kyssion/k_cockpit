@@ -183,6 +183,12 @@ func (s *Service) Apply(
 // 压缩算法与容量都有实际边界，而越界的表现在用户看来是"虚拟机跑起来很慢"
 // 或者"内存莫名其妙少了一块"——与刚才那个操作联系不起来。
 func validateZRAM(req Request) error {
+	// 负数必须挡在这里（第 3 轮 DEF-R3-10）：原来的两个判断都是"大于某值才算错"
+	// 的形态，`-1` 既不满足 `< 128` 也不满足 `> 1TB`，于是一路入队，节点侧
+	// `sizeMB > 0` 又跳过设置——任务成功、ZRAM 大小没变，用户以为生效了。
+	if req.DisksizeMB < 0 {
+		return api.InvalidParameter("ZRAM 容量不能为负——请填正整数（单位 MB）")
+	}
 	if req.DisksizeMB > 0 && req.DisksizeMB < 128 {
 		return api.InvalidParameter("ZRAM 容量至少 128 MB——比这更小的压缩区基本起不到作用")
 	}
