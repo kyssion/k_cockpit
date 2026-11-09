@@ -27,6 +27,11 @@ export function TaskTray({ connected }: { connected: boolean }) {
   const list = useQuery({
     queryKey: ['tasks', 'active'],
     queryFn: () => taskApi.list({ status: 'pending,running,unknown', page_size: 20 }),
+    // 实时通道是主路径；只有它断开时才退化为低频轮询。
+    // 这条兜底针对的是一类具体表现：连接断开期间任务已经结束，而托盘只认
+    // 事件、自己不会再看一眼，于是一直显示「执行中」——用户看到的就是
+    // 「任务卡住了」。连接正常时不轮询，避免把实时通道退化成定时拉取。
+    refetchInterval: connected ? false : 10000,
   })
 
   const items = (list.data?.items ?? []).filter((t) => isActive(t.status))

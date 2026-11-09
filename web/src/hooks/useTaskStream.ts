@@ -24,6 +24,9 @@ export function useTaskStream(): StreamState {
   // 连接被反复断开重连。
   const invalidate = useRef(() => {
     void queryClient.invalidateQueries({ queryKey: ['tasks'] })
+    // 详情抽屉用的是单数键 ['task', id]：TanStack Query 的前缀匹配按数组元素
+    // 比较，'task' 不是 'tasks' 的前缀，漏掉它会让抽屉停在旧状态。
+    void queryClient.invalidateQueries({ queryKey: ['task'] })
     void queryClient.invalidateQueries({ queryKey: ['vms'] })
     void queryClient.invalidateQueries({ queryKey: ['vm'] })
     void queryClient.invalidateQueries({ queryKey: ['dashboard'] })
@@ -31,7 +34,15 @@ export function useTaskStream(): StreamState {
 
   useEffect(() => {
     const close = openTaskStream({
-      onConnected: () => setState('open'),
+      onConnected: () => {
+        setState('open')
+        // **每次（重）连成功都要重取一次**：断线期间的变化没有任何订阅者。
+        // 控制面重启是最典型的一次——旧进程停机时把在途任务收敛成
+        // unknown/failed，那一刻事件发出去时这条流还没建立；只把状态标成
+        // 「已连接」的话，底部「进行中任务」会永远停在「执行中」（它没有
+        // 轮询兜底），用户看到的就是"任务卡住了"。
+        invalidate.current()
+      },
       onEvent: () => invalidate.current(),
       onError: () => {
         // 断开时浏览器会自动重连，因此这里不手动重开一条——那只会让
