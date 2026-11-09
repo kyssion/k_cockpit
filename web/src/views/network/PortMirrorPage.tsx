@@ -276,7 +276,6 @@ function MirrorCard({
         <span className="flex items-baseline gap-2">
           <span className="text-base font-medium text-ink">{mirror.name || `镜像#${mirror.id}`}</span>
           <span className="text-xs text-ink-3">{DIRECTION_LABEL[mirror.direction]}</span>
-          {mirror.vlan_preserve && <span className="text-xs text-ink-3">保留 VLAN</span>}
         </span>
         <span className="text-xs">
           {mirror.enabled ? (
@@ -442,7 +441,6 @@ function MirrorFormModal({
   const [sources, setSources] = useState('')
   const [targets, setTargets] = useState('')
   const [direction, setDirection] = useState<MirrorDirection>('ingress')
-  const [vlan, setVlan] = useState(false)
 
   // 打开时同步一次编辑对象。
   const [seen, setSeen] = useState<string | null>(null)
@@ -454,18 +452,19 @@ function MirrorFormModal({
       setSources((editing?.source_ports ?? []).join('\n'))
       setTargets((editing?.target_switches ?? []).join('\n'))
       setDirection(editing?.direction ?? 'ingress')
-      setVlan(editing?.vlan_preserve ?? false)
     }
   }
 
   const submit = useMutation({
     mutationFn: () => {
+      // 不发送 vlan_preserve：节点侧镜像原样复制帧，始终保留原始 VLAN 标签，
+      // 服务端会把它归一化为 true（显式传 false 会被拒绝）。编辑既有规则时
+      // 同理——库里那份即使是 false，保存后也会被归一化，因此不该弹错。
       const input = {
         name: name.trim() || undefined,
         source_ports: splitList(sources),
         target_switches: splitList(targets),
         direction,
-        vlan_preserve: vlan,
       }
       return editing ? portMirrorApi.update(editing.id, input) : portMirrorApi.create(nodeID, input)
     },
@@ -528,15 +527,12 @@ function MirrorFormModal({
           ))}
         </div>
 
-        <label className="flex cursor-pointer items-start gap-2.5">
-          <input type="checkbox" className="mt-1" checked={vlan} onChange={(e) => setVlan(e.target.checked)} />
-          <span>
-            <span className="block text-base text-ink">保留 VLAN 标签</span>
-            <span className="block text-sm text-ink-3">
-              默认剥掉：多数抓包工具对带标签的帧处理得不好。要分析 VLAN 本身的行为时才打开。
-            </span>
-          </span>
-        </label>
+        {/* 这里原先是一个「保留 VLAN 标签」复选框，文案说「默认剥掉」——那是错的：
+            节点侧 OVS Mirror 原样复制帧，从来不读这个开关，标签始终保留。
+            开关只能给出一个假的选择，因此换成一句静态说明。 */}
+        <p className="text-sm text-ink-3">
+          镜像帧原样复制，保留原始 VLAN 标签；本版本不做 VLAN 剥离。
+        </p>
       </div>
     </Modal>
   )

@@ -145,3 +145,27 @@ func RequestIDFromContext(ctx context.Context) string {
 	}
 	return ""
 }
+
+// TaskFields 返回「任务已受理」的标准字段。
+//
+// 任务类接口的响应形状必须统一：早期一部分接口直接返回任务模型
+// （`{"task":{"ID":29,"Status":"pending"}}`），另一部分返回
+// `{"task_id":29,"status":"pending"}`，前端不得不写两套解析（实机测试
+// 抓出）。这里把标准形状收敛到一处，调用方用 WithTask 合并业务字段。
+func TaskFields(taskID int64, status string) map[string]any {
+	return map[string]any{"task_id": taskID, "status": status}
+}
+
+// WithTask 在业务字段之上合并标准任务字段，返回可直接交给 OK 的响应体。
+//
+// 语义上等价于 `{"<业务字段>": ..., "task_id": ..., "status": ...}`；
+// task_id/status 优先级更高，避免业务字段里出现同名键时把任务信息覆盖。
+func WithTask(fields map[string]any, taskID int64, status string) map[string]any {
+	if fields == nil {
+		fields = make(map[string]any, 2)
+	}
+	for k, v := range TaskFields(taskID, status) {
+		fields[k] = v
+	}
+	return fields
+}

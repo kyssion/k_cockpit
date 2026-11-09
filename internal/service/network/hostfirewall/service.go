@@ -320,10 +320,6 @@ func (s *Service) Precheck(ctx context.Context, nodeID int64) ([]string, []strin
 		preview = append(preview, fmt.Sprintf(
 			"iptables -A INPUT -s %s -j ACCEPT   # 管理白名单，优先于一切拒绝", w))
 	}
-	preview = append(preview, fmt.Sprintf(
-		"iptables -P INPUT %s   # 不匹配任何规则时", strings.ToUpper(policy.DefaultAction)))
-
-	warnings := []string{}
 	for _, r := range rules {
 		line := "iptables -A INPUT"
 		if r.Protocol != "" {
@@ -345,6 +341,18 @@ func (s *Service) Precheck(ctx context.Context, nodeID int64) ([]string, []strin
 		}
 		preview = append(preview, line)
 	}
+	// 兜底动作是**链尾规则**，而不是 INPUT 的默认策略——预览必须与节点实际
+	// 写下的规则一字不差。此前的 `iptables -P INPUT DENY` 与实现完全不符
+	// （节点从不改宿主机的默认策略，链尾也没有 DROP），于是「默认拒绝」只
+	// 存在于这份文案里：实机上 INPUT 仍是 ACCEPT，未匹配的流量照样放行。
+	// 另外，覆盖宿主机的默认策略还会与 ufw 等既有防火墙互相打架，而链级
+	// 兜底等价，且能随 `KC-HFW` 一起回滚。**必须排在所有放行之后**：顺序
+	// 就是它的语义。
+	if policy.DefaultAction == model.FirewallDeny {
+		preview = append(preview, "iptables -A KC-HFW -j DROP   # 未匹配任何放行规则时")
+	}
+
+	warnings := []string{}
 
 	// 白名单为空而默认拒绝：这是最危险的一种组合，必须显式警告。
 	if policy.DefaultAction == model.FirewallDeny && len(policy.Whitelist) == 0 {
@@ -352,6 +360,17 @@ func (s *Service) Precheck(ctx context.Context, nodeID int64) ([]string, []strin
 			"白名单为空且默认拒绝：**任何来源都无法再连上这台机器**，包括 SSH 与面板。"+
 				"一旦应用，你只能到宿主机本地（或机房）把规则改回来。"+
 				"如果是从固定地址管理这台机器，请先把它加进白名单。")
+	}
+	// 默认拒绝一旦真的落地（链尾 DROP），拦的不只是外来的管理员，还有
+	// 宿主机上为虚拟机提供服务的 DHCP/DNS：虚拟机拿不到地址、解析不了
+	// 域名，表现是"机器都连不上"，而原因在这一层。必须给出可执行的补救。
+	if policy.Enabled && policy.DefaultAction == model.FirewallDeny {
+		warnings = append(warnings,
+			"默认拒绝同样会拦掉宿主机给虚拟机提供的 DHCP 与 DNS："+
+				"虚拟机将拿不到 IP、也解析不了域名。"+
+				"如需保留这些服务，请显式添加放行规则——"+
+				"udp 67（DHCP 服务端）、udp 68（DHCP 客户端）、udp 53 与 tcp 53（DNS），"+
+				"并确认来源范围包含虚拟机网段（例如 192.168.122.0/24）。")
 	}
 	return preview, warnings, nil
 }

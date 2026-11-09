@@ -52,6 +52,13 @@ type createAdminResponse struct {
 	// AutoLogin 表示是否已自动建立会话。为 false 时前端应引导用户去登录页
 	// ——初始化本身已成功，不能让它表现成失败。
 	AutoLogin bool `json:"auto_login"`
+	// Stage / LoginToken 是「已自动登录但停在安全初始化阶段」时的续接凭据。
+	//
+	// 新账号的典型路径是：建账号 → 强制走安全引导（TOTP / 邮箱）→ 才算
+	// 完成登录。这一步拿到的是中间态令牌，按本项目约定**不下发 Cookie**，
+	// 而是与 /auth/login 一样放进响应体，让前端接着调引导接口。
+	Stage      string `json:"stage,omitempty"`
+	LoginToken string `json:"login_token,omitempty"`
 }
 
 // CreateAdmin 使用一次性令牌创建首个管理员。
@@ -73,8 +80,18 @@ func (h *Setup) CreateAdmin(ctx context.Context, c *app.RequestContext) {
 
 	resp := createAdminResponse{User: userViewOf(user)}
 	if res, err := h.auth.Login(ctx, req.Username, req.Password, info); err == nil {
-		setSessionCookie(c, res.Token, res.ExpiresAt, h.secureCookie)
-		resp.AutoLogin = true
+		// 只有拿到 access 级令牌才写 Cookie。新管理员几乎必然停在
+		// 「安全初始化」阶段（绑定 TOTP / 邮箱 / 强制改密），此时 Login
+		// 返回的是五分钟的**中间态**令牌——把它塞进 Cookie 会得到一条
+		// 任何业务接口都拒绝的会话，还留下一条孤儿记录（实机测试抓出）。
+		// 正确做法与 /auth/login 一致：令牌放响应体，由前端继续引导。
+		if res.Stage == auth.StageOK {
+			setSessionCookie(c, res.Token, res.ExpiresAt, h.secureCookie)
+			resp.AutoLogin = true
+		} else {
+			resp.Stage = string(res.Stage)
+			resp.LoginToken = res.Token
+		}
 	} else {
 		// 账号已经创建成功，自动登录失败不能让调用方以为初始化失败。
 		log.Printf("[setup] 初始化后自动登录失败: %v", err)

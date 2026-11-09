@@ -84,8 +84,10 @@ func (s *Service) MigrateTargets(
 			}
 		}
 		var usable int64
+		// deleted_at 过滤不可少：软删是自定义列（*time.Time），GORM 不会
+		// 自动排除（与磁盘迁移目标同款缺陷，实机测试抓出）。
 		if err := s.db.WithContext(ctx).Model(&model.StoragePool{}).
-			Where("node_id = ? AND status = ?", n.ID, model.StoragePoolReady).
+			Where("node_id = ? AND status = ? AND deleted_at IS NULL", n.ID, model.StoragePoolReady).
 			Select("COALESCE(SUM(usable_bytes), 0)").Scan(&usable).Error; err == nil {
 			view.StorageFreeGB = usable / (1024 * 1024 * 1024)
 		}

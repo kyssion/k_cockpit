@@ -71,6 +71,11 @@ func RegisterBuiltins(r *Registry, opts BuiltinOptions) {
 		Description:     "开启后每天对全部在线节点执行一次 trim，回收已删除虚拟磁盘占用的块。执行结果（含失败节点）记入调度事件。",
 		IntervalSeconds: int(opts.TrimInterval.Seconds()),
 	})
+	r.Register(Info{
+		Key: KeyStorageCapacityRefresh, Name: "存储池容量刷新", Group: GroupMetrics,
+		Description:     "按节点批量读取存储池挂载点的容量（statfs）并写回池记录，池列表的空间数据由此保持新鲜。失败才记事件——正常轮次没有可说的。",
+		IntervalSeconds: int(opts.PoolStatInterval.Seconds()),
+	})
 }
 
 // BuiltinOptions 是登记时需要的各组件周期。
@@ -85,4 +90,5 @@ type BuiltinOptions struct {
 	RetentionInterval      time.Duration
 	TrimInterval           time.Duration
 	MediaEjectInterval     time.Duration
+	PoolStatInterval       time.Duration
 }

@@ -212,6 +212,10 @@ func (a *app) newHTTPServer() *server.Hertz {
 	return server.Default(
 		server.WithHostPorts(a.cfg.HTTP.Addr()),
 		server.WithMaxRequestBodySize(16<<20),
+		// 让「路径存在但方法不对」走 NoMethod（405），而不是落进 NoRoute
+		// 被当成 404。默认关闭时两个原因共用一条兜底，调用方分不清是
+		// 路径写错还是方法写错。
+		server.WithHandleMethodNotAllowed(true),
 	)
 }
 
@@ -228,6 +232,7 @@ func (a *app) routerDeps() router.Deps {
 	return router.Deps{
 		DB:            a.db,
 		StaticDir:     a.cfg.HTTP.StaticDir,
+		AgentAddr:     a.cfg.Agent.ListenAddr,
 		Auth:          a.platform.authSvc,
 		Bootstrap:     a.platform.bootstrap,
 		Node:          a.node.nodeSvc,

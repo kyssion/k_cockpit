@@ -12,6 +12,7 @@ package vswitch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 
@@ -248,7 +249,7 @@ func (s *Service) Networks(ctx context.Context, nodeID int64) ([]SwitchView, err
 	if err := s.ensureNode(ctx, nodeID); err != nil {
 		return nil, err
 	}
-	if err := s.ensureSystemNetwork(ctx, nodeID); err != nil {
+	if err := s.EnsureSystemNetwork(ctx, nodeID); err != nil {
 		return nil, err
 	}
 
@@ -303,23 +304,48 @@ func (s *Service) ensureNode(ctx context.Context, nodeID int64) error {
 	return nil
 }
 
-// EnsureSystemNetwork 幂等确保节点的系统基础网络存在（导出包装，供
-// 开发环境演示数据预置等节点外调用方复用同一份幂等逻辑）。
-func (s *Service) EnsureSystemNetwork(ctx context.Context, nodeID int64) error {
-	return s.ensureSystemNetwork(ctx, nodeID)
+// systemNetworkCIDR 等是系统基础网络的固定参数。
+//
+// 用固定的私有网段（10.77.0.0/24），因为默认网络是**每台节点都必然有**
+// 的基础设施：让它在任何机器上长得一样，排障时"网关是不是 10.77.0.1"
+// 就不需要再问一遍。用户要别的网段就自建交换机。
+const (
+	systemNetworkCIDR      = "10.77.0.0/24"
+	systemNetworkGateway   = "10.77.0.1"
+	systemNetworkDHCPStart = "10.77.0.100"
+	systemNetworkDHCPEnd   = "10.77.0.200"
+)
+
+// SwitchRequest 描述系统基础网络的期望状态。
+func systemNetworkRequest() SwitchRequest {
+	return SwitchRequest{
+		Name:      model.NetworkDefaultName,
+		Mode:      model.NetworkModeNAT,
+		CIDR:      systemNetworkCIDR,
+		GatewayIP: systemNetworkGateway,
+		DHCPStart: systemNetworkDHCPStart,
+		DHCPEnd:   systemNetworkDHCPEnd,
+	}
 }
 
-// ensureSystemNetwork 保证系统基础网络存在。
+// EnsureSystemNetwork 幂等确保节点的系统基础网络存在。
 //
-// **幂等**（R-008）：重复执行不产生重复记录。用「先查后建」而不是靠唯一
-// 索引兜底，是为了让并发调用也走在同一条路径上——索引冲突虽然也能防重复，
-// 但它会以错误的形式暴露，而这里期望的是「静默确保存在」。
-func (s *Service) ensureSystemNetwork(ctx context.Context, nodeID int64) error {
+// **与自建交换机走同一条开通路径**：入队 `vpc.switch.change`（create，
+// spec.is_system=true），由执行器先在宿主机上建网桥与 DHCP，成功后才写
+// 记录。旧实现直接往库里插一条 `bridge_name=kbr0`、没有网段也没有 DHCP
+// 范围的记录——宿主上从来不存在这座桥，于是"默认网络"从头到尾不可用，
+// 而面板一直显示它可用（实机抓出）。
+//
+// 幂等由三处保证：已有系统交换机 → 直接返回；有在途任务 → 队列按
+// IdempotencyKey 去重；执行器写记录撞唯一索引 → 视为已存在。
+//
+// 它**不会静默重建已被改坏的网桥**（f-4-01 Q-009）：只在记录缺失时开通；
+// 记录在而网桥被外部删掉的情形由网络页的「修复」入口处理。
+func (s *Service) EnsureSystemNetwork(ctx context.Context, nodeID int64) error {
 	var count int64
-	err := s.db.WithContext(ctx).Model(&model.VpcSwitch{}).
+	if err := s.db.WithContext(ctx).Model(&model.VpcSwitch{}).
 		Where("node_id = ? AND is_system = ? AND deleted_at IS NULL", nodeID, true).
-		Count(&count).Error
-	if err != nil {
+		Count(&count).Error; err != nil {
 		log.Printf("[network] 查询系统网络失败: %v", err)
 		return api.Internal()
 	}
@@ -327,27 +353,34 @@ func (s *Service) ensureSystemNetwork(ctx context.Context, nodeID int64) error {
 		return nil
 	}
 
-	bridgeName := "kbr0"
-	mode := model.NetworkModeNAT
-	sw := model.VpcSwitch{
-		NodeID:     nodeID,
-		Name:       model.NetworkDefaultName,
-		Mode:       mode,
-		BridgeName: bridgeName,
-		IsSystem:   true,
-		Status:     model.NetworkActive,
-	}
-	err = s.db.WithContext(ctx).Create(&sw).Error
+	req := systemNetworkRequest()
+	_, err := s.queue.Enqueue(ctx, task.Spec{
+		Type:         model.TaskVPCSwitchChange,
+		NodeID:       nodeID,
+		ResourceType: "node",
+		ResourceID:   nodeID,
+		ResourceName: req.Name,
+		Params: map[string]any{
+			"action":      "create",
+			"node_id":     nodeID,
+			"bridge_name": bridgeNameFor(nodeID, req.Name),
+			"spec": map[string]any{
+				"name":       req.Name,
+				"mode":       req.Mode,
+				"cidr":       req.CIDR,
+				"gateway_ip": req.GatewayIP,
+				"dhcp_start": req.DHCPStart,
+				"dhcp_end":   req.DHCPEnd,
+				"is_system":  true,
+			},
+		},
+		IdempotencyKey: fmt.Sprintf("vpc.switch.system:%d", nodeID),
+	})
 	if err != nil {
-		// 并发下的唯一索引冲突不算失败：另一个请求刚建好了它。
-		if isDuplicateKey(err) {
-			return nil
-		}
-		log.Printf("[network] 建立系统基础网络失败 node=%d: %v", nodeID, err)
-		return api.Internal()
+		return err
 	}
-
-	log.Printf("[network] 已建立系统基础网络 node=%d name=%s", nodeID, sw.Name)
+	log.Printf("[network] 已受理系统基础网络开通 node=%d bridge=%s",
+		nodeID, bridgeNameFor(nodeID, req.Name))
 	return nil
 }
 

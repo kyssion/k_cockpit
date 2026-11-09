@@ -280,6 +280,13 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 			"memory_hotplug": p.MemoryHotplug,
 		},
 	}
+	// 主网口接入哪座网桥：由控制面把 switch_id 解析成桥名下发。
+	//
+	// 节点不认识「交换机」这个概念（它是控制面的资源），只认宿主机上的
+	// 网桥名；解析放在这里也让"交换机换了桥"对创建是透明的。
+	if bridge := e.primaryBridgeName(ctx, p); bridge != "" {
+		op.Params["bridge_name"] = bridge
+	}
 	if p.TemplateID > 0 {
 		op.Kind = agent.OpVMClone
 		op.Params["template_id"] = p.TemplateID
@@ -294,6 +301,14 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 	}
 	if !result.Success {
 		return api.ValidationFailed(result.Message)
+	}
+	// 主网口没接上网桥时，节点会退回用户态网络并把桥名带回来。这不是失败
+	// （机器建好了），但必须让用户看见：端口转发、安全组、DHCP 在 SLIRP 上
+	// 全都不生效，而界面上的网口看起来是接在交换机上的。
+	if degraded, ok := result.Data["network_degraded_bridge"].(string); ok && degraded != "" {
+		task.ReporterFrom(ctx).Mark(ctx, "network.degraded",
+			"网桥 "+degraded+" 在该节点上不存在，主网口已退化为用户态网络"+
+				"（端口转发 / 安全组 / DHCP 不生效）")
 	}
 
 	now := time.Now()
@@ -316,6 +331,12 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 		Status:       status,
 		Present:      true,
 		LastSyncedAt: &now,
+
+		// SPICE 支持按**节点当前能力**初始化，而不是等下一次心跳：心跳最长
+		// 10 秒一次，而用户建完机器通常立刻去开控制台——那段空窗里
+		// spice_supported 是 false，界面只给 vnc、开 SPICE 直接 422
+		// （实机复现）。之后的漂移由心跳收敛，见 nodeSupportsSPICE。
+		SPICESupported: nodeSupportsSPICE(ctx, e.db, p.NodeID),
 
 		// 创建向导选定的配置（f-2-02）。留空的项由数据库默认值兜底，
 		// 与矩阵里的 Default 保持一致。
@@ -378,6 +399,18 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 	}
 	if status, ok := result.Data["status"].(string); ok && status != "" {
 		vm.Status = status
+	}
+	// 架构/机型/固件以节点**实际构建**的域为准：请求未指定时矩阵默认值是
+	// x86_64 视角（aarch64 节点上节点侧会解析为 virt + UEFI），以控制面
+	// 默认值入库会让详情页显示与真实运行的域不一致。
+	if v, ok := result.Data["arch"].(string); ok && v != "" {
+		vm.Arch = v
+	}
+	if v, ok := result.Data["machine"].(string); ok && v != "" {
+		vm.MachineType = v
+	}
+	if v, ok := result.Data["firmware"].(string); ok && v != "" {
+		vm.Firmware = v
 	}
 
 	if err := e.db.WithContext(ctx).Create(&vm).Error; err != nil {
@@ -563,15 +596,44 @@ func (e *CreateExecutor) applyCreateStaticIP(ctx context.Context, vm *model.VM, 
 	}
 }
 
+// primaryBridgeName 返回主网口应接入的宿主机网桥名。
+//
+// 显式选了交换机就用它的桥；没选则用该节点的系统网络——与创建向导的
+// 默认值一致。都取不到时返回空串，节点会退回用户态网络并在任务时间线
+// 上标注退化原因。
+func (e *CreateExecutor) primaryBridgeName(ctx context.Context, p createParams) string {
+	var sw model.VpcSwitch
+	if p.SwitchID > 0 {
+		if err := e.db.WithContext(ctx).Select("bridge_name").First(&sw, p.SwitchID).Error; err == nil {
+			return sw.BridgeName
+		}
+		return ""
+	}
+	if err := e.db.WithContext(ctx).
+		Select("bridge_name").
+		Where("node_id = ? AND is_system = ? AND deleted_at IS NULL", p.NodeID, true).
+		First(&sw).Error; err == nil {
+		return sw.BridgeName
+	}
+	return ""
+}
+
 func (e *CreateExecutor) createPrimaryInterface(
 	ctx context.Context, vm *model.VM, p createParams,
 ) error {
+	// 网卡随域定义一起创建，所以它在落库那一刻**就是已生效的**。
+	//
+	// 不置 LastAppliedAt 的后果（实机测试抓出）：新建虚拟机的详情页把主网口
+	// 标成「未生效」，用户以为配置没下发，去点一次「应用」才消失——而那次
+	// 应用什么也没改变。只有「建好之后再改」的路径才应该从「未生效」开始。
+	applied := time.Now()
 	nic := model.VMInterface{
-		VMID:      vm.ID,
-		NodeID:    vm.NodeID,
-		Order:     0,
-		IsPrimary: true,
-		Model:     vm.NicModel,
+		VMID:          vm.ID,
+		NodeID:        vm.NodeID,
+		Order:         0,
+		IsPrimary:     true,
+		Model:         vm.NicModel,
+		LastAppliedAt: &applied,
 	}
 	if p.SwitchID > 0 {
 		nic.SwitchID = &p.SwitchID
@@ -633,12 +695,15 @@ func (e *CreateExecutor) createExtraInterfaces(
 		return api.ValidationFailed(
 			"网口数量不能超过 " + strconv.Itoa(defaultInterfaceLimit) + "（这是一台机器的网卡上限）")
 	}
+	// 同主网口：这些网卡随创建时的域定义一并生效，落库即已下发。
+	applied := time.Now()
 	for i := 1; i < p.NICCount; i++ {
 		mac := MACFor(vm.ID, i)
 		nic := model.VMInterface{
 			VMID: vm.ID, NodeID: vm.NodeID, Order: i,
 			Model: vm.NicModel, MAC: &mac,
-			IsPrimary: false,
+			IsPrimary:     false,
+			LastAppliedAt: &applied,
 		}
 		if err := e.db.WithContext(ctx).Create(&nic).Error; err != nil {
 			return err
@@ -899,11 +964,17 @@ func (e *DeleteExecutor) Run(ctx context.Context, t *model.Task) error {
 	// purge 表示这是回收站里的**彻底删除**：节点上已经删干净了，记录也不
 	// 必再留。它与下面的标记是互斥的两条路。
 	if p.Purge {
+		// 安全组关联表**没有 vm_id 列**：它挂在网口上（interface_id）。
+		// 之前把它并进下面那个「按 vm_id 删」的循环，得到的是
+		// `no such column: vm_id`，关联行因此永远清不掉（实机日志复现）。
+		// 先按网口定位再删，是这个表唯一正确的清理方式。
+		e.purgeInterfaceSecurityGroups(ctx, p.VMID)
+
 		// 关联行一起清：网口、静态地址、端口转发都以虚拟机为主体，留着
 		// 会变成一串找不到主人的孤儿记录——而它们不会被任何查询用到。
 		for _, table := range []any{
 			&model.VMInterface{}, &model.StaticIP{}, &model.PortForward{},
-			&model.InterfaceSecurityGroup{}, &model.VMLock{}, &model.VMCDROM{},
+			&model.VMLock{}, &model.VMCDROM{},
 		} {
 			table := table
 			if err := e.db.WithContext(ctx).Where("vm_id = ?", p.VMID).
@@ -940,6 +1011,31 @@ func (e *DeleteExecutor) Run(ctx context.Context, t *model.Task) error {
 	log.Printf("[vm] 已删除虚拟机 id=%d name=%s disk_action=%s task=%d",
 		p.VMID, p.VMName, p.DiskAction, t.ID)
 	return nil
+}
+
+// purgeInterfaceSecurityGroups 清掉该虚拟机所有网口的安全组关联。
+//
+// 顺序要紧：必须在删除 vm_interface 行**之前**取网口 ID——关联表只认
+// interface_id，网口删掉之后就再也没有线索指向那批关联行了。
+//
+// 失败只记日志：主记录删不掉才是问题；关联清理失败不至于让整个删除任务
+// 失败（那样用户会以为没删掉而再点一次），剩下的行由后续对账处理。
+func (e *DeleteExecutor) purgeInterfaceSecurityGroups(ctx context.Context, vmID int64) {
+	var ifaceIDs []int64
+	if err := e.db.WithContext(ctx).Model(&model.VMInterface{}).
+		Where("vm_id = ?", vmID).Pluck("id", &ifaceIDs).Error; err != nil {
+		log.Printf("[vm] 查询虚拟机网口失败 vm=%d: %v", vmID, err)
+		return
+	}
+	if len(ifaceIDs) == 0 {
+		// 没有网口就没有关联：`IN ()` 在部分方言里是语法错误，跳过更干净。
+		return
+	}
+	if err := e.db.WithContext(ctx).
+		Where("interface_id IN ?", ifaceIDs).
+		Delete(&model.InterfaceSecurityGroup{}).Error; err != nil {
+		log.Printf("[vm] 清理网口安全组关联失败 vm=%d ifaces=%v: %v", vmID, ifaceIDs, err)
+	}
 }
 
 // recordTransferred 把转移回来的磁盘登记成「我的存储」里的文件。

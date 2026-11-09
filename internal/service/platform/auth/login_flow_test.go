@@ -356,3 +356,35 @@ func TestResetIgnoresUnverifiedEmail(t *testing.T) {
 		t.Error("未验证的邮箱不应收到验证码")
 	}
 }
+
+// 强制改密阶段不能被「跳过安全初始化」绕过。
+//
+// 实机复现：管理员新建的用户（force_password_change=true）登录后拿到
+// 登录中间态令牌，直接用同一张令牌调 /auth/bootstrap/skip 就换到了访问
+// 会话——初始密码由管理员设置，本该在首次登录时被换掉，这条路径让它
+// 永久有效。阶段判定必须在**每个动作**上做，不能只靠前端按 stage 渲染。
+func TestSkipBootstrapRejectedDuringForcePasswordChange(t *testing.T) {
+	svc, db := newFlowService(t)
+	id := createUser(t, db, "carol", model.RoleTenant, model.UserStatusActive)
+	if err := db.Model(&model.User{}).Where("id = ?", id).
+		Update("force_password_change", true).Error; err != nil {
+		t.Fatalf("置强制改密失败: %v", err)
+	}
+	ctx := context.Background()
+
+	res, err := svc.Login(ctx, "carol", password, client)
+	if err != nil {
+		t.Fatalf("登录失败: %v", err)
+	}
+	if res.Stage != auth.StageForceChange {
+		t.Fatalf("阶段 = %q, 期望 force_password_change", res.Stage)
+	}
+	if _, err := svc.SkipBootstrap(ctx, res.Token, client); err == nil {
+		t.Fatal("强制改密阶段跳过引导应当被拒绝")
+	}
+
+	// 改密之后（若仍需要安全初始化）跳过才成立：这里直接验证改密路径可用。
+	if _, err := svc.ForceChangePassword(ctx, res.Token, "a-brand-new-long-password", client); err != nil {
+		t.Fatalf("强制改密失败: %v", err)
+	}
+}

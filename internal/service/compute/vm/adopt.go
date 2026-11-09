@@ -127,6 +127,9 @@ func (s *Service) AdoptDomain(
 		Present:   true,
 		// 纳管即一次对账：记录的规格来自刚刚扫描的定义，此刻就是新鲜的。
 		LastSyncedAt: &now,
+		// SPICE 同理按节点当前能力初始化：否则刚纳管的机器要等下一次心跳
+		// 才能开 SPICE（见 nodeSupportsSPICE）。
+		SPICESupported: nodeSupportsSPICE(ctx, s.db, nodeID),
 	}
 
 	// 通知节点进入托管集合并取回 UUID。失败不回滚记录创建——域在节点上

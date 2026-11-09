@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"strconv"
 	"strings"
 
@@ -21,14 +22,17 @@ import (
 
 // DiskView 是一块磁盘的视图。
 type DiskView struct {
-	Dev          string `json:"dev"`
-	CapacityGB   int    `json:"capacity_gb"`
-	ActualBytes  int64  `json:"actual_bytes"`
-	Format       string `json:"format"`
-	Bus          string `json:"bus"`
-	Source       string `json:"source"`
-	IsSystem     bool   `json:"is_system"`
-	Hotpluggable bool   `json:"hotpluggable"`
+	Dev string `json:"dev"`
+	// CapacityGB 是**展示值**，保留两位小数（0.14 GB 的盘不能显示成 0）。
+	// CapacityBytes 是同一份容量的精确字节数，供前端做单位换算与排序。
+	CapacityGB    float64 `json:"capacity_gb"`
+	CapacityBytes int64   `json:"capacity_bytes"`
+	ActualBytes   int64   `json:"actual_bytes"`
+	Format        string  `json:"format"`
+	Bus           string  `json:"bus"`
+	Source        string  `json:"source"`
+	IsSystem      bool    `json:"is_system"`
+	Hotpluggable  bool    `json:"hotpluggable"`
 
 	// 下面三项由**控制面**按运行态算出，而不是节点给。
 	//
@@ -163,8 +167,11 @@ func (s *Service) Disks(ctx context.Context, vmID int64, v authz.Viewer) (*DiskL
 	for i := range disks {
 		d := &disks[i]
 		view := DiskView{
-			Dev: d.Dev, CapacityGB: d.CapacityGB, ActualBytes: d.ActualBytes,
-			Format: d.Format, Bus: d.Bus, Source: d.Source,
+			Dev:           d.Dev,
+			CapacityGB:    capacityGBOf(d),
+			CapacityBytes: capacityBytesOf(d),
+			ActualBytes:   d.ActualBytes,
+			Format:        d.Format, Bus: d.Bus, Source: d.Source,
 			IsSystem: d.IsSystem, Hotpluggable: d.Hotpluggable,
 		}
 		switch {
@@ -257,8 +264,10 @@ func (s *Service) attachableDisks(
 // 的时候，而那时源可能已经被删了。
 func (s *Service) migrateTargets(ctx context.Context, nodeID int64) ([]DiskTarget, error) {
 	var pools []model.StoragePool
+	// deleted_at 过滤不可少：软删是自定义列（*time.Time），GORM 不会自动
+	// 排除，漏掉它会让已删除的池继续出现在迁移目标里（实机测试抓出）。
 	if err := s.db.WithContext(ctx).
-		Where("node_id = ? AND status = ?", nodeID, model.StoragePoolReady).
+		Where("node_id = ? AND status = ? AND deleted_at IS NULL", nodeID, model.StoragePoolReady).
 		Order("is_default DESC, id").Find(&pools).Error; err != nil {
 		log.Printf("[vm] 查询存储池失败 node=%d: %v", nodeID, err)
 		return nil, api.Internal()
@@ -489,7 +498,11 @@ func (s *Service) loadMigrateTarget(
 		return nil, api.InvalidParameter("请选择目标存储池")
 	}
 	var pool model.StoragePool
-	err := s.db.WithContext(ctx).Where("id = ?", poolID).First(&pool).Error
+	// 软删的池不是合法目标：StoragePool 的软删是自定义列（*time.Time），
+	// GORM 不会自动过滤，漏掉它会让已删除的池继续出现在迁移目标里、
+	// 甚至被直接选为落点（实机测试抓出）。
+	err := s.db.WithContext(ctx).
+		Where("id = ? AND deleted_at IS NULL", poolID).First(&pool).Error
 	switch {
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		return nil, api.NotFound("存储池不存在")
@@ -648,4 +661,30 @@ func SlotFallbackFor(info agent.PCIeInfo) (string, bool) {
 		return "", false
 	}
 	return "scsi", true
+}
+
+// capacityBytesOf 返回磁盘配置容量的精确字节数。
+//
+// 新节点直接给字节；老节点只有取整的 GB，用 GB 换算兜底——宁可少一点
+// 精度，也不要因为取整把一块 404 MB 的盘显示成 0。
+func capacityBytesOf(d *agent.VMDisk) int64 {
+	if d.CapacityBytes > 0 {
+		return d.CapacityBytes
+	}
+	if d.CapacityGB > 0 {
+		return int64(d.CapacityGB) << 30
+	}
+	return 0
+}
+
+// capacityGBOf 把容量折算成保留两位小数的 GB。
+//
+// 取整会让小于 1 GB 的盘变成 0，用户看到「0 GB」会以为盘坏了；两位小数
+// 既保留可读性，也不会在小容量上撒谎。
+func capacityGBOf(d *agent.VMDisk) float64 {
+	bytes := capacityBytesOf(d)
+	if bytes <= 0 {
+		return 0
+	}
+	return math.Round(float64(bytes)/(1<<30)*100) / 100
 }

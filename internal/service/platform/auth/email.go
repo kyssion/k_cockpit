@@ -105,7 +105,9 @@ func (s *Service) ConfirmEmail(ctx context.Context, user *model.User, email, cod
 func (s *Service) SendStagedEmailCode(
 	ctx context.Context, token, email string, ci ClientInfo,
 ) error {
-	user, _, err := s.AuthenticateStage(ctx, token, model.TokenTypeLogin, ci)
+	// 必须额外确认停在「安全初始化」阶段：仅校验令牌级别会让强制改密中的
+	// 用户也能改写账号安全信息（见 AuthenticateBootstrapStage）。
+	user, err := s.AuthenticateBootstrapStage(ctx, token, ci)
 	if err != nil {
 		return err
 	}
@@ -116,7 +118,7 @@ func (s *Service) SendStagedEmailCode(
 func (s *Service) ConfirmStagedEmail(
 	ctx context.Context, token, email, code string, ci ClientInfo,
 ) error {
-	user, _, err := s.AuthenticateStage(ctx, token, model.TokenTypeLogin, ci)
+	user, err := s.AuthenticateBootstrapStage(ctx, token, ci)
 	if err != nil {
 		return err
 	}

@@ -69,7 +69,7 @@ func TestResolveUserdataPathGuardsTraversal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("合法路径被拒绝: %v", err)
 	}
-	if !strings.HasPrefix(p, userdataRoot+"/") {
+	if !strings.HasPrefix(p, userdataRoot()+"/") {
 		t.Errorf("路径不在用户存储根: %s", p)
 	}
 }

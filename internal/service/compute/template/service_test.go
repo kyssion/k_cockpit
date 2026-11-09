@@ -72,6 +72,10 @@ func newTestEnv(t *testing.T, status string) (*template.Service, *gorm.DB) {
 	})
 	queue.Register(template.NewPrepareExecutor(db, client))
 	queue.Register(template.NewDeleteExecutor(db, client))
+	// 预处理执行器也要注册：受理层（Preprocess）只做校验与入队，队列在
+	// **入队时**就拒绝没有执行器的任务类型——不注册的话，合法请求会死于
+	// 「不支持的任务类型」，而那条断言与被测的校验毫无关系。
+	queue.Register(template.NewPreprocessExecutor(db, client))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	queue.Start(ctx)

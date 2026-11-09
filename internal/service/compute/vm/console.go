@@ -2,6 +2,7 @@ package vm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -818,6 +819,41 @@ func availableProtocols(vm *model.VM) []string {
 		out = append(out, ConsoleProtocolSPICE)
 	}
 	return out
+}
+
+// nodeSupportsSPICE 报告节点当前上报的能力清单里是否含 SPICE。
+//
+// `vm.spice_supported` 是**节点能力在 VM 行上的投影**：心跳会周期性把它与
+// 节点自报的能力对齐（agent/hub 的 onHeartbeat），包括能力消失时收回。
+// 但心跳最长 10 秒一次，而新建/新纳管的 VM 在那之前是 false —— 用户往往
+// 就在这一刻去开控制台，于是「节点明明支持、界面却只给 vnc、PATCH 直接
+// 422」（实机复现）。因此创建与纳管时按节点当前能力初始化，把这个窗口
+// 消掉；之后的漂移仍由心跳收敛。
+//
+// 读不到节点、没有能力清单、解析失败一律按**不支持**处理：宁可让用户等
+// 一次心跳，也不要让界面摆出一个点了打不开的协议入口。
+func nodeSupportsSPICE(ctx context.Context, db *gorm.DB, nodeID int64) bool {
+	var row model.Node
+	if err := db.WithContext(ctx).Select("capabilities").First(&row, nodeID).Error; err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			log.Printf("[vm] 查询节点能力失败 node=%d: %v", nodeID, err)
+		}
+		return false
+	}
+	if row.Capabilities == nil || strings.TrimSpace(*row.Capabilities) == "" {
+		return false
+	}
+	var caps []string
+	if err := json.Unmarshal([]byte(*row.Capabilities), &caps); err != nil {
+		log.Printf("[vm] 解析节点能力失败 node=%d: %v", nodeID, err)
+		return false
+	}
+	for _, c := range caps {
+		if c == agent.CapabilitySPICE {
+			return true
+		}
+	}
+	return false
 }
 
 func enabledOf(vm *model.VM, protocol string) bool {

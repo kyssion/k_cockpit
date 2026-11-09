@@ -290,15 +290,55 @@ func (s *Service) storageRoot(ctx context.Context, userID, nodeID int64) (string
 		log.Printf("[storage] 查询用户存储失败: %v", err)
 		return "", api.Internal()
 	}
-	if !us.Enabled || us.RootPath == nil || *us.RootPath == "" {
-		// 存储根为空时**不能退化成「拼在 / 下」**：那会让相对路径校验
-		// 失去意义，用户填 "etc" 就指向了 /etc。
+	if !us.Enabled {
+		// 未开通独立存储空间：这是「有没有开通」的问题，回退也算不出一个
+		// 有意义的根，因此明确拒绝。
 		return "", api.ValidationFailed("你的存储空间尚未初始化，无法共享目录")
+	}
+
+	root := strings.TrimSpace(derefStr(us.RootPath))
+	if root == "" {
+		// root_path 为空时**回退到默认池算出来的期望根**，而不是直接拒绝。
+		//
+		// 背景（实机抓出）：这一列在整个仓库里没有任何写入方——新建的用户
+		// 存储行里它是 NULL，于是「用户明明已经有文件、节点侧的用户存储根也
+		// 早已收敛到默认池」与「共享恒返回『尚未初始化』」同时成立。
+		//
+		// 期望根由 UserdataRootOf 算，与 agent 侧的 SyncUserdataRoot 同源：
+		// 节点上「我的存储」实际落在哪里，只有这一处定义。
+		resolved, rerr := UserdataRootOf(ctx, s.db, nodeID)
+		if rerr != nil {
+			log.Printf("[storage] 计算用户存储根失败 user=%d node=%d: %v", userID, nodeID, rerr)
+			return "", api.Internal()
+		}
+		if resolved == "" {
+			// 没有默认池：**不能退化成「拼在 / 下」**：那会让相对路径校验
+			// 失去意义，用户填 "etc" 就指向了 /etc。
+			return "", api.ValidationFailed("你的存储空间尚未初始化，无法共享目录")
+		}
+		root = resolved
+		// 回写是**幂等**的（同一个池永远算出同一个值），因此不要求它成功：
+		// 写不进去只是下次请求再算一遍，而用户要的是「能共享」。
+		s.persistStorageRoot(ctx, us.ID, root)
 	}
 	// 存储根是**被管宿主机**上的路径，一律按 POSIX 语义处理：用 filepath
 	// 会掺进控制面本机平台的差异（Windows 上会把 `/srv/users/7` 变成
 	// `\srv\users\7`），而后续的 path.Base、前缀检查都只认斜杠。
-	return path.Clean(*us.RootPath), nil
+	return path.Clean(root), nil
+}
+
+// persistStorageRoot 把算出来的存储根回写到用户存储行。
+//
+// 失败只记日志：这是一条**可收敛的缓存**（唯一的权威是默认池的挂载点），
+// 让它挡住共享请求属于把一次写库失败放大成功能不可用。
+func (s *Service) persistStorageRoot(ctx context.Context, id int64, root string) {
+	if id <= 0 {
+		return
+	}
+	if err := s.db.WithContext(ctx).Model(&model.UserStorage{}).
+		Where("id = ?", id).Update("root_path", root).Error; err != nil {
+		log.Printf("[storage] 回写用户存储根失败 id=%d root=%s: %v", id, root, err)
+	}
 }
 
 // resolveUnderRoot 把用户给的相对路径解析成存储根下的绝对路径。

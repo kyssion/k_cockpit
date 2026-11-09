@@ -229,3 +229,23 @@ func TestParseDomainDisks(t *testing.T) {
 		t.Errorf("机型应为 virt，实际 %s", MachineTypeOf(xml))
 	}
 }
+
+// TestParseDomBlkInfo 真机输出（virsh domblkinfo lab-vm-1 vda）。
+func TestParseDomBlkInfo(t *testing.T) {
+	out := "Capacity:       8589934592\nAllocation:     196736\nPhysical:       196736\n"
+	info, err := parseDomBlkInfo(out)
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if info.Capacity != 8589934592 || info.Allocation != 196736 || info.Physical != 196736 {
+		t.Errorf("解析结果不符: %+v", info)
+	}
+}
+
+// TestParseDomBlkInfoMissingCapacity 缺 capacity 时必须报错而不是返回 0：
+// 0 会被上层当作「容量未知」显示成 0GB，与「真的没有盘」无法区分。
+func TestParseDomBlkInfoMissingCapacity(t *testing.T) {
+	if _, err := parseDomBlkInfo("Allocation: 1024\n"); err == nil {
+		t.Fatal("缺少 capacity 应返回错误")
+	}
+}

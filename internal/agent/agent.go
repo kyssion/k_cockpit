@@ -46,6 +46,16 @@ const (
 	// 代价是同节点上的其它虚拟机会经历一次 libvirt 重启。
 	OpVMDelete OpKind = "vm.delete"
 
+	// OpVMRestore 把移入回收站的虚拟机**重新定义**回虚拟化层（F-2-04）。
+	//
+	// 移入回收站时域定义会被删除（只保留磁盘），因此"恢复记录"并不等于
+	// "机器回来了"。节点侧在删除时把域 XML 存了一份（`disk_action=keep`
+	// 才有），本操作据此 `virsh define` 重建域——磁盘路径都还在原处，
+	// 所以重建出来的就是原来那台机器（关机态）。
+	//
+	// 幂等：域已存在时直接成功。
+	OpVMRestore OpKind = "vm.restore"
+
 	// 快照操作（F-2-07）。三个动作**都是耗时操作**：创建与恢复要复制或
 	// 回滚整个磁盘镜像，因此全部走任务队列，接口不同步等待。
 	OpVMSnapshotCreate  OpKind = "vm.snapshot.create"

@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -90,7 +92,51 @@ func vpcSwitchChange(ctx context.Context, op agent.Operation, report Reporter) (
 				// CIDR 的第一个可用地址做网关。
 				gw = firstAddrOf(spec.CIDR)
 			}
-			_, _ = sys.Run(ctx, "ip", "addr", "replace", gw, "dev", bridge)
+			// **必须带前缀长度**：`ip addr add 10.77.0.1 dev kbrX` 会落成 /32，
+			// 内核因此不会为该网段建 connected 路由——桥上的虚拟机 ping 网关、
+			// 走 NAT 出网全部失败（实机抓出：ip -br addr 显示 10.77.0.1/32，
+			// `ip route | grep 10.77` 为空，而 MASQUERADE 规则已经写好）。
+			// 前缀取自 CIDR；地址本身已带 "/" 时按用户写的来。
+			if !strings.Contains(gw, "/") {
+				if prefix := cidrPrefixLen(spec.CIDR); prefix != "" {
+					gw += prefix
+				}
+			}
+			// 先把桥上的全局地址清掉再写：`ip addr replace` 只在**同一前缀**下
+			// 替换，改了 CIDR 之后旧前缀的地址会留在桥上（实机：重配置后同时
+			// 存在 10.77.0.1/32 与 /24）。这座桥的地址由本系统独占管理，
+			// 清空是安全的；link-local 不受 scope global 影响。
+			_, _ = sys.Run(ctx, "ip", "addr", "flush", "dev", bridge, "scope", "global")
+
+			// **同一网段不能同时挂在两座桥上**：内核只把该网段的路由指向
+			// 其中一条，两台虚拟机各自从不同桥出网就会走错路，而现象是
+			// 「偶发不通」，几乎无从排查。实测宿主机上已有 10.77.0.1/24
+			// 的遗留网桥时，新建默认网络不会报任何错。
+			//
+			// 检查放在 flush 之后、replace 之前：此时桥上还没有这个地址，
+			// 任何命中都来自**别的**接口。
+			if holder := gatewayHolder(ctx, strings.SplitN(gw, "/", 2)[0]); holder != "" && holder != bridge {
+				if created {
+					rollbackSwitchBridge(ctx, sys.Run, bridge, spec)
+					return failResult(fmt.Sprintf(
+						"网关 %s 已被接口 %s 占用：本节点已存在同网段的网络。"+
+							"请先清理该网络，或为本交换机改用其它网段（本次创建的网桥已回滚）",
+						strings.SplitN(gw, "/", 2)[0], holder)), nil
+				}
+				return failResult(fmt.Sprintf(
+					"网关 %s 已被接口 %s 占用：本节点已存在同网段的网络，请改用其它网段",
+					strings.SplitN(gw, "/", 2)[0], holder)), nil
+			}
+
+			// 网关配置失败等于交换机不可用：当场失败（并在桥是本次新建时回滚），
+			// 而不是留下一个「active 但没有路由」的桥。
+			if _, err := sys.Run(ctx, "ip", "addr", "replace", gw, "dev", bridge); err != nil {
+				if created {
+					rollbackSwitchBridge(ctx, sys.Run, bridge, spec)
+					return failResult("配置网关地址失败: " + err.Error() + "（已回滚本次创建的网桥 " + bridge + "）"), nil
+				}
+				return failResult("配置网关地址失败: " + err.Error()), nil
+			}
 			_, _ = sys.Run(ctx, "ip", "link", "set", bridge, "up")
 			// DHCP：dnsmasq 绑定到该桥（listen 接口 + 动态范围）。
 			if spec.DHCPStart != "" && spec.DHCPEnd != "" {
@@ -173,6 +219,16 @@ func uplinkBlockedReason(uplinkIf, defaultIface string) string {
 	return "上行口 " + uplinkIf + " 是该节点承载默认路由的网卡（控制面连接走它）。" +
 		"把它接入 OVS 桥会立刻切断本节点的管理连接与既有虚拟机的网络。" +
 		"请改用专用的上行网卡；确实要走 OVS 上联，请在带外控制台上完成并自行承担切换风险。"
+}
+
+// cidrPrefixLen 返回 CIDR 的前缀长度写法（如 "/24"）；无法解析时返回空串。
+func cidrPrefixLen(cidr string) string {
+	_, ipnet, err := net.ParseCIDR(strings.TrimSpace(cidr))
+	if err != nil || ipnet == nil {
+		return ""
+	}
+	ones, _ := ipnet.Mask.Size()
+	return "/" + strconv.Itoa(ones)
 }
 
 // createSwitchBridge 建桥 → 设 VLAN 模式 → 接入上行口。
@@ -789,4 +845,81 @@ func networkRepair(ctx context.Context, op agent.Operation, report Reporter) (*a
 	return &agent.Result{Success: true, Data: map[string]any{
 		agent.NetworkRepairKey: agent.NetworkRepairInfo{Fixed: fixed, Remaining: remaining, Message: msg},
 	}}, nil
+}
+
+// dnsmasqAlive 判断某座网桥的 dnsmasq 实例是否仍在运行。
+func dnsmasqAlive(bridge string) bool {
+	b, err := osReadFile(dnsmasqPidPath(bridge))
+	if err != nil {
+		return false
+	}
+	pid := strings.TrimSpace(string(b))
+	if pid == "" {
+		return false
+	}
+	comm, err := osReadFile("/proc/" + pid + "/comm")
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(comm)) == "dnsmasq"
+}
+
+// rearmDnsmasqForBridges 在 agent 启动时把已有的交换机 DHCP 实例拉起来。
+//
+// 为什么必须有这一步：dnsmasq 是 agent 的子进程（systemd 的 cgroup 默认会
+// 连同子进程一起杀掉），agent 重启/升级/crash 之后所有交换机的 DHCP 都会
+// 消失，而配置文件还在、面板仍显示"已启用 DHCP"——虚拟机拿不到地址，用户
+// 只能看到"网络不通"。实机抓出：重部署 agent 后 `pgrep dnsmasq` 为空，
+// 新建的交换机一直发不出租约。
+//
+// 与 rearmMirrorWatchdogs 同一模式：内存里的东西随进程消失，落盘的东西
+// 必须在启动时重新接管。
+func rearmDnsmasqForBridges() {
+	const dir = "/var/lib/k_cockpit/dnsmasq"
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return // 还没建过任何交换机
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".conf") {
+			continue
+		}
+		bridge := strings.TrimSuffix(e.Name(), ".conf")
+		if bridge == "" || dnsmasqAlive(bridge) {
+			continue
+		}
+		if err := startDnsmasqForBridge(bridge); err != nil {
+			log.Printf("[nodeagent] 启动时恢复 dnsmasq 失败 bridge=%s: %v", bridge, err)
+			continue
+		}
+		log.Printf("[nodeagent] 已恢复交换机 DHCP bridge=%s", bridge)
+	}
+}
+
+// gatewayHolder 返回已持有该地址的接口名；没有则返回空。
+//
+// 同一个地址可以同时配到两座桥上而**不报错**，但内核只会为该网段保留一条
+// 路由——两台虚拟机各自从不同桥出网时必然有一边走错，现象是"偶发不通"。
+// 所以建网桥前必须先问一句"这个地址已经有人用了吗"。
+func gatewayHolder(ctx context.Context, ip string) string {
+	out, err := sys.Run(ctx, "ip", "-o", "addr", "show")
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		// 形如：2: kbr0    inet 10.77.0.1/24 scope global kbr0
+		for i, f := range fields {
+			if f != "inet" && f != "inet6" {
+				continue
+			}
+			if i+1 < len(fields) && strings.HasPrefix(fields[i+1], ip+"/") {
+				return strings.TrimSuffix(fields[1], ":")
+			}
+		}
+	}
+	return ""
 }

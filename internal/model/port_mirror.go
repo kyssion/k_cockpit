@@ -45,11 +45,22 @@ type PortMirror struct {
 
 	Direction string `gorm:"size:8;not null;default:both"`
 
-	// VlanPreserve 决定复制出去的帧是否保留 VLAN 标签。
+	// VlanPreserve 记录「复制出去的帧是否保留 VLAN 标签」。
 	//
-	// 默认 false（剥掉标签）：抓包时看到的往往是**去掉了 VLAN 的帧**，
-	// 因为多数分析工具对带标签的帧处理得不好。要分析 VLAN 本身的行为时
-	// 才需要打开它。
+	// ⚠️ 这一列曾经写着一句**与实现不符**的话：默认 false 表示「剥掉标签」。
+	// 实际上 OVS 的 Mirror 是**原样复制帧**，镜像口上的帧始终带着原始 VLAN
+	// 标签，节点侧也从未读过这个参数（见 nodeagent 的镜像实现）。也就是说
+	// 「剥掉」这件事从来没有发生过——那只是一个看起来生效的选项。
+	//
+	// 现在服务层只接受 true（不传则归一化为 true，显式 false 报 400），
+	// 因此新写入的行恒为 true。列本身与默认值**不动**（改默认值要迁移，
+	// 而迁移解决不了「旧行的含义已经失真」这一点）：
+	//
+	//	新行         → true
+	//	旧行（false） → 照常读出、照常展示；编辑保存时归一化为 true（自愈）
+	//
+	// 判断一行是不是旧数据不该靠这一列——它的语义已经被修订过一次，唯一
+	// 可靠的依据是「为 false 的行一定来自旧版本」。
 	VlanPreserve bool `gorm:"not null;default:false"`
 
 	Enabled bool `gorm:"not null;default:false"`

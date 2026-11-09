@@ -2,6 +2,7 @@ package template
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"log"
 	"strings"
@@ -72,6 +73,14 @@ func (s *Service) Preprocess(
 	if opts.InjectSSHKey && strings.TrimSpace(opts.SSHPublicKey) == "" {
 		return nil, api.InvalidParameter("已选择注入 SSH 公钥，但公钥内容为空")
 	}
+	if opts.InjectSSHKey {
+		// 格式必须在**受理阶段**判死：预处理要等在机器上挂载并改写镜像，
+		// 一个畸形的公钥会在几分钟后以 virt-customize 的底层报错收场
+		// （`failed to parse public key`），用户既看不懂也不知道该改什么。
+		if err := validateSSHPublicKey(opts.SSHPublicKey); err != nil {
+			return nil, err
+		}
+	}
 	if !acknowledge {
 		return nil, api.Conflict("预处理会改写模板镜像内容（失败时由节点还原），确认请勾选")
 	}
@@ -103,6 +112,46 @@ type preprocessParams struct {
 	DiskPath     string   `json:"disk_path"`
 	Steps        []string `json:"steps"`
 	SSHPublicKey string   `json:"ssh_public_key,omitempty"`
+}
+
+// sshKeyTypes 是 authorized_keys 认得的公钥类型前缀。
+//
+// 用白名单而不是"能解析就行"：这段内容会被写进节点上的临时文件、再由
+// virt-customize 落到 /root/.ssh/authorized_keys。放行未知前缀只会把一个
+// 看不懂的失败推迟到镜像改写阶段，而那时用户已经在等结果了。
+var sshKeyTypes = []string{
+	"ssh-rsa", "ssh-ed25519", "ssh-dss",
+	"ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521",
+	"sk-ssh-ed25519@openssh.com", "sk-ecdsa-sha2-nistp256@openssh.com",
+}
+
+// validateSSHPublicKey 校验一行 OpenSSH 公钥（`<type> <base64> [comment]`）。
+//
+// 只校验形态，不解析密钥本身：控制面不需要用它做任何密码学操作，而形态
+// 校验足以挡住「把私钥贴进来」「只贴了一半」「贴了 ssh-rsa 这个前缀」这三类
+// 最常见的手误。
+func validateSSHPublicKey(raw string) error {
+	fields := strings.Fields(strings.TrimSpace(raw))
+	if len(fields) < 2 {
+		return api.ValidationFailed(
+			"SSH 公钥格式不正确：应是一整行 `ssh-ed25519 AAAAC3Nza… 备注`（不是文件路径，也不是 `ssh-rsa` 这样的前缀）")
+	}
+	known := false
+	for _, want := range sshKeyTypes {
+		if fields[0] == want {
+			known = true
+			break
+		}
+	}
+	if !known {
+		return api.ValidationFailed(
+			"不支持的 SSH 公钥类型「" + fields[0] +
+				"」：支持 ssh-rsa / ssh-ed25519 / ecdsa-sha2-*（请复制完整的公钥行）")
+	}
+	if _, err := base64.StdEncoding.DecodeString(fields[1]); err != nil {
+		return api.ValidationFailed("SSH 公钥的密钥体不是合法 base64，请重新复制整行公钥")
+	}
+	return nil
 }
 
 // PreprocessExecutor 执行模板预处理。

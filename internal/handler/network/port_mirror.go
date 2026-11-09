@@ -49,7 +49,11 @@ type mirrorRequest struct {
 	SourcePorts    []string `json:"source_ports"`
 	TargetSwitches []string `json:"target_switches"`
 	Direction      string   `json:"direction"`
-	VlanPreserve   bool     `json:"vlan_preserve"`
+	// VlanPreserve 用指针接收：必须能区分「没传」与「传了 false」。
+	//
+	// 后者要被拒绝（当前实现对帧是原样复制，做不到剥标签），前者归一化为
+	// true。用 bool 的话两者都变成 false，这个区别就永久丢失了。
+	VlanPreserve *bool `json:"vlan_preserve"`
 }
 
 // Create 新建镜像规则（API-181）。默认不启用。

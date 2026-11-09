@@ -767,6 +767,25 @@ func (s *Service) enqueueNetChange(
 	ctx context.Context, vm *model.VM, v authz.Viewer,
 	operatorName, clientIP, taskType, auditAction string, params map[string]any,
 ) (*model.Task, error) {
+	// 虚拟机身份必须进任务参数：执行器拿 vm_name 当发给节点的 Target（那是
+	// virsh 要操作的域名），而 vm_id 用于执行后回写记录。
+	//
+	// 缺了它的表现是「任务受理成功、执行必然失败」：节点侧收到空域名，报
+	// `virsh: error: Failed to get option 'domain': Option argument is empty`，
+	// 用户看到的是「无法确认虚拟机状态」，与真实原因（参数没带域名）无关。
+	//
+	// 调用方（各 spec 构造器）目前都不写这两个键；写成「缺失才补」而不是
+	// 直接赋值，是为了将来某个 spec 自己带了同一语义的键时不被这里覆盖。
+	if params == nil {
+		params = make(map[string]any, 2)
+	}
+	if _, ok := params["vm_id"]; !ok {
+		params["vm_id"] = vm.ID
+	}
+	if _, ok := params["vm_name"]; !ok {
+		params["vm_name"] = vm.Name
+	}
+
 	t, err := s.queue.Enqueue(ctx, task.Spec{
 		Type:         taskType,
 		NodeID:       vm.NodeID,

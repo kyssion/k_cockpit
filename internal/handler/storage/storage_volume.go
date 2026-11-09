@@ -106,7 +106,7 @@ func (h *StorageVolume) Create(ctx context.Context, c *app.RequestContext) {
 		api.Fail(c, err)
 		return
 	}
-	api.OK(c, map[string]any{"plan": plan, "task": t})
+	api.OK(c, api.WithTask(map[string]any{"plan": plan}, t.ID, t.Status))
 }
 
 // Delete 删除存储卷（API-143）。
@@ -127,5 +127,5 @@ func (h *StorageVolume) Delete(ctx context.Context, c *app.RequestContext) {
 		api.Fail(c, err)
 		return
 	}
-	api.OK(c, map[string]any{"task": t})
+	api.OK(c, api.WithTask(nil, t.ID, t.Status))
 }

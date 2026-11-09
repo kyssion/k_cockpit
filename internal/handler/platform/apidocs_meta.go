@@ -205,6 +205,10 @@ var adminAPIRoutes = map[string]bool{
 }
 
 // moduleLabels 把路径首段翻译成模块名，与 API.md 的模块划分一致。
+//
+// **必须覆盖全部首段**：漏一个，摘要里就会直接漏出英文原文（实机测试
+// 抓出「查询host列表」「创建imports」这类条目）。TestAPIDocsSummariesUseChinese
+// 会扫描全量路由，把漏登记的段拦下来。
 var moduleLabels = map[string]string{
 	"health":             "健康检查",
 	"setup":              "初始化",
@@ -212,6 +216,7 @@ var moduleLabels = map[string]string{
 	"account":            "账号自管理",
 	"vms":                "虚拟机",
 	"vm-tags":            "虚拟机标签",
+	"tags":               "标签",
 	"templates":          "模板",
 	"template-exports":   "模板导出",
 	"nodes":              "节点",
@@ -220,9 +225,11 @@ var moduleLabels = map[string]string{
 	"storage-pools":      "存储池",
 	"storage-partitions": "磁盘分区",
 	"storage-volumes":    "存储卷",
+	"storage":            "存储",
 	"my-storage":         "我的存储",
 	"share-mounts":       "目录共享",
 	"networks":           "网络中心",
+	"network":            "网络",
 	"vpc-switches":       "VPC 交换机",
 	"vpc-acl":            "VPC ACL",
 	"security-groups":    "安全组",
@@ -233,19 +240,26 @@ var moduleLabels = map[string]string{
 	"firewall":           "KVM 防火墙",
 	"host-firewall":      "宿主机防火墙",
 	"passthrough":        "硬件直通",
+	"host":               "宿主机",
+	"ovs":                "OVS",
+	"imports":            "镜像导入",
 	"users":              "用户管理",
 	"invites":            "邀请注册",
+	"quota":              "配额",
 	"quotas":             "存储配额",
 	"compute-quotas":     "计算配额",
 	"resource-quotas":    "周期配额",
 	"settings":           "系统设置",
 	"request-logs":       "请求日志",
-	"scheduler":          "调度器",
+	"schedulers":         "调度器",
+	"scheduler-events":   "调度事件",
+	"schedule":           "定时任务",
 	"schedules":          "定时任务",
 	"dashboard":          "工作台",
 	"monitor":            "监控",
 	"search":             "全局搜索",
 	"alerts":             "告警中心",
+	"audit":              "审计日志",
 	"logs":               "服务端日志",
 	"diagnostics":        "诊断",
 	"api-keys":           "API 凭证",
@@ -254,43 +268,193 @@ var moduleLabels = map[string]string{
 	"platform-check":     "平台自检",
 	"host-tuning":        "宿主机调优",
 	"access-control":     "公网访问控制",
+	"version":            "版本信息",
 	"versions":           "版本与依赖",
 }
 
-// actionGlossary 把常见的动作段翻译成中文；未登记的动作原样保留。
-var actionGlossary = map[string]string{
-	"power":     "电源操作",
-	"rescue":    "救援模式切换",
-	"migrate":   "迁移",
-	"clone":     "克隆",
-	"snapshot":  "快照操作",
-	"console":   "控制台",
-	"tags":      "标签",
-	"lock":      "软锁",
-	"owner":     "归属",
-	"timeline":  "时间线",
-	"disks":     "磁盘",
-	"cdrom":     "光驱",
-	"nic":       "网卡",
-	"reinstall": "重装系统",
-	"enter":     "进入",
-	"exit":      "退出",
-	"reset":     "重置",
-	"reload":    "重载规则",
-	"rollback":  "回滚",
-	"preview":   "预览",
-	"apply":     "应用",
-	"rotate":    "轮换",
-	"upload":    "上传",
-	"download":  "下载",
-	"purge":     "清理",
-	"trim":      "回收空间",
-	"unbind":    "解除绑定",
-	"release":   "释放",
-	"verify":    "校验",
-	"send":      "发送",
-	"test":      "测试",
-	"clear":     "清空",
+// singularLabels 把模块名收敛成「单个资源」的说法，供动作句做宾语。
+// 未登记的模块沿用模块名本身。
+var singularLabels = map[string]string{
+	"告警中心": "告警",
+	"邀请注册": "邀请",
+	"用户管理": "用户",
+	"镜像导入": "导入任务",
+}
+
+// nounLabels 是「子资源 / 从属概念」段的中文名。
+//
+// 与 verbLabels 的区别：名词段回答「这是谁的什么」，GET 它是查询，其余
+// 方法是对它的写操作；动作段回答「对它做什么」，措辞是动宾结构。
+var nounLabels = map[string]string{
+	"passthrough":          "直通设备",
+	"tuning":               "调优参数",
+	"disks":                "磁盘",
+	"stats":                "资源占用",
+	"network":              "网络能力",
+	"networks":             "交换机",
+	"storage-pools":        "存储池",
+	"storage-partitions":   "磁盘分区",
+	"storage-volumes":      "存储卷",
+	"unmanaged-vms":        "存量虚拟机",
+	"vpc-switches":         "VPC 交换机",
+	"ports":                "端口",
+	"leases":               "租约",
+	"files":                "文件",
+	"uploads":              "上传会话",
+	"rules":                "规则",
+	"policy":               "策略",
+	"connections":          "连接",
+	"sessions":             "会话",
+	"session":              "会话",
+	"categories":           "分类",
+	"devices":              "设备",
+	"api-keys":             "API 凭证",
+	"quotas":               "配额",
+	"snapshots":            "快照",
+	"interfaces":           "网卡",
+	"nic":                  "网卡",
+	"port-forwards":        "端口转发",
+	"public-ips":           "公网 IP",
+	"static-ips":           "静态地址",
+	"schedules":            "定时任务",
+	"shares":               "共享目录",
+	"cdroms":               "光驱",
+	"tags":                 "标签",
+	"console":              "控制台",
+	"exports":              "导出任务",
+	"imports":              "导入任务",
+	"bridges":              "网桥",
+	"uplink":               "上联",
+	"status":               "状态",
+	"facets":               "取值维度",
+	"format":               "支持的格式",
+	"client-ip":            "出口地址",
+	"vms":                  "虚拟机",
+	"nodes":                "节点",
+	"users":                "用户",
+	"alerts":               "告警",
+	"tasks":                "任务",
+	"templates":            "模板",
+	"settings":             "设置",
+	"stream":               "事件流",
+	"access":               "访问控制",
+	"auth-key":             "签名密钥",
+	"log":                  "服务端日志",
+	"high-risk-policy":     "高风险动作清单",
+	"password-audit":       "弱密码审计",
+	"recovery-codes":       "恢复码",
+	"security-setup":       "安全设置",
+	"addresses":            "地址",
+	"edit-form":            "编辑表单",
+	"create-form":          "创建向导元数据",
+	"initial-credential":   "初始凭据",
+	"migrate-targets":      "可迁移目标",
+	"migrations":           "迁移记录",
+	"neighbors":            "邻居",
+	"pcie-info":            "PCIe 信息",
+	"guest-status":         "来宾状态",
+	"runtime":              "运行态",
+	"effective":            "生效配置",
+	"delete-preview":       "删除影响预览",
+	"config-changes":       "可改配置",
+	"family":               "镜像链",
+	"connection-file":      "控制台连接文件",
+	"frame":                "控制台画面",
+	"screenshot":           "控制台截图",
+	"ws":                   "控制台通道",
+	"iso":                  "ISO 镜像",
+	"health":               "健康状态",
+	"host-detail":          "宿主机详情",
+	"summary":              "概览",
+	"cpu-affinity-presets": "绑核预设",
+	"host":                 "宿主机资源",
+	"ipv6-prefixes":        "IPv6 前缀",
+	"firewall":             "防火墙规则",
+	"guest-actions":        "来宾操作",
+	"monitor":              "监控数据",
+	"xml":                  "域定义",
+	"level":                "日志级别",
+	"backup":               "系统备份",
+	"disk":                 "磁盘",
+	"counters":             "计数器",
+	"global-bandwidth":     "全局带宽",
+	"version":              "版本",
+	"export":               "导出",
+}
+
+// verbLabels 是真正的动作段：摘要按「动作 + 宾语」组织（绑定直通设备）。
+var verbLabels = map[string]string{
+	"bind":            "绑定",
+	"unbind":          "解绑",
+	"ack":             "确认",
+	"ack-all":         "全部确认",
+	"resend":          "重发",
+	"revoke":          "撤销",
+	"cancel":          "取消",
+	"clear":           "清空",
+	"rotate":          "轮换",
+	"release":         "释放",
+	"apply":           "应用",
+	"confirm":         "确认",
+	"preview":         "预览",
+	"precheck":        "预检",
+	"check":           "检查",
+	"repair":          "修复",
+	"reload":          "重载",
+	"reset":           "重置",
+	"reset-usage":     "重置用量",
+	"trim":            "回收空间",
+	"verify":          "校验",
+	"send":            "发送",
+	"test":            "测试",
+	"enable":          "启用",
+	"disable":         "停用",
+	"skip":            "跳过",
+	"accept":          "接受",
+	"close":           "关闭",
+	"delete":          "删除",
+	"delete-all":      "全部删除",
+	"read":            "读取",
+	"export":          "导出",
+	"download":        "下载",
+	"file":            "下载",
+	"complete":        "完成",
+	"parse":           "解析",
+	"flatten":         "合并",
+	"rebase":          "重定基",
+	"preprocess":      "预处理",
+	"promote-child":   "提升子卷",
+	"promote-delete":  "提升并删除",
+	"resize":          "扩容",
+	"eject":           "弹出",
+	"upload":          "上传",
+	"unmount":         "卸载",
+	"config":          "配置",
+	"reconfigure":     "重新配置",
+	"restore":         "恢复",
+	"login":           "登录",
+	"logout":          "登出",
+	"rotate-auth-key": "轮换签名密钥",
+}
+
+// actionLabels 是**过程性动作**（不是对某个子资源的读写），保留
+// 「对<模块>执行「…」」的措辞：它读起来是一条操作，而不是一次数据访问。
+var actionLabels = map[string]string{
+	"power":         "电源操作",
+	"power-actions": "电源操作",
+	"rescue":        "救援模式切换",
+	"reinstall":     "重装系统",
+	"migrate":       "迁移",
+	"clone":         "克隆",
+	"lock":          "软锁",
+	"timeline":      "时间线",
+	"owner":         "归属",
+	"batch-actions": "批量操作",
+	"batch-clone":   "批量克隆",
+	"batch-delete":  "批量删除",
+	"force-delete":  "强制删除",
+	"trash":         "移入回收站",
+	"metadata":      "元数据",
 }
 
 // summaryOverrides 是需要精确措辞的接口摘要（"METHOD path"，不含前缀）。
@@ -314,6 +478,86 @@ var summaryOverrides = map[string]string{
 	"GET /nodes/:id/unmanaged-vms": "扫描节点上面板之外的存量域（未纳管清单）",
 	"POST /nodes/:id/adopt-vm":     "纳管一个存量域：只补记录，不改动域本身",
 	"POST /vms/:id/force-delete":   "强制删除僵尸虚拟机（跳过状态探测，需二次验证）",
+
+	// --- 认证与安全引导：语义无法从路径推断，逐条手写 ---
+	"POST /auth/logout":                  "退出登录（吊销当前会话）",
+	"PUT /auth/password":                 "修改登录密码（会踢掉其它会话）",
+	"PUT /auth/username":                 "修改用户名",
+	"PUT /auth/email":                    "更换邮箱（需验证码确认）",
+	"POST /auth/email/code":              "发送邮箱验证码",
+	"POST /auth/totp/setup":              "开始绑定 TOTP（返回密钥与二维码）",
+	"POST /auth/totp/confirm":            "确认绑定 TOTP",
+	"POST /auth/recovery-codes":          "重新生成 TOTP 恢复码",
+	"POST /auth/risk-verification":       "提交高风险操作的二次验证码",
+	"GET /auth/security-setup":           "查询账号安全设置状态",
+	"GET /auth/session":                  "查询当前会话",
+	"GET /auth/sessions":                 "查询登录会话列表",
+	"DELETE /auth/sessions/:id":          "踢出指定的登录会话",
+	"POST /auth/bootstrap/complete":      "完成安全初始化引导",
+	"POST /auth/bootstrap/skip":          "跳过安全初始化引导",
+	"POST /auth/bootstrap/totp/setup":    "开始绑定 TOTP（引导阶段）",
+	"POST /auth/bootstrap/totp/confirm":  "确认绑定 TOTP（引导阶段）",
+	"POST /auth/bootstrap/email/code":    "发送引导邮箱验证码",
+	"POST /auth/bootstrap/email/confirm": "确认引导邮箱",
+	"POST /auth/forgot/verify":           "校验找回密码验证码",
+
+	// --- 平台与节点 ---
+	"GET /health":      "健康检查（存活与依赖状态）",
+	"GET /version":     "查询版本与依赖信息",
+	"GET /search":      "跨资源全局搜索",
+	"GET /quota":       "查询我的配额用量",
+	"GET /my-storage":  "查询我的存储用量",
+	"POST /my-storage": "开通我的存储空间",
+	"PUT /my-storage/uploads/:uploadID/chunks/:index": "上传一个分片",
+	"POST /nodes/registration-tokens":                 "生成节点接入令牌（一次性）",
+	"PATCH /nodes/:id/console-host":                   "设置节点控制台对外地址",
+	"PATCH /nodes/:id/maintenance":                    "设置节点维护模式",
+	"GET /monitor/host/devices":                       "查询宿主机设备清单",
+	"GET /settings/access":                            "查询公网访问控制策略",
+	"PUT /settings/access":                            "更新公网访问控制策略",
+	"GET /settings/auth-key":                          "查询会话签名密钥",
+	"PUT /settings/log/level":                         "调整服务端日志级别",
+	"POST /settings/mail/test":                        "发送测试邮件",
+	"POST /settings/rollback":                         "回滚系统设置到上一版本",
+
+	// --- 网络 ---
+	"POST /networks/counters/reset":         "清空网络计数器",
+	"POST /networks/global-bandwidth/apply": "应用全局带宽限制",
+	"POST /networks/ipv6/policy":            "更新 IPv6 策略",
+	"POST /networks/bridges/:id/uplink":     "设置网桥上联",
+	"DELETE /networks/bridges/:id/uplink":   "取消网桥上联",
+	"GET /tags/vms":                         "查询打了标签的虚拟机",
+	"DELETE /public-ips/:id/bind":           "解绑公网 IP",
+	"POST /firewall/rollback":               "回滚 KVM 防火墙规则",
+	"POST /host-firewall/rollback":          "回滚宿主机防火墙规则",
+	"POST /imports/parse":                   "解析导入源文件（探测格式与系统）",
+
+	// --- 存储与模板 ---
+	"POST /storage/trim":                 "回收存储空间（TRIM）",
+	"POST /templates/:id/flatten":        "合并模板镜像链",
+	"POST /templates/:id/preprocess":     "预处理模板（离线准备）",
+	"POST /templates/:id/promote-child":  "提升子卷为模板",
+	"POST /templates/:id/promote-delete": "提升子卷并删除父模板",
+	"POST /templates/:id/rebase":         "变更模板的父镜像",
+
+	// --- 虚拟机 ---
+	"GET /vms/trash":                          "查询回收站",
+	"POST /vms/:id/disk/resize":               "扩容虚拟机磁盘",
+	"POST /vms/:id/disks/independent":         "创建独立数据盘（不随快照回滚）",
+	"PUT /vms/:id/cdroms/:cdromID/bus":        "切换光驱总线",
+	"PUT /vms/:id/cdroms/:cdromID/iso":        "挂载或更换光驱镜像",
+	"POST /vms/:id/config-changes":            "预演虚拟机配置变更",
+	"PATCH /vms/:id/console":                  "调整控制台参数（协议与密码）",
+	"GET /vms/:id/public-ips/guest-status":    "查询虚拟机公网 IP 的来宾状态",
+	"POST /vms/:id/security-groups/apply":     "应用安全组到虚拟机",
+	"POST /vms/:id/nvram/repair":              "修复虚拟机 NVRAM",
+	"DELETE /vms/:id/reinstall/backup":        "删除重装前的系统备份",
+	"POST /vms/:id/xml/precheck":              "预检虚拟机域定义",
+	"GET /vms/:id/timeline":                   "查询虚拟机操作时间线",
+	"PATCH /vms/:id/metadata":                 "更新虚拟机元数据（备注与分组）",
+	"PUT /vms/:id/owner":                      "转移虚拟机归属",
+	"POST /vms/port-forwards/batch-delete":    "批量删除端口转发",
+	"GET /vms/:id/exports/:exportID/download": "下载导出的文件",
 }
 
 // authOf 判定认证方式。
@@ -328,52 +572,161 @@ func authOf(relPath, method string) string {
 	return "user"
 }
 
-// summarizeOf 生成接口摘要：先查覆盖表，其余按方法与路径形状推断。
+// summarizeOf 生成接口摘要：先查覆盖表，其余按「模块 + 子资源 + 动作」推断。
+//
+// 三条规则：
+//  1. 末段是路径参数 → 对该资源的 CRUD，对象取「模块 + 上一层名词」，
+//     所以 /security-groups/:id/rules/:id 是「安全组规则」而不是「安全组」；
+//  2. 末段是名词或动作段 → 「动词 + 宾语」，宾语优先用最近的子资源名词，
+//     没有就用模块的单数说法（/alerts/:id/ack → 确认告警）；
+//  3. 其余按方法与模块推断集合操作。
 func summarizeOf(method, relPath string) string {
-	if s, ok := summaryOverrides[method+" "+relPath]; ok {
+	if summary, ok := summaryOverrides[method+" "+relPath]; ok {
+		return summary
+	}
+	segs := splitPath(relPath)
+	if len(segs) == 0 {
+		return "接口"
+	}
+	module := moduleOf(segs)
+	last := segs[len(segs)-1]
+
+	// 规则 1：末段是参数（资源详情 / 更新 / 删除）。
+	if strings.HasPrefix(last, ":") {
+		obj := module
+		if len(segs) >= 3 {
+			if noun, ok := nounLabels[segs[len(segs)-2]]; ok {
+				obj = joinLabel(module, noun)
+			}
+		}
+		switch method {
+		case "GET":
+			return joinLabel("查询", obj) + "详情"
+		case "PATCH", "PUT":
+			return joinLabel("更新", obj)
+		case "DELETE":
+			return joinLabel("删除", obj)
+		default:
+			return joinLabel("操作", obj)
+		}
+	}
+
+	// 规则 2：动作段优先于名词段——动作段是「对它做什么」，
+	// 名词段是「它是谁的什么」。
+	if verb, ok := verbLabels[last]; ok {
+		return joinLabel(verb, objectOf(segs, module))
+	}
+	if action, ok := actionLabels[last]; ok {
+		return "对" + spaceIfASCII(module) + module + "执行「" + action + "」"
+	}
+	// 首段本身是集合（/vms、/settings）：不能把模块名再当一次宾语，
+	// 否则会得到「虚拟机虚拟机」。
+	if noun, ok := nounLabels[last]; ok && len(segs) > 1 {
+		obj := objectForNoun(segs, module, noun)
+		return joinLabel(nounVerb(method), obj)
+	}
+
+	// 规则 3：纯集合（/vms、/users）。
+	if method == "GET" {
+		return joinLabel("查询", module) + "列表"
+	}
+	return joinLabel(collectionVerb(method), module)
+}
+
+// objectOf 给动作段找宾语：最近的子资源名词；找不到用模块的单数说法。
+//
+// 只对名词求值（动作段跳过），因为「对直通设备绑定」这类两层动作在
+// 本项目里不存在，跳过不会丢信息。
+func objectOf(segs []string, module string) string {
+	for i := len(segs) - 2; i >= 1; i-- {
+		if noun, ok := nounLabels[segs[i]]; ok {
+			return noun
+		}
+	}
+	return singularOf(module)
+}
+
+// objectForNoun 给名词段拼完整宾语。
+//
+// 名词嵌在另一层子资源里时带上那层名字（/settings/log/status →
+// 服务端日志状态）；直接挂在模块下（含参数之后）就用「模块 + 名词」，
+// 因为「磁盘」单说无法说明是谁的磁盘（/nodes/:id/disks → 节点磁盘）。
+func objectForNoun(segs []string, module, noun string) string {
+	for i := len(segs) - 2; i >= 0; i-- {
+		seg := segs[i]
+		if strings.HasPrefix(seg, ":") {
+			return joinLabel(module, noun)
+		}
+		if prev, ok := nounLabels[seg]; ok && i > 0 {
+			return joinLabel(prev, noun)
+		}
+	}
+	return joinLabel(module, noun)
+}
+
+// nounVerb 是名词段的动作词：GET 是查询，POST 是创建，其余按写操作。
+func nounVerb(method string) string {
+	switch method {
+	case "GET":
+		return "查询"
+	case "POST":
+		return "创建"
+	case "PATCH", "PUT":
+		return "更新"
+	case "DELETE":
+		return "删除"
+	default:
+		return "操作"
+	}
+}
+
+// collectionVerb 是集合级接口的动作词。
+func collectionVerb(method string) string {
+	switch method {
+	case "GET":
+		return "查询"
+	case "POST":
+		return "创建"
+	case "PATCH", "PUT":
+		return "更新"
+	case "DELETE":
+		return "删除"
+	default:
+		return "操作"
+	}
+}
+
+// singularOf 取模块的单数说法（动作句的兜底宾语）。
+func singularOf(module string) string {
+	if s, ok := singularLabels[module]; ok {
 		return s
 	}
+	return module
+}
 
-	segs := splitPath(relPath)
-	module := moduleOf(segs)
-	// 最后一个路径段是动作还是资源，决定措辞。
-	last := segs[len(segs)-1]
-	hasParam := strings.Contains(relPath, ":")
-
-	switch {
-	case last != "" && strings.HasPrefix(last, ":"):
-		// 以参数结尾：典型 CRUD。
-		switch method {
-		case "GET":
-			return "查询" + module + "详情"
-		case "PATCH", "PUT":
-			return "更新" + module
-		case "DELETE":
-			return "删除" + module
-		default:
-			return "操作" + module
-		}
-	case hasParam:
-		// 参数之后的动作段。
-		action, ok := actionGlossary[last]
-		if !ok {
-			action = last
-		}
-		return "对" + module + "执行「" + action + "」"
-	default:
-		switch method {
-		case "GET":
-			return "查询" + module + "列表"
-		case "POST":
-			return "创建" + module
-		case "PATCH", "PUT":
-			return "更新" + module
-		case "DELETE":
-			return "删除" + module
-		default:
-			return "操作" + module
-		}
+// joinLabel 拼接两个中文词；任一侧是 ASCII 时补一个空格，
+// 否则会出现「查询OVS 状态」「OVS状态」这类中英粘连。
+func joinLabel(verb, obj string) string {
+	if verb == "" || obj == "" {
+		return verb + obj
 	}
+	if isASCII(verb[len(verb)-1]) || isASCII(obj[0]) {
+		return verb + " " + obj
+	}
+	return verb + obj
+}
+
+// spaceIfASCII 在字符串以 ASCII 开头时返回一个空格，用于中文前缀之后，
+// 避免「对VPC 交换机」这种中英粘连。
+func spaceIfASCII(s string) string {
+	if s != "" && isASCII(s[0]) {
+		return " "
+	}
+	return ""
+}
+
+func isASCII(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
 
 // moduleOf 取模块名（找不到时退回首段本身，保证每个接口都有分组）。

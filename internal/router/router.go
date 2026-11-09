@@ -75,6 +75,8 @@ type Deps struct {
 	// StaticDir 是前端构建产物目录（STATIC_DIR）。为空或目录不存在时不注册
 	// 静态托管，只提供 API（见 static.go）。
 	StaticDir string
+	// AgentAddr 是 agent 网关的监听地址（AGENT_LISTEN_ADDR），用于拼注册命令。
+	AgentAddr string
 	Auth      *auth.Service
 	Bootstrap *auth.Bootstrap
 	Node      *node.Service
@@ -191,8 +193,13 @@ func Register(h *server.Hertz, deps Deps) {
 	if deps.ReqLog != nil {
 		h.Use(platform.RequestLogger(deps.ReqLog))
 	}
+	// RequestID 必须排在 InputFilter **之前**：InputFilter 会直接 403 拒绝
+	// 含 NUL 等非法输入的请求，若此时 request_id 还没生成，客户端拿到的
+	// 403 既没有 X-Request-ID 也没有 body.request_id，运维无法把这次拦截
+	// 与日志关联起来（第 9 轮实机抓出）。
+	h.Use(api.RequestID())
 	h.Use(api.SecurityHeaders(), api.InputFilter(deps.InputFilterEnabled))
-	h.Use(api.RequestID(), api.Recover(), api.AccessLog())
+	h.Use(api.Recover(), api.AccessLog())
 
 	h.GET("/health", platform.Health(deps.DB))
 
@@ -233,6 +240,8 @@ func Register(h *server.Hertz, deps Deps) {
 	apiDocsHandler := platform.NewAPIDocs(h)
 	v1.GET("/api-endpoints", g.requireAuth, apiDocsHandler.List)
 
-	// 静态托管放在最后：它只接管「以上都没有匹配到」的请求。
+	// 兜底与静态托管放在最后：它们只接管「以上都没有匹配到」的请求。
+	// 顺序不能反——静态托管会覆盖未匹配路由的处理。
+	registerFallbacks(h)
 	registerStatic(h, deps.StaticDir)
 }

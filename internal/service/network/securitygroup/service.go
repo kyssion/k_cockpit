@@ -190,6 +190,14 @@ func (s *Service) CreateGroup(
 	if name == "" {
 		return nil, api.InvalidParameter("必须填写安全组名称")
 	}
+	// 长度上限必须与列定义（size:64）一致。
+	//
+	// 不校验的后果随驱动而变：SQLite 不检查 VARCHAR 长度，2 MB 的名字会被
+	// 原样存进去（实机探针抓出）；PostgreSQL 会直接报 "value too long"，
+	// 变成一次 500。同一份输入在两种驱动下表现不同，只能靠服务层收口。
+	if len([]rune(name)) > 64 {
+		return nil, api.InvalidParameter("安全组名称不能超过 64 个字符")
+	}
 	if err := s.ensureNode(ctx, req.NodeID); err != nil {
 		return nil, err
 	}
@@ -987,14 +995,18 @@ func (s *Service) ensureSwitch(ctx context.Context, value string, nodeID int64) 
 		return api.InvalidParameter("交换机标识不合法")
 	}
 	var n int64
+	// deleted_at 过滤不可少：软删是自定义列（*time.Time），GORM 不会自动
+	// 排除。漏了它就能把规则挂到一台已删除的交换机上——而它的网桥已经不在
+	// 宿主机上，规则会静默失效（用户以为放行了，实际没有任何效果）。
 	if err := s.db.WithContext(ctx).Model(&model.VpcSwitch{}).
-		Where("id = ? AND node_id = ?", id, nodeID).Count(&n).Error; err != nil {
+		Where("id = ? AND node_id = ? AND deleted_at IS NULL", id, nodeID).
+		Count(&n).Error; err != nil {
 		log.Printf("[securitygroup] 查询交换机失败: %v", err)
 		return api.Internal()
 	}
 	if n == 0 {
-		// 跨节点的交换机没有网络路径，规则会静默失效——那比报错更糟。
-		return api.ValidationFailed("交换机不存在或不在同一节点上")
+		// 跨节点或已删除的交换机没有网络路径，规则会静默失效——那比报错更糟。
+		return api.ValidationFailed("交换机不存在、已被删除或不在同一节点上")
 	}
 	return nil
 }

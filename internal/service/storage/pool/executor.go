@@ -125,6 +125,19 @@ func (e *CreateExecutor) Run(ctx context.Context, t *model.Task) error {
 
 	log.Printf("[storage] 已创建存储池 id=%d node=%d device=%s task=%d",
 		pool.ID, pool.NodeID, pool.DeviceID, t.ID)
+
+	// 建池后立刻收敛「我的存储」根：等下一轮容量刷新（最长 2.5 分钟）才
+	// 切换的话，这期间上传的镜像仍然写系统盘——而"刚建完池就传镜像"正是
+	// 最常见的操作顺序。失败只记日志：池已经建好了，根可以下一轮再收敛。
+	if err := SyncUserdataRoot(ctx, e.db, e.agent, pool.NodeID); err != nil {
+		log.Printf("[storage] 建池后同步用户存储根失败 node=%d: %v", pool.NodeID, err)
+	}
+	// 立刻回填容量：否则从「池建好」到下一轮定时刷新（最长 2.5 分钟）
+	// 之间列表里显示 0，用户会以为池没建成功（实机测试抓出）。
+	// 失败只记日志——池已经挂载可用，容量下一轮会补上。
+	if err := RefreshNodeCapacity(ctx, e.db, e.agent, pool.NodeID); err != nil {
+		log.Printf("[storage] 建池后刷新容量失败 node=%d: %v", pool.NodeID, err)
+	}
 	return nil
 }
 

@@ -78,10 +78,16 @@ type VMDisk struct {
 	// 两个都要：qcow2 是稀疏文件，一台配 500 GB 的机器可能只占 20 GB。只
 	// 给一个数字的话，用户要么以为盘快满了，要么以为配额算错了——而配额
 	// 恰恰是按配置容量算的（f-9-02）。
-	CapacityGB  int
-	ActualBytes int64
-	Format      string
-	Bus         string
+	CapacityGB int
+	// CapacityBytes 是配置容量的**精确字节数**。
+	//
+	// CapacityGB 是取整值，一块 404 MB 的系统盘会得到 0——磁盘页签于是
+	// 显示「0 GB」而盘其实是好的（实机测试抓出）。控制面按字节重新折算
+	// 并保留两位小数；老 agent 不发这个字段时回退到 CapacityGB。
+	CapacityBytes int64
+	ActualBytes   int64
+	Format        string
+	Bus           string
 	// Source 是宿主机上的镜像路径，**仅用于展示与排障**；控制面不解释它。
 	Source string
 	// IsSystem 标记系统盘：它不可卸载。

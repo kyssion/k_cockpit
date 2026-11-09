@@ -548,6 +548,53 @@ func (s *Service) markExport(ctx context.Context, id int64, status, message stri
 	}
 }
 
+// interruptedExportMessage 是「重启中断」的唯一文案。
+//
+// 它必须同时说清**发生了什么**（控制面重启）与**接下来能做什么**（请重试）
+// ——只写"导出中断"会把人推去查日志，而这时没有日志可查：执行器根本没跑。
+const interruptedExportMessage = "控制面重启，导出中断，请重试"
+
+// recoverInterruptedExports 在构造期把重启前遗留的在途导出记录收敛为失败。
+//
+// **要解决的问题**：导出记录在**入队之前**就已经建行（Export 里
+// Status=TemplateExportPending），终态由导出执行器在任务成功/失败时写回
+// （transfer_executor.go）。进程被强杀时执行器不会跑，而启动恢复
+// （ops/task 的 recoverStale）只处理 task 表——于是 template_export 会永久停在
+// pending：列表上一直显示"导出中"，用户既拿不到包也无法重试，只能手动删记录。
+//
+// **为什么可以无条件收敛所有 pending/running，而不必按时间阈值判断**：控制面
+// 是单实例的（internal/platform/database/instancelock.go 用 PostgreSQL 会话级
+// advisory lock 保证同一个库只有一处写入；SQLite 形态本身就是单进程写者），
+// 而且那把锁在 cmd/server 装配服务**之前**就已经拿到，因此进程启动的这一瞬间**不可能**存在另一个实例在途的导出任务——凡是仍为
+// pending/running 的行，它的执行器一定随上一个进程一起消失了，不会再有人把它
+// 推进到终态。按 created_at 给一个宽限期反而会留下"重启后仍然显示导出中"的
+// 窗口，而那个窗口里用户同样拿不到包、也无法重试——正是本函数要消灭的现象。
+//
+// **只改状态与 error，不动节点侧文件**：进程被强杀时节点上的打包可能仍在
+// 收尾，控制面无法可靠判断产物是否完整；置 failed 后用户可以重新导出，而残留
+// 文件的清理由删除导出那条路径（DeleteExport → delete 执行器）负责。
+//
+// 失败只记日志：这是一次启动期的自愈，不该因为一条展示用的记录而阻断启动
+// （与包内其它"记录类写入失败只记日志"的处理一致）。
+func recoverInterruptedExports(db *gorm.DB) {
+	res := db.Model(&model.TemplateExport{}).
+		Where("status IN ?", []string{
+			model.TemplateExportPending, model.TemplateExportRunning,
+		}).
+		Updates(map[string]any{
+			"status":      model.TemplateExportFailed,
+			"error":       interruptedExportMessage,
+			"finished_at": time.Now(),
+		})
+	if res.Error != nil {
+		log.Printf("[template] 收敛重启前遗留的在途导出记录失败: %v", res.Error)
+		return
+	}
+	if res.RowsAffected > 0 {
+		log.Printf("[template] 已把 %d 条重启前遗留的导出记录标记为失败", res.RowsAffected)
+	}
+}
+
 func toExportView(e *model.TemplateExport) ExportView {
 	view := ExportView{
 		ID: e.ID, NodeID: e.NodeID, TemplateID: e.TemplateID,

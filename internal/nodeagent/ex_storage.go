@@ -4,16 +4,47 @@ package nodeagent
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/nodeagent/sys"
 )
+
+// poolMountRoot 是存储池挂载点的根目录。
+const poolMountRoot = "/var/lib/k_cockpit/pools"
+
+// poolMountPath 拼接设备的挂载点。
+//
+// 用 filepath.Join 而不是字符串拼接：device_id 本身以 /dev/ 开头
+// （或为分区名），直接拼接会得到 pools//dev/nbd0 这样的双斜杠路径
+// （fstab 与面板展示里很难看，还让新旧路径的 fstab 清理对不上）。
+func poolMountPath(deviceID string) string {
+	return filepath.Join(poolMountRoot, deviceID)
+}
+
+// hostMountRun 在宿主机（PID 1）的挂载命名空间里执行挂载类命令。
+//
+// 为什么需要它：部署单元（deploy/agent/k_cockpit-agent.service）的
+// ProtectSystem=full 让服务运行在独立挂载命名空间里，且传播方向为
+// slave——服务内 mount 返回成功，宿主机与其他进程却看不到这个挂载，
+// 服务重启后它随之消失（systemd 255 实机验证）。存储池的「格式化 +
+// 挂载」于是表现为任务 success 但挂载不存在，虚拟机磁盘静默落到根
+// 文件系统上。nsenter -t 1 -m 进入宿主命名空间执行，挂载对宿主机可见，
+// 同时保留沙箱的只读保护。nsenter 不可用（极端精简环境）时回退为直接
+// 执行——此时服务通常没有沙箱，行为等价于修复前。
+func hostMountRun(ctx context.Context, name string, args ...string) (string, error) {
+	if sys.RunOK(ctx, "nsenter", "-t", "1", "-m", "--", "true") {
+		return sys.Run(ctx, "nsenter", append([]string{"-t", "1", "-m", "--", name}, args...)...)
+	}
+	return sys.Run(ctx, name, args...)
+}
 
 // storagePoolCreate 实现 storage.pool.create：格式化 + 挂载。
 //
@@ -35,11 +66,12 @@ func storagePoolCreate(ctx context.Context, op agent.Operation, report Reporter)
 		return failResult("格式化失败: " + err.Error()), nil
 	}
 	report(Stage{Key: "mount", Name: "挂载", Index: 3, Total: 3})
-	mountPath := "/var/lib/k_cockpit/pools/" + deviceID
+	mountPath := poolMountPath(deviceID)
 	if err := osMkdirAllErr(mountPath); err != nil {
 		return failResult("创建挂载点失败: " + err.Error()), nil
 	}
-	if _, err := sys.Run(ctx, "mount", dev, mountPath); err != nil {
+	// 挂载必须落在宿主机命名空间（见 hostMountRun）。
+	if _, err := hostMountRun(ctx, "mount", dev, mountPath); err != nil {
 		return failResult("挂载失败: " + err.Error()), nil
 	}
 	// fstab（nofail：盘坏了不阻塞启动）。
@@ -57,11 +89,14 @@ func storagePoolCreate(ctx context.Context, op agent.Operation, report Reporter)
 // storagePoolDelete 实现 storage.pool.delete：卸载 + 清 fstab。
 func storagePoolDelete(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	report(Stage{Key: "unmount", Name: "卸载并清理", Index: 1, Total: 1})
-	_, _ = sys.Run(ctx, "umount", op.Target)
+	_, _ = hostMountRun(ctx, "umount", op.Target)
 	deviceID := strParam(op.Params, "device_id")
 	if deviceID != "" {
-		removeFstabLinesContaining("/var/lib/k_cockpit/pools/" + deviceID)
-		_ = osRemoveAll("/var/lib/k_cockpit/pools/" + deviceID)
+		removeFstabLinesContaining(poolMountPath(deviceID))
+		// 兼容旧版本（路径未用 Join，/dev 开头的 device_id 会产生双斜杠）
+		// 写下的 fstab 行：升级后删除这类池时也要把它清掉。
+		removeFstabLinesContaining(poolMountRoot + "/" + deviceID)
+		_ = osRemoveAll(poolMountPath(deviceID))
 	}
 	return &agent.Result{Success: true}, nil
 }
@@ -82,6 +117,38 @@ func storagePoolScan(ctx context.Context, op agent.Operation, report Reporter) (
 	return &agent.Result{Success: true, Data: map[string]any{agent.VolumeListKey: volumes}}, nil
 }
 
+// storagePoolStat 实现 storage.pool.stat：对给定挂载点批量 statfs。
+//
+// 路径必须落在存储池挂载根之内——来自控制面的参数不能变成任意路径的
+// 探测面（路径语义硬规则）。单个路径失败只跳过自己：一个池被手动卸载
+// 不该让其它池的容量也失真；全部成功的路径批量返回。
+func storagePoolStat(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
+	report(Stage{Key: "statfs", Name: "读取池容量", Index: 1, Total: 1})
+	raw, _ := op.Params["paths"].([]any)
+	stats := []agent.PoolStat{}
+	for _, p := range raw {
+		path, ok := p.(string)
+		if !ok || path == "" {
+			continue
+		}
+		if path != poolMountRoot && !strings.HasPrefix(path, poolMountRoot+"/") {
+			continue // 越出挂载根的路径直接忽略
+		}
+		var st syscall.Statfs_t
+		if err := syscall.Statfs(path, &st); err != nil {
+			continue
+		}
+		stats = append(stats, agent.PoolStat{
+			Path:       path,
+			TotalBytes: int64(st.Blocks) * int64(st.Bsize),
+			FreeBytes:  int64(st.Bavail) * int64(st.Bsize),
+		})
+	}
+	return &agent.Result{Success: true, Data: map[string]any{
+		agent.PoolStatListKey: stats,
+	}}, nil
+}
+
 // storagePoolConfig 实现 storage.pool.config（挂载点/自动挂载）。
 func storagePoolConfig(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	report(Stage{Key: "config", Name: "更新池配置", Index: 1, Total: 1})
@@ -91,7 +158,7 @@ func storagePoolConfig(ctx context.Context, op agent.Operation, report Reporter)
 		if mkErr := osMkdirAllErr(mountPath); mkErr != nil {
 			return failResult(mkErr.Error()), nil
 		}
-		_, _ = sys.Run(ctx, "mount", op.Target, mountPath)
+		_, _ = hostMountRun(ctx, "mount", op.Target, mountPath)
 	}
 	return &agent.Result{Success: true, Data: map[string]any{
 		"mount_path": mountPath, "auto_mount": autoMount,
@@ -101,12 +168,13 @@ func storagePoolConfig(ctx context.Context, op agent.Operation, report Reporter)
 // storagePoolUnmount 实现 storage.pool.unmount（卸载保留数据）。
 func storagePoolUnmount(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	report(Stage{Key: "unmount", Name: "卸载（保留数据）", Index: 1, Total: 1})
-	if _, err := sys.Run(ctx, "umount", op.Target); err != nil {
+	if _, err := hostMountRun(ctx, "umount", op.Target); err != nil {
 		return failResult("卸载失败: " + err.Error()), nil
 	}
 	deviceID := strParam(op.Params, "device_id")
 	if deviceID != "" {
-		removeFstabLinesContaining("/var/lib/k_cockpit/pools/" + deviceID)
+		removeFstabLinesContaining(poolMountPath(deviceID))
+		removeFstabLinesContaining(poolMountRoot + "/" + deviceID)
 	}
 	return &agent.Result{Success: true, Data: map[string]any{
 		"unmounted": true, "data_kept": true,
@@ -241,11 +309,47 @@ func devOf(devs []string) string {
 	return devs[0]
 }
 
-// storageFileCommit 实现 storage.file.commit：分片暂存整份落盘。
+// storageFilePush 实现 storage.file.push：接收控制面推送的内容分块。
 //
-// 控制面把分片上传的整份内容放在 staged 路径（同机部署时是控制面数据
-// 目录）；跨机部署时由控制面先流式送达节点（P4 的 file 上传通道）。
-// 这里把它移动到用户存储根 + rel_path，并回传真实大小与 SHA-256。
+// 分块按 offset 写进 `<最终路径>.kcpart` 暂存文件，等 commit 收口。
+// rel_path 的越界校验与 commit 相同（落点必须留在用户存储根内）。
+func storageFilePush(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
+	report(Stage{Key: "push", Name: "接收文件分块", Index: 1, Total: 1})
+	relPath := strParam(op.Params, "rel_path")
+	dataB64 := strParam(op.Params, "data")
+	offset, _ := op.Params["offset"].(float64)
+	if relPath == "" {
+		return failResult("缺少 rel_path"), nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(dataB64)
+	if err != nil {
+		return failResult("分块内容不是合法 base64: " + err.Error()), nil
+	}
+	dst := filepath.Join(userdataRoot(), relPath)
+	if !strings.HasPrefix(dst, userdataRoot()+"/") {
+		return failResult("目标路径越出用户存储根: " + relPath), nil
+	}
+	part := dst + ".kcpart"
+	if err := osMkdirAllErr(filepath.Dir(part)); err != nil {
+		return failResult("创建暂存目录失败: " + err.Error()), nil
+	}
+	f, err := osOpenFile(part, os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return failResult("打开暂存文件失败: " + err.Error()), nil
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := f.WriteAt(raw, int64(offset)); err != nil {
+		return failResult("写入分块失败: " + err.Error()), nil
+	}
+	return &agent.Result{Success: true}, nil
+}
+
+// storageFileCommit 实现 storage.file.commit：把暂存内容落成正式文件。
+//
+// 三种来源按优先级：staged（同机部署下控制面与节点共享文件系统的兼容
+// 路径）、link_from_rel（秒传：同一份内容登记成两条记录）、`.kcpart`
+// 暂存文件（跨机部署：内容经 storage.file.push 分块送达）。落盘后回传
+// 真实大小与 SHA-256，控制面据此核对传输完整性。
 func storageFileCommit(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	report(Stage{Key: "commit", Name: "落盘用户文件", Index: 1, Total: 1})
 	relPath := strParam(op.Params, "rel_path")
@@ -259,9 +363,9 @@ func storageFileCommit(ctx context.Context, op agent.Operation, report Reporter)
 	// 之后按它取文件、装系统、导出全部失败。
 	linkFrom := strParam(op.Params, "link_from_rel")
 
-	dst := filepath.Join(userdataRoot, relPath)
+	dst := filepath.Join(userdataRoot(), relPath)
 	// relPath 带 ../ 会逃出存储根（guest 可读写宿主任意路径）——越界拒绝。
-	if !strings.HasPrefix(dst, userdataRoot+"/") {
+	if !strings.HasPrefix(dst, userdataRoot()+"/") {
 		return failResult("目标路径越出用户存储根: " + relPath), nil
 	}
 	if err := osMkdirAllErr(filepath.Dir(dst)); err != nil {
@@ -269,8 +373,9 @@ func storageFileCommit(ctx context.Context, op agent.Operation, report Reporter)
 	}
 	switch {
 	case linkFrom != "":
-		src := filepath.Join(userdataRoot, linkFrom)
-		if !strings.HasPrefix(src, userdataRoot+"/") {
+		// 来源可能是切换存储根之前上传的文件（在历史根里），因此走回退寻址。
+		src := resolveExistingUserdataPath(linkFrom)
+		if !underUserdataRoot(src) {
 			return failResult("来源路径越出用户存储根: " + linkFrom), nil
 		}
 		if err := linkOrCopyFile(src, dst); err != nil {
@@ -280,12 +385,23 @@ func storageFileCommit(ctx context.Context, op agent.Operation, report Reporter)
 		if err := osRename(staged, dst); err != nil {
 			return failResult("移动暂存文件失败: " + err.Error()), nil
 		}
+	default:
+		// 跨机部署：内容已由 storage.file.push 写进 <最终路径>.kcpart。
+		part := dst + ".kcpart"
+		if err := osRename(part, dst); err != nil {
+			return failResult("暂存文件不存在或不可移动（分块推送未完成？）: " + err.Error()), nil
+		}
 	}
 	st, err := os.Stat(dst)
 	if err != nil {
 		return failResult("落盘后找不到文件: " + err.Error()), nil
 	}
-	_ = size
+	// 控制面声明的大小与实际落盘不一致，说明推送丢了块——当场判失败，
+	// 不等控制面比对摘要（那条路径会让坏文件在节点上多活一会儿）。
+	if size > 0 && st.Size() != int64(size) {
+		return failResult(fmt.Sprintf("落盘大小不一致：声明 %d 字节，实际 %d 字节",
+			int64(size), st.Size())), nil
+	}
 	sum := sha256OfFile(dst)
 	return &agent.Result{Success: true, Data: map[string]any{
 		agent.StorageFileDataKey: agent.StorageFileInfo{
@@ -322,12 +438,45 @@ func linkOrCopyFile(src, dst string) error {
 	return nil
 }
 
+// resolveExistingUserdataPath 在**当前存储根**里找文件，找不到时回退到历史
+// 默认根。
+//
+// 为什么要回退：存储根切到存储池之后，升级前上传的文件仍留在系统盘的
+// /var/lib/k_cockpit/userdata 下。只按新根拼路径，它们会变成"列得出来、
+// 下不下来、装不了系统"的记录——比丢文件更难解释。
+//
+// 只用于**读/秒传来源**这类既有内容的寻址；写入永远落在当前根（新文件
+// 从一开始就在池里，不会再回到系统盘）。
+func resolveExistingUserdataPath(rel string) string {
+	p := filepath.Join(userdataRoot(), rel)
+	if _, err := os.Stat(p); err == nil {
+		return p
+	}
+	if !filepath.IsAbs(rel) && userdataRoot() != defaultUserdataRoot {
+		old := filepath.Join(defaultUserdataRoot, rel)
+		if _, err := os.Stat(old); err == nil {
+			return old
+		}
+	}
+	return p
+}
+
+// underUserdataRoot 判断路径是否落在当前或历史存储根之内。
+func underUserdataRoot(p string) bool {
+	for _, root := range []string{userdataRoot(), defaultUserdataRoot} {
+		if p == root || strings.HasPrefix(p, root+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // storageFileRead 实现 storage.file.read：按相对路径取回文件内容。
 func storageFileRead(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	report(Stage{Key: "read", Name: "读取文件", Index: 1, Total: 1})
 	relPath := op.Target
-	path := filepath.Join(userdataRoot, relPath)
-	if !strings.HasPrefix(path, userdataRoot+"/") {
+	path := resolveExistingUserdataPath(relPath)
+	if !underUserdataRoot(path) {
 		return failResult("读取路径越出用户存储根: " + relPath), nil
 	}
 	b, err := osReadFileBytes(path)
@@ -339,14 +488,56 @@ func storageFileRead(ctx context.Context, op agent.Operation, report Reporter) (
 	}}, nil
 }
 
+// storageFileDelete 实现 storage.file.delete：删掉一份用户存储文件。
+//
+// 寻址与读取完全一致（当前根优先、回退历史根）：存储根切到存储池之前上传
+// 的文件还在系统盘的旧目录里，只按当前根拼路径会"删不掉"它们——而那些
+// 正是最容易被遗忘的孤儿。
+//
+// **文件不存在返回成功**：删除是幂等的，而"本来就不在"正是它的目标状态。
+// 反过来（报"文件不存在"）会让控制面把一条记录永远留着，或者让用户看到
+// 一个他无法解决的错误。
+func storageFileDelete(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
+	report(Stage{Key: "delete", Name: "删除文件", Index: 1, Total: 1})
+	relPath := strings.TrimSpace(op.Target)
+	if relPath == "" {
+		return failResult("缺少要删除的文件路径"), nil
+	}
+	// 绝对路径直接拒绝：请求里的路径一律是"相对存储根"，放行绝对路径等于
+	// 把"能删宿主机的哪个文件"交给调用方——与共享目录同一条安全边界。
+	if filepath.IsAbs(relPath) {
+		return failResult("删除路径必须是相对用户存储根的路径: " + relPath), nil
+	}
+	path := resolveExistingUserdataPath(relPath)
+	if !underUserdataRoot(path) {
+		return failResult("删除路径越出用户存储根: " + relPath), nil
+	}
+
+	info := agent.StorageFileDeleteInfo{RelPath: relPath, Root: filepath.Dir(path)}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return &agent.Result{Success: true, Message: "文件已不存在（幂等成功）",
+				Data: map[string]any{agent.StorageFileDeleteKey: info}}, nil
+		}
+		return failResult("检查文件失败: " + err.Error()), nil
+	}
+	if err := osRemove(path); err != nil {
+		return failResult("删除文件失败: " + err.Error()), nil
+	}
+	info.Deleted = true
+	return &agent.Result{Success: true, Message: "文件已删除",
+		Data: map[string]any{agent.StorageFileDeleteKey: info}}, nil
+}
+
 // vmShareMount 实现 vm.share.mount（9p 目录共享）。
 //
 // 安全前提：host_path 必须落在用户存储根内（realpath 校验，符号链接
 // 兜底——越界直接拒绝）。
 func vmShareMount(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	action := strParam(op.Params, "action")
-	tag := strParam(op.Params, "tag")
+	tag := strings.TrimSpace(strParam(op.Params, "tag"))
 	report(Stage{Key: "share", Name: "调整 9p 共享", Index: 1, Total: 1})
+
 	if action == "mount" {
 		hostPath := strParam(op.Params, "host_path")
 		real, err := filepath.EvalSymlinks(hostPath)
@@ -355,31 +546,216 @@ func vmShareMount(ctx context.Context, op agent.Operation, report Reporter) (*ag
 		}
 		// 前缀必须落到「目录内」而非「同前缀字符串」：/var/lib/k_cockpit/userdata-evil
 		// 同样满足 HasPrefix(userdataRoot)（review 抓出的越界路径）。
-		if real != userdataRoot && !strings.HasPrefix(real, userdataRoot+"/") {
+		if real != userdataRoot() && !strings.HasPrefix(real, userdataRoot()+"/") {
 			return failResult("共享目录必须在用户存储根内（安全边界）"), nil
 		}
+		if tag == "" {
+			return failResult("缺少共享标识（tag），无法写入域定义"), nil
+		}
+		return mountShare(ctx, op.Target, tag, real, op.Params)
 	}
-	// 域 XML 的 <filesystem> 段调整需要关机+更新定义，P2 的 XML 通道已可
-	// 完成（vm.xml.apply）；这里做源目录准备与 tag 登记。
-	//
+
 	// **卸载要求共享真的存在**（第 3 轮 DEF-R3-09）：原来无论 action 是什么
 	// 都直接返回 success，于是"卸载一个从未挂载过的 tag"也是成功——用户无法
 	// 分辨"已经卸掉"与"本来就没有"，而这两种情况该做的事完全不同。
-	if action != "mount" {
-		if tag == "" {
-			return failResult("缺少共享标识（tag），无法确认要卸载哪一个"), nil
-		}
-		xmlText, err := sys.DumpXML(ctx, op.Target, false)
-		if err != nil {
-			return failResult("读取域定义失败: " + err.Error()), nil
-		}
-		if !shareTagExists(xmlText, tag) {
-			return failResult("该虚拟机上没有名为 " + tag + " 的共享挂载，无需卸载"), nil
+	if tag == "" {
+		return failResult("缺少共享标识（tag），无法确认要卸载哪一个"), nil
+	}
+	return unmountShare(ctx, op.Target, tag)
+}
+
+// mountShare 把共享写进域定义（9p VirtFS）。
+//
+// 此前这里只做路径校验就回成功，域里从来没有 <filesystem>——控制面据此把
+// 记录标成 active，用户在来宾里找不到挂载点，而"任务成功"让他以为是自己
+// 用错了 tag（实机复现：`virsh dumpxml --inactive` 里一个 <filesystem> 都
+// 没有）。现在真的改定义，并如实说明生效时机。
+func mountShare(
+	ctx context.Context, vmName, tag, hostPath string, params map[string]any,
+) (*agent.Result, error) {
+	xmlText, err := sys.DumpXML(ctx, vmName, false)
+	if err != nil {
+		return failResult("读取域定义失败: " + err.Error()), nil
+	}
+
+	// 幂等：同一个 tag 指向同一个目录，重复挂载是安全的重复操作。
+	// 但同名指向**别的目录**时必须报错——静默改成新目录会让已经在用旧目录的
+	// 来宾在下一次开机后读到另一份数据，而界面上什么都不会变。
+	if existing, ok := shareBlock(xmlText, tag); ok {
+		if src := attributeOf(existing.text, "<source", "dir"); src == hostPath {
+			return &agent.Result{Success: true, Data: map[string]any{
+				agent.ShareDataKey: agent.ShareInfo{
+					Tag:     tag,
+					Message: "该共享已在域定义里，无需重复挂载",
+				},
+			}}, nil
+		} else {
+			return failResult("域定义里已有同名共享 " + tag + "（指向 " + src +
+				"），请先卸载再挂载到新目录"), nil
 		}
 	}
+
+	accessMode := strings.TrimSpace(strParam(params, "security_model"))
+	if !validShareAccessMode(accessMode) {
+		// 非法取值不写进定义：libvirt 对 accessmode 的枚举很严，写错会让
+		// 整个 define 被拒，而报错在那一刻与用户的操作联系不起来。
+		accessMode = "mapped"
+	}
+	frag := filesystemFragment(hostPath, tag, accessMode, boolParam(params, "read_only"))
+
+	newXML, ierr := insertFilesystem(xmlText, frag)
+	if ierr != nil {
+		return failResult(ierr.Error()), nil
+	}
+	if derr := defineXML(ctx, newXML); derr != nil {
+		return failResult("写入域定义失败: " + derr.Error()), nil
+	}
+
+	info := agent.ShareInfo{Tag: tag, Message: "共享目录已写入域定义"}
+	// define 只改持久定义：运行中的域不会因此多出一个 9p 设备。如实说明，
+	// 而不是让用户去来宾里找一个还不存在的挂载点。
+	if state, _ := sys.DomainStateOf(ctx, vmName); state == "running" || state == "paused" {
+		info.Message = "共享已写入域定义；虚拟机正在运行，9p 共享需要重启后生效"
+		info.Warnings = []string{"当前运行中的虚拟机看不到这个共享，请重启后再使用"}
+	}
 	return &agent.Result{Success: true, Data: map[string]any{
-		agent.ShareDataKey: agent.ShareInfo{Tag: tag, Message: "共享目录已就绪（域定义经 XML 通道调整）"},
+		agent.ShareDataKey: info,
 	}}, nil
+}
+
+// unmountShare 从域定义里移除指定 tag 的 9p 共享。
+func unmountShare(ctx context.Context, vmName, tag string) (*agent.Result, error) {
+	xmlText, err := sys.DumpXML(ctx, vmName, false)
+	if err != nil {
+		return failResult("读取域定义失败: " + err.Error()), nil
+	}
+	newXML, removed := removeFilesystem(xmlText, tag)
+	if !removed {
+		return failResult("该虚拟机上没有名为 " + tag + " 的共享挂载，无需卸载"), nil
+	}
+	if derr := defineXML(ctx, newXML); derr != nil {
+		return failResult("写入域定义失败: " + derr.Error()), nil
+	}
+
+	info := agent.ShareInfo{Tag: tag, Message: "共享已从域定义移除"}
+	if state, _ := sys.DomainStateOf(ctx, vmName); state == "running" || state == "paused" {
+		info.Message = "共享已从域定义移除；虚拟机正在运行，需要重启后彻底消失"
+		info.Warnings = []string{"当前运行中的虚拟机仍挂着这个共享，请重启后再确认"}
+	}
+	return &agent.Result{Success: true, Data: map[string]any{
+		agent.ShareDataKey: info,
+	}}, nil
+}
+
+// validShareAccessMode 判断 accessmode 是否在 libvirt 接受的枚举里。
+func validShareAccessMode(mode string) bool {
+	switch mode {
+	case "mapped", "passthrough", "squash":
+		return true
+	}
+	return false
+}
+
+// filesystemFragment 渲染 9p 共享设备片段。
+//
+// 属性一律转义：host_path 与 tag 来自用户输入，未转义的引号会把整段 XML
+// 变成另一份文档（而 define 可能仍然成功）。
+func filesystemFragment(hostPath, tag, accessMode string, readOnly bool) string {
+	ro := ""
+	if readOnly {
+		ro = "      <readonly/>\n"
+	}
+	return "<filesystem type='mount' accessmode='" + xmlEsc(accessMode) + "'>\n" +
+		"      <source dir='" + xmlEsc(hostPath) + "'/>\n" +
+		"      <target dir='" + xmlEsc(tag) + "'/>\n" +
+		ro +
+		"    </filesystem>\n  "
+}
+
+// insertFilesystem 把片段插到 </devices> 之前。
+func insertFilesystem(xmlText, frag string) (string, error) {
+	i := strings.LastIndex(xmlText, "</devices>")
+	if i < 0 {
+		return "", fmt.Errorf("域定义里没有 <devices> 段，无法添加 9p 共享")
+	}
+	return xmlText[:i] + frag + xmlText[i:], nil
+}
+
+// shareBlock 找到包含指定 tag 的 <filesystem> 块。
+type shareBlockInfo struct {
+	// start / end 是块（含 </filesystem>）在 XML 里的下标。
+	start, end int
+	// text 是块原文，便于取 source / target。
+	text string
+}
+
+// shareBlock 定位 tag 对应的 <filesystem> 段。
+//
+// 按块而不是按行找：`<filesystem>` 的 source/target 可能被 libvirt 折成
+// 多行，逐行匹配会把「同名 tag 出现在别的设备里」也算成命中。
+func shareBlock(xmlText, tag string) (shareBlockInfo, bool) {
+	for i := 0; ; {
+		s := strings.Index(xmlText[i:], "<filesystem")
+		if s < 0 {
+			return shareBlockInfo{}, false
+		}
+		s += i
+		e := strings.Index(xmlText[s:], "</filesystem>")
+		if e < 0 {
+			return shareBlockInfo{}, false
+		}
+		e += s + len("</filesystem>")
+		block := xmlText[s:e]
+		if attributeOf(block, "<target", "dir") == tag {
+			return shareBlockInfo{start: s, end: e, text: block}, true
+		}
+		i = e
+	}
+}
+
+// removeFilesystem 移除 tag 对应的 <filesystem> 块（连同其缩进与行尾换行，
+// 避免在定义里留下空行）。
+func removeFilesystem(xmlText, tag string) (string, bool) {
+	block, ok := shareBlock(xmlText, tag)
+	if !ok {
+		return xmlText, false
+	}
+	start, end := block.start, block.end
+	if nl := strings.LastIndexByte(xmlText[:start], '\n'); nl >= 0 {
+		// 整行都是缩进时，把缩进一起删掉。
+		if strings.TrimSpace(xmlText[nl+1:start]) == "" {
+			start = nl + 1
+		}
+	}
+	if nl := strings.IndexByte(xmlText[end:], '\n'); nl >= 0 {
+		end += nl + 1
+	}
+	return xmlText[:start] + xmlText[end:], true
+}
+
+// attributeOf 取 `<elem ... attr='v'/>` 里 attr 的值（单双引号都认）。
+//
+// 与 sys 包里的解析器同一层次的手段：libvirt 输出的属性顺序与引号风格
+// 在这几个元素上是稳定的，不值得为一个取值引入完整 XML 解析。
+func attributeOf(seg, elem, attr string) string {
+	i := strings.Index(seg, elem)
+	if i < 0 {
+		return ""
+	}
+	rest := seg[i:]
+	for _, q := range []string{"'", `"`} {
+		key := " " + attr + "=" + q
+		j := strings.Index(rest, key)
+		if j < 0 {
+			continue
+		}
+		rest = rest[j+len(key):]
+		if k := strings.Index(rest, q); k >= 0 {
+			return rest[:k]
+		}
+		return ""
+	}
+	return ""
 }
 
 // shareTagExists 判断域定义里是否已有该 tag 的 9p 共享。

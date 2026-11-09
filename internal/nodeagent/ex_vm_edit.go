@@ -436,9 +436,11 @@ func diskAttach(ctx context.Context, op agent.Operation, report Reporter, runnin
 	if filepath.IsAbs(rel) {
 		return failResult("rel_path 必须是相对于用户存储根的路径"), nil
 	}
-	source := filepath.Join(userdataRoot, rel)
+	// 切换存储根之前上传的文件仍在历史根里：挂盘与下载走同一套寻址，
+	// 否则会出现「列表里有、能下载，但挂不上」的自相矛盾（实机测试抓出）。
+	source := resolveExistingUserdataPath(rel)
 	// Join 只做清洗不做约束：带 ../ 的 rel_path 会落到存储根之外。
-	if source != userdataRoot && !strings.HasPrefix(source, userdataRoot+"/") {
+	if !underUserdataRoot(source) {
 		return failResult("磁盘路径越出用户存储根: " + source), nil
 	}
 	st, err := os.Stat(source)
@@ -452,7 +454,13 @@ func diskAttach(ctx context.Context, op agent.Operation, report Reporter, runnin
 		return failResult("设置磁盘文件属主失败: " + err.Error()), nil
 	}
 	// qemu 要打开的镜像在 images 之外，AppArmor 需要放行（与光驱/快照同根因）。
-	ensureAppArmorAllowsImages(userdataRoot)
+	// 放行的是**这份文件所在的存储根**：历史根里的文件挂上来时，只放行
+	// 当前根会让 qemu 在启动瞬间被 AppArmor 拒绝。
+	allowRoot := userdataRoot()
+	if !strings.HasPrefix(source, allowRoot+"/") {
+		allowRoot = defaultUserdataRoot
+	}
+	ensureAppArmorAllowsImages(allowRoot)
 
 	bus := strParam(op.Params, "bus")
 	if bus == "" {

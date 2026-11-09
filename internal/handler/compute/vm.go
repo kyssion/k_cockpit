@@ -1695,7 +1695,7 @@ func (h *VM) MakeDisksIndependent(ctx context.Context, c *app.RequestContext) {
 		api.Fail(c, err)
 		return
 	}
-	api.OK(c, map[string]any{"task": t})
+	api.OK(c, api.WithTask(nil, t.ID, t.Status))
 }
 
 type batchCloneRequest struct {
@@ -1784,7 +1784,7 @@ func (h *VM) AttachCDROM(ctx context.Context, c *app.RequestContext) {
 		api.Fail(c, err)
 		return
 	}
-	api.OK(c, map[string]any{"task": t})
+	api.OK(c, api.WithTask(nil, t.ID, t.Status))
 }
 
 // LoadCDROM 给光驱放盘或换盘（API-294）。
@@ -1818,7 +1818,7 @@ func (h *VM) LoadCDROM(ctx context.Context, c *app.RequestContext) {
 		api.Fail(c, err)
 		return
 	}
-	api.OK(c, map[string]any{"task": t})
+	api.OK(c, api.WithTask(nil, t.ID, t.Status))
 }
 
 // EjectCDROM 弹出光盘（**光驱保留**）（API-295）。
@@ -1859,7 +1859,7 @@ func (h *VM) SetCDROMBus(ctx context.Context, c *app.RequestContext) {
 		api.Fail(c, err)
 		return
 	}
-	api.OK(c, map[string]any{"task": t})
+	api.OK(c, api.WithTask(nil, t.ID, t.Status))
 }
 
 func (h *VM) cdromAction(ctx context.Context, c *app.RequestContext, action string) {
@@ -1876,7 +1876,9 @@ func (h *VM) cdromAction(ctx context.Context, c *app.RequestContext, action stri
 	user := auth.CurrentUser(c)
 	info := auth.ClientInfoOf(c)
 
-	var t any
+	// 两个分支的返回类型都是 *model.Task；用 any 接会让下面的
+	// task_id/status 变成运行期反射取值，编译期发现不了契约变更。
+	var t *model.Task
 	if action == "eject" {
 		t, err = h.svc.EjectCDROM(ctx, id, cdromID, authz.ViewerOf(c), user.Username, info.IP)
 	} else {
@@ -1886,7 +1888,7 @@ func (h *VM) cdromAction(ctx context.Context, c *app.RequestContext, action stri
 		api.Fail(c, err)
 		return
 	}
-	api.OK(c, map[string]any{"task": t})
+	api.OK(c, api.WithTask(nil, t.ID, t.Status))
 }
 
 // PreviewMigration 迁移预检（API-298）。**只读**，不产生任何记录。

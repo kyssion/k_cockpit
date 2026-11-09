@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -71,7 +72,16 @@ func (e *SnapshotCreateExecutor) Run(ctx context.Context, t *model.Task) error {
 		return api.Unavailable("节点不可达，创建快照的指令未送达")
 	}
 	if !result.Success {
-		e.fail(ctx, p.SnapshotID, result.Message)
+		// **节点明确失败 → 删掉记录**，而不是把它留成一条 error 行。
+		//
+		// 实机抓出：UEFI 域不支持内部快照，任务失败，但列表里仍留着一条
+		// status=ready 的记录，`can_restore/can_delete` 都是 true——用户点进去
+		// 恢复会失败、删除也会失败（后者见缺陷「删除快照传错参数键」）。一条
+		// 指向"从未存在过的快照"的记录比没有记录更糟。
+		//
+		// 失败原因不会因此丢失：任务列表与审计流水里有完整的错误信息，而
+		// 那才是用户排查的地方；快照列表只该列出真正可用的还原点。
+		e.removeRecord(ctx, p.SnapshotID)
 		return api.ValidationFailed(result.Message)
 	}
 
@@ -106,10 +116,13 @@ func (e *SnapshotCreateExecutor) Run(ctx context.Context, t *model.Task) error {
 	return nil
 }
 
-// fail 把快照标记为失败并记下原因。
+// fail 把快照标记为失败。
 //
-// 标记成 error 而不是删记录：用户需要看到「那次创建失败了」，
-// 否则界面上它会凭空消失，而用户会再建一次同样的快照。
+// 只用于**节点不可达**这一类"到底建没建成功说不准"的情况：那时既不能删除
+// 记录（节点上可能真的有一份快照），也不能装作成功。标记成 error 让记录
+// 停在"待对账"的状态，用户仍可显式删除它。
+//
+// 节点**明确失败**的路径改用 removeRecord（见 Run 里的说明）。
 func (e *SnapshotCreateExecutor) fail(ctx context.Context, id int64, reason string) {
 	if id <= 0 {
 		return
@@ -123,6 +136,19 @@ func (e *SnapshotCreateExecutor) fail(ctx context.Context, id int64, reason stri
 		log.Printf("[vm] 标记快照失败状态出错 id=%d: %v", id, err)
 	}
 	log.Printf("[vm] 快照创建失败 id=%d: %s", id, reason)
+}
+
+// removeRecord 删掉一条**从未真正创建成功**的快照记录。
+//
+// 与 fail 的分工：节点明确拒绝时快照在虚拟化层里不存在，留着记录只会让
+// 界面显示一个点恢复就报错、点删除也可能失败的幽灵条目。
+func (e *SnapshotCreateExecutor) removeRecord(ctx context.Context, id int64) {
+	if id <= 0 {
+		return
+	}
+	if err := e.db.WithContext(ctx).Delete(&model.VMSnapshot{}, id).Error; err != nil {
+		log.Printf("[vm] 移除失败的快照记录出错 id=%d: %v", id, err)
+	}
 }
 
 // snapshotRestoreParams 是 vm.snapshot.restore 任务的参数。
@@ -251,11 +277,28 @@ func (e *SnapshotDeleteExecutor) Run(ctx context.Context, t *model.Task) error {
 		return api.Internal()
 	}
 
+	// 虚拟化层里的快照名，与用户填的显示名**不是一回事**：创建时由
+	// domainSnapshotName 生成 kc-snap-<id>（名字可重复出现在界面上，而
+	// virsh 的标识一旦建立就应当稳定）。记录里存的是节点回传的值，缺失时
+	// 按同一套规则重算。
+	//
+	// 这里下发错值就等于「删除一个不存在的快照」：virsh 报 not found，
+	// 而旧实现把 not find 当幂等成功——控制面删记录、节点快照仍在。
+	domainName := strings.TrimSpace(p.DomainName)
+	if domainName == "" {
+		domainName = domainSnapshotName(p.VMName, p.SnapshotID)
+	}
 	result, err := task.ReporterFrom(ctx).Dispatch(ctx, e.agent, agent.Operation{
 		Kind: agent.OpVMSnapshotDelete, NodeID: *t.NodeID,
 		Target: p.VMName,
 		Params: map[string]any{
-			"domain_name": p.DomainName,
+			// 节点按这个名字执行 `virsh snapshot-delete --snapshotname`。
+			// 此前没有这个键，节点读到的恒为空串，于是报
+			// `Failed to get option 'snapshotname': Option argument is empty`
+			// ——删除快照从未真正执行过（实机复现）。
+			"snapshot_name": domainName,
+			// 兼容旧节点（它读的是 domain_name）；两个键同值是刻意的。
+			"domain_name": domainName,
 			"snapshot_id": p.SnapshotID,
 		},
 	})

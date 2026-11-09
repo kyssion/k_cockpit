@@ -201,8 +201,14 @@ func nodeNetwork(ctx context.Context, op agent.Operation, report Reporter) (*age
 	report(Stage{Key: "probe", Name: "探测网络组件", Index: 1, Total: 1})
 
 	backend := agent.NetworkBackend{Mode: agent.ModeBasic, Capabilities: []string{}, Missing: map[string]string{}}
-	// 基础网桥：ip link 能用就有（内核必备功能）。
-	if sys.RunOK(ctx, "ip", "link", "help") {
+	// 基础网桥：ip 命令能用就有（内核必备功能）。
+	//
+	// 用 `ip -V` 而不是 `ip link help` 判断存在性：后者的退出码是 **255**
+	// （iproute2 把 help 当用法错误处理），于是健康宿主机被判成「未检测到
+	// 网桥工具」——而这是 required 能力，界面会把「创建虚拟机 / 虚拟机之间
+	// 的网络连通」整块标成不可用（实机测试抓出：Ubuntu 24.04 + iproute2 6.1）。
+	// `-V` 只打印版本并以 0 退出，正是「命令在不在」该问的问题。
+	if sys.RunOK(ctx, "ip", "-V") {
 		backend.Capabilities = append(backend.Capabilities, agent.CapabilityBridgeBasic)
 	} else {
 		backend.Missing[agent.CapabilityBridgeBasic] = "ip 命令不可用"

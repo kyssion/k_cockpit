@@ -70,7 +70,8 @@ type Hub struct {
 
 	mu    sync.Mutex
 	conns map[int64]*conn
-	// gs 是网关的 gRPC server（Serve 时登记，Stop 时优雅关闭）。
+	// gs 是网关的 gRPC server。Serve 时登记；Stop 时先有限等待、超时强制
+	// 关闭（agent 的 Channel 是长连接，纯 GracefulStop 永不返回，见 grpc.go）。
 	gs *grpc.Server
 	// agentStreams 是「已应答建立、等待/正在 StreamData 转发」的流。
 	agentStreams map[string]*streamBridge

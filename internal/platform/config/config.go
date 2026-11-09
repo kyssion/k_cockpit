@@ -187,6 +187,17 @@ func (c Config) Validate() error {
 		return fmt.Errorf("生产环境不允许配置 SECURITY_DEV_BYPASS_CODE：它会让二次验证形同虚设，" +
 			"任何知道该值的人都能直接通过高风险操作的门禁")
 	}
+	// 生产环境的会话 Cookie 必须带 Secure。
+	//
+	// 两个理由都不是"最佳实践"层面的：HTTPS 页面下浏览器**不会回传**不带
+	// Secure 的 Cookie（表现为登录成功却立刻 401）；而明文链路上不带 Secure
+	// 的会话令牌等同于可被旁路截获。开发环境保留 false 是为了本地 HTTP 可用，
+	// 但生产配置成 false 几乎一定是把开发 .env 带上了线——静默接受只会让
+	// 这个问题以"登录一直失败"的形式出现，且极难定位。
+	if c.Env == EnvProduction && !c.Session.SecureCookie {
+		return fmt.Errorf("生产环境必须启用 SESSION_SECURE_COOKIE：会话 Cookie 不带 Secure " +
+			"会在 HTTPS 下被浏览器丢弃（登录后立刻 401），也容易被明文链路截获")
+	}
 	return nil
 }
 

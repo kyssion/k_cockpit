@@ -126,6 +126,7 @@ func NewRegistry() Registry {
 		agent.OpVMReboot:          powerOp("reboot", "reboot"),
 		agent.OpVMReset:           powerOp("reset", "reset"),
 		agent.OpVMDelete:          vmDelete,
+		agent.OpVMRestore:         vmRestore,
 		agent.OpVMSnapshotCreate:  vmSnapshotCreate,
 		agent.OpVMSnapshotRestore: vmSnapshotRestore,
 		agent.OpVMSnapshotDelete:  vmSnapshotDelete,
@@ -198,12 +199,14 @@ func NewRegistry() Registry {
 		agent.OpTemplateImport:        vmTemplateImport,
 		// 存储长尾与宿主（P4：此前未在节点侧实现）
 		agent.OpStoragePartitions: vmStoragePartitions,
+		agent.OpStorageRootSet:    storageRootSet,
 		agent.OpHostPCIBind:       vmHostPCIBind,
 		agent.OpHostTuningApply:   vmHostTuningApply,
 		// 存储与模板（P4）
 		agent.OpStoragePoolCreate:      storagePoolCreate,
 		agent.OpStoragePoolDelete:      storagePoolDelete,
 		agent.OpStoragePoolScan:        storagePoolScan,
+		agent.OpStoragePoolStat:        storagePoolStat,
 		agent.OpStoragePoolConfig:      storagePoolConfig,
 		agent.OpStoragePoolUnmount:     storagePoolUnmount,
 		agent.OpStorageTrim:            storageTrim,
@@ -211,7 +214,9 @@ func NewRegistry() Registry {
 		agent.OpStoragePartitionDelete: storagePartitionDelete,
 		agent.OpStorageVolumeApply:     storageVolumeApply,
 		agent.OpStorageFileCommit:      storageFileCommit,
+		agent.OpStorageFilePush:        storageFilePush,
 		agent.OpStorageFileRead:        storageFileRead,
+		agent.OpStorageFileDelete:      storageFileDelete,
 		agent.OpShareMount:             vmShareMount,
 		// P5 长尾
 		agent.OpVMMigrate:             vmMigrate,

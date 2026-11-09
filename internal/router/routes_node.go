@@ -9,7 +9,10 @@ import (
 )
 
 func registerNodeRoutes(v1 *route.RouterGroup, deps Deps, g guards) {
-	nodeHandler := nodehandler.NewNode(deps.Node, deps.Risk)
+	nodeHandler := nodehandler.NewNode(deps.Node, deps.Risk, nodehandler.Options{
+		AgentAddr: deps.AgentAddr,
+		Settings:  deps.Settings,
+	})
 
 	{
 		// 节点管理：按 f-1-06 的角色表，全部仅管理员可访问。

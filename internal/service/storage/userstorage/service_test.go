@@ -2,7 +2,9 @@ package userstorage_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 
 	"path/filepath"
 	"strings"
@@ -211,6 +213,50 @@ func TestCompleteRequiresAllChunks(t *testing.T) {
 	}
 }
 
+// TestCompleteStoresComputedDigest 覆盖两条实机抓出的路径。
+//
+//  1. 客户端不传摘要（协议允许为空）时，文件仍必须带上服务端算出的摘要：
+//     否则这份文件永远不会命中秒传，功能对这类上传等于不存在。
+//  2. 客户端声明与内容不符时必须拒绝：假摘要一旦入库，此后用该摘要请求
+//     秒传会拿到「目标文件内容与来源不一致」的 422，而真正的正确文件会被
+//     这条假记录挡在前面。
+func TestCompleteStoresComputedDigest(t *testing.T) {
+	svc, _ := newTestEnv(t, &fakeQuota{allow: true})
+	ctx := context.Background()
+
+	// 用例 1：不声明摘要
+	view, _ := svc.CreateUpload(ctx, userA, userstorage.CreateUploadRequest{
+		NodeID: 1, Category: model.FileCategoryISO,
+		Filename: "nosha.iso", TotalSize: 1024, ChunkSize: 1024,
+	}, owner(userA), "alice", "")
+	if _, err := svc.UploadChunkData(ctx, userA, view.UploadID, 0, []byte("chunk-bytes"), ""); err != nil {
+		t.Fatalf("登记分片失败: %v", err)
+	}
+	file, err := svc.CompleteUpload(ctx, userA, view.UploadID, owner(userA), "alice", "")
+	if err != nil {
+		t.Fatalf("完成上传失败: %v", err)
+	}
+	want := fmt.Sprintf("%x", sha256.Sum256([]byte("chunk-bytes")))
+	if file.SHA256 != want {
+		t.Errorf("未声明摘要时应落服务端算出的摘要: got %q want %q", file.SHA256, want)
+	}
+
+	// 用例 2：声明了一个错误的摘要
+	bad, _ := svc.CreateUpload(ctx, userA, userstorage.CreateUploadRequest{
+		NodeID: 1, Category: model.FileCategoryISO,
+		Filename: "lie.iso", TotalSize: 1024, ChunkSize: 1024,
+		SHA256: strings.Repeat("0", 64),
+	}, owner(userA), "alice", "")
+	if _, err := svc.UploadChunkData(ctx, userA, bad.UploadID, 0, []byte("chunk-bytes"), ""); err != nil {
+		t.Fatalf("登记分片失败: %v", err)
+	}
+	if _, err := svc.CompleteUpload(ctx, userA, bad.UploadID, owner(userA), "alice", ""); err == nil {
+		t.Fatal("声明摘要与内容不一致时应当拒绝完成上传")
+	} else if !strings.Contains(err.Error(), "SHA256") {
+		t.Errorf("拒绝文案应说明摘要不一致: %v", err)
+	}
+}
+
 func TestCompleteRegistersReadyFile(t *testing.T) {
 	svc, _ := newTestEnv(t, &fakeQuota{allow: true})
 	ctx := context.Background()
@@ -232,8 +278,30 @@ func TestCompleteRegistersReadyFile(t *testing.T) {
 	if file.Category != model.FileCategoryISO {
 		t.Errorf("类别 = %q, 期望 iso（会话的 target 应被继承）", file.Category)
 	}
-	if file.RelPath != "iso/ubuntu.iso" {
-		t.Errorf("相对路径 = %q, 期望 iso/ubuntu.iso", file.RelPath)
+	// 每个用户一个命名空间目录：rel_path 在 (node_id, rel_path) 上全局唯一，
+	// 不带用户前缀时两位租户无法拥有同名文件（实机抓出：管理员与租户各传
+	// 一份 dup.iso，第二个收到「该位置已存在同名文件」）。
+	if file.RelPath != "u7/iso/ubuntu.iso" {
+		t.Errorf("相对路径 = %q, 期望 u7/iso/ubuntu.iso", file.RelPath)
+	}
+
+	// 另一个用户上传同名文件必须成功，且落在自己的命名空间里。
+	other, err := svc.CreateUpload(ctx, userB, userstorage.CreateUploadRequest{
+		NodeID: 1, Category: model.FileCategoryISO, RelDir: "iso",
+		Filename: "ubuntu.iso", TotalSize: 1024, ChunkSize: 1024,
+	}, owner(userB), "bob", "")
+	if err != nil {
+		t.Fatalf("第二个用户创建同名上传失败: %v", err)
+	}
+	if _, err := svc.UploadChunkData(ctx, userB, other.UploadID, 0, []byte("chunk-bytes"), ""); err != nil {
+		t.Fatalf("第二个用户登记分片失败: %v", err)
+	}
+	otherFile, err := svc.CompleteUpload(ctx, userB, other.UploadID, owner(userB), "bob", "")
+	if err != nil {
+		t.Fatalf("第二个用户完成同名上传失败（跨租户重名被拒）: %v", err)
+	}
+	if otherFile.RelPath != "u8/iso/ubuntu.iso" {
+		t.Errorf("第二个用户的相对路径 = %q, 期望 u8/iso/ubuntu.iso", otherFile.RelPath)
 	}
 	if file.UploadedAt == "" {
 		t.Error("完成后应带上传时间")

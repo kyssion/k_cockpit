@@ -40,6 +40,11 @@ export default defineConfig({
       env: {
         APP_ENV: 'development',
         APP_PORT: String(API_PORT),
+        // agent 网关也要避开开发期占用的 8443：控制面在端口被占时直接
+        // 退出（log.Fatalf），冒烟会以「Process from config.webServer was
+        // not able to start」这种毫无指向性的错误失败。18443 与 API_PORT
+        // 一样，只在冒烟期间使用。
+        AGENT_LISTEN_ADDR: ':18445',
         DB_DRIVER: 'sqlite',
         DB_PATH: `${RUN_DIR}/e2e.db`,
         // 日志落在冒烟目录里，不污染开发期的 data/logs。

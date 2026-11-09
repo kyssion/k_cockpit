@@ -137,6 +137,10 @@ func (e *PoolConfigExecutor) Run(ctx context.Context, t *model.Task) error {
 			log.Printf("[storage] 写回池配置失败 id=%d: %v", p.PoolID, err)
 		}
 	}
+	// 配置可能改了默认标记或挂载点：用户存储根随之收敛。
+	if err := SyncUserdataRoot(ctx, e.db, e.agent, *t.NodeID); err != nil {
+		log.Printf("[storage] 配置后同步用户存储根失败 node=%d: %v", *t.NodeID, err)
+	}
 	return nil
 }
 
@@ -183,6 +187,11 @@ func (e *PoolUnmountExecutor) Run(ctx context.Context, t *model.Task) error {
 			"updated_at": time.Now(),
 		}).Error; err != nil {
 		log.Printf("[storage] 更新池状态失败 id=%d: %v", p.PoolID, err)
+	}
+	// 卸载的可能是默认池：用户存储根要跟着回落，否则新上传会写进一个
+	// 已经没有文件系统的挂载点（落到系统盘的同名目录上）。
+	if err := SyncUserdataRoot(ctx, e.db, e.agent, *t.NodeID); err != nil {
+		log.Printf("[storage] 卸载后同步用户存储根失败 node=%d: %v", *t.NodeID, err)
 	}
 	return nil
 }

@@ -20,7 +20,12 @@ export interface PortMirrorView {
   source_ports: string[]
   target_switches: string[]
   direction: MirrorDirection
-  vlan_preserve: boolean
+  /**
+   * 恒为 true：节点侧 OVS Mirror 原样复制帧，**始终保留原始 VLAN 标签**，
+   * 本版本不做剥离。保留为可选字段只为兼容旧数据与旧调用点——界面不应再
+   * 用它做任何显示或开关（那只会表达一个不存在的选择）。
+   */
+  vlan_preserve?: boolean
 
   enabled: boolean
   /** 为 true 表示正处于看门狗窗口里，用户需要点「保持」。 */
@@ -44,6 +49,10 @@ export interface MirrorInput {
   source_ports: string[]
   target_switches: string[]
   direction?: MirrorDirection
+  /**
+   * 可选、且不该再传：服务端会把缺省值归一化为 true，并**拒绝** `false`
+   * （节点侧镜像不读这个字段，不剥标签，`false` 只会是一个谎）。
+   */
   vlan_preserve?: boolean
 }
 

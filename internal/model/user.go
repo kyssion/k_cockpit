@@ -47,6 +47,14 @@ type User struct {
 	SecurityUpdatedAt *time.Time
 	Remark            *string `gorm:"size:255"`
 
+	// 口令安全检查（F-10-06）的状态列。模型必须声明它们：迁移 0001 里
+	// 有这两列，而 AutoMigrate（测试/冒烟库）按模型建表——缺声明的表现是
+	// passaudit 的手写查询在 SQLite 上报 no such column: breach_hit，
+	// 接口 500（实机测试抓出）。与 storage.go 的模型对齐铁律同源：
+	// 凡是迁移里有的列，模型都要有。
+	BreachCheckedAt *time.Time
+	BreachHit       bool `gorm:"not null;default:false"`
+
 	// MaxBandwidthMbps 是该用户**全部网卡合计**的带宽上限（Mbps）；0 = 不限。
 	//
 	// 它是**速率型**而不是累计型——没有"用满"这个状态，因此不放进按月累计

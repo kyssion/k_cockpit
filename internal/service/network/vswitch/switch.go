@@ -279,6 +279,11 @@ func (r *SwitchRequest) validate() error {
 	if len([]rune(r.Name)) > 64 {
 		return api.InvalidParameter("交换机名称不能超过 64 个字符")
 	}
+	if r.Name == model.NetworkDefaultName {
+		// 「default」是系统基础网络的保留名：让它被用户交换机占用，会让
+		// 系统网络开通时撞唯一索引，而报错出现在一个用户无法理解的地方。
+		return api.InvalidParameter("「default」是系统基础网络的保留名称，请换一个名字")
+	}
 
 	switch r.Mode {
 	case model.NetworkModeNAT, model.NetworkModeEmpty, model.NetworkModePhysical:

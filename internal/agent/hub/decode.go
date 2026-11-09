@@ -112,6 +112,7 @@ var typedDecoders = map[agent.OpKind]map[string]decodeFunc{
 	agent.OpPortSecurityPrecheck: {agent.PortSecurityPrecheckKey: into(agent.PortSecurityPrecheck{})},
 	agent.OpPublicIPPreview:      {agent.PublicIPPreviewKey: into(agent.PublicIPPreview{})},
 	agent.OpStoragePoolScan:      {agent.VolumeListKey: into([]string{})},
+	agent.OpStoragePoolStat:      {agent.PoolStatListKey: into([]agent.PoolStat{})},
 }
 
 // into 返回「解码进 sample 同型结构」的解码器（sample 只用于取类型）。

@@ -15,6 +15,8 @@ package nodeagent
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -43,8 +45,20 @@ type createSpec struct {
 	APIC       *bool
 	PAE        *bool
 
-	NicModel  string
-	DataDisks []dataDiskSpec
+	NicModel string
+	// NicBridge 是主网口要接入的宿主机网桥。空表示用户态网络（SLIRP）。
+	//
+	// 空值必须保留一条可用路径：节点上还没有任何网桥时（刚纳管、还没建
+	// 网络），创建虚拟机仍然要能成功——但那条路径**没有**端口转发、安全组
+	// 与 DHCP，因此调用方会把"退化为用户态"如实告诉用户，而不是假装接上了。
+	NicBridge string
+	// NicBridgeOVS 表示 NicBridge 是 OVS 网桥。
+	//
+	// 必须与普通 Linux 桥区分：OVS 桥上如果不带 `<virtualport type='openvswitch'/>`，
+	// libvirt 会走 Linux 桥的 ioctl 路径，开机直接失败
+	// （"Unable to add bridge kbrX port vnet0: Operation not supported"，实机抓出）。
+	NicBridgeOVS bool
+	DataDisks    []dataDiskSpec
 
 	IOPSTotal int
 	IOPSRead  int
@@ -80,9 +94,18 @@ type extraDisk struct {
 
 // parseCreateSpec 从操作参数解码创建规格。
 func parseCreateSpec(target string, params map[string]any) createSpec {
+	// 架构/机型/固件的默认值取自**节点自身**：agent 与宿主机同架构编译
+	// 部署（发布制品按 amd64/arm64 分包），runtime.GOARCH 即宿主架构。
+	// 旧实现硬编码 x86_64 + pc，aarch64 节点上建虚拟机必然失败：
+	// "unsupported configuration: No emulator found for arch 'x86_64'"
+	// （实机测试抓出）。aarch64 没有 pc 机型（对应 virt），常规引导也
+	// 依赖 UEFI（AAVMF），因此固件默认值同样随架构走——显式传入的参数
+	// 仍然优先。
+	defArch := libvirtArch(runtime.GOARCH)
 	s := createSpec{Name: target, DiskFormat: "qcow2", DiskBus: "virtio",
-		OSType: "linux", Machine: "pc", Firmware: "bios", NicModel: "virtio",
-		VideoModel: "virtio", RTCMode: "utc", Arch: "x86_64"}
+		OSType: "linux", Machine: defaultMachine(defArch),
+		Firmware: defaultFirmware(defArch), NicModel: "virtio",
+		VideoModel: "virtio", RTCMode: "utc", Arch: defArch}
 	if v, ok := params["vcpu"].(float64); ok {
 		s.VCPU = int(v)
 	}
@@ -108,6 +131,7 @@ func parseCreateSpec(target string, params map[string]any) createSpec {
 	s.Watchdog = str("watchdog", "")
 	s.CPUType = str("cpu_type", "")
 	s.NicModel = str("nic_model", s.NicModel)
+	s.NicBridge = str("bridge_name", "")
 	s.VideoModel = str("video_model", s.VideoModel)
 	s.RTCMode = str("rtc_mode", s.RTCMode)
 	s.Arch = str("arch", s.Arch)
@@ -258,8 +282,16 @@ func (s createSpec) BuildDomainXML() string {
 	if arch == "aarch64" {
 		b.WriteString("    <controller type='usb' model='qemu-xhci'/>\n")
 	}
-	// 网卡。
-	fmt.Fprintf(&b, "    <interface type='user'>\n      <model type='%s'/>\n    </interface>\n", xmlEsc(s.NicModel))
+	// 网卡：选了交换机就接网桥，否则退回用户态网络。
+	if s.NicBridge != "" {
+		fmt.Fprintf(&b, "    <interface type='bridge'>\n      <source bridge='%s'/>\n", xmlEsc(s.NicBridge))
+		if s.NicBridgeOVS {
+			b.WriteString("      <virtualport type='openvswitch'/>\n")
+		}
+		fmt.Fprintf(&b, "      <model type='%s'/>\n    </interface>\n", xmlEsc(s.NicModel))
+	} else {
+		fmt.Fprintf(&b, "    <interface type='user'>\n      <model type='%s'/>\n    </interface>\n", xmlEsc(s.NicModel))
+	}
 	// 显示：VNC（无密码，监听本机——对外暴露是独立的高危操作）+ 显卡。
 	b.WriteString("    <graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1'/>\n")
 	fmt.Fprintf(&b, "    <video><model type='%s'/></video>\n", xmlEsc(videoOrDefault(s.VideoModel, arch)))
@@ -336,6 +368,34 @@ func normalizeBootOrder(s string) string {
 	return strings.Join(out, ",")
 }
 
+// libvirtArch 把 Go 的架构名映射为 libvirt/QEMU 的架构名：arm64 → aarch64
+// （Linux uname 亦用 aarch64）；amd64 与 x86_64 的差异只剩名字，其余架构
+// 不在本产品支持范围（PRD Q-6：x86_64 + aarch64 先行），原样透传即可。
+func libvirtArch(goarch string) string {
+	if goarch == "arm64" {
+		return "aarch64"
+	}
+	return goarch
+}
+
+// defaultMachine 返回架构的默认机型：x86_64 用 pc，aarch64 只有 virt。
+func defaultMachine(arch string) string {
+	if arch == "aarch64" {
+		return "virt"
+	}
+	return "pc"
+}
+
+// defaultFirmware 返回架构的默认固件：aarch64 的 virt 机型没有 BIOS，
+// 常规引导依赖 UEFI（AAVMF，发行版随 qemu-efi-aarch64 提供）；x86_64
+// 维持 bios（SeaBIOS 内建，无额外依赖）。
+func defaultFirmware(arch string) string {
+	if arch == "aarch64" {
+		return "uefi"
+	}
+	return "bios"
+}
+
 // uefiCandidates 返回 (loader, vars) 的 UEFI 固件路径候选。
 // 顺序即优先级：Ubuntu/Debian 的 AAVMF（aarch64）与 OVMF（x86_64）。
 // 都不存在返回空——调用方退回 firmware efi='yes'。
@@ -369,12 +429,16 @@ func nextDataDev(i int) string {
 }
 
 // dataDiskPath 数据盘的默认落盘路径。
+//
+// 根目录用 imagesDir 而不是硬编码 `/var/lib/k_cockpit/images`：域 XML 里
+// 写的路径与创建时真正落盘的路径（vmCreate 用 imagesDir）必须是同一个根，
+// 否则测试把根指到临时目录后，XML 仍指向 /var/lib——两边漂移。
 func dataDiskPath(vm, dev, format string) string {
 	ext := format
 	if ext == "" {
 		ext = "qcow2"
 	}
-	return fmt.Sprintf("/var/lib/k_cockpit/images/%s-%s.%s", vm, dev, ext)
+	return filepath.Join(imagesDir, vm+"-"+dev+"."+ext)
 }
 
 // xmlEsc 转义 XML 属性/文本的五个保留字符。

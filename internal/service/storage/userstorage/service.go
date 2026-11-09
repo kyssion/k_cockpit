@@ -18,8 +18,10 @@ package userstorage
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"io"
 	"log"
 	"os"
 	"path"
@@ -235,6 +237,31 @@ func (s *Service) DeleteFile(
 		return api.NotFound("文件不存在")
 	}
 
+	// **先删节点上的字节，再删记录。**
+	//
+	// 反过来的话，一次失败就会留下一个**没有任何记录指向它**的文件——它
+	// 既不会出现在列表里，也不会被任何清理路径碰到，从此永远占着磁盘
+	// （实机抓出：19 个孤儿、约 250MB，全部落在历史存储根里）。孤儿字节
+	// 只能靠人去 ssh 上删，而"删了个文件磁盘没变"看起来像配额算错了。
+	//
+	// 节点侧对"文件本来就不在"返回成功（删除是幂等的），因此重试安全；
+	// 而节点不可达时**必须报错而不是静默删记录**——那正是产生孤儿的路径。
+	if s.agent != nil && strings.TrimSpace(file.RelPath) != "" {
+		result, err := s.agent.Execute(ctx, agent.Operation{
+			Kind:   agent.OpStorageFileDelete,
+			NodeID: file.NodeID,
+			Target: file.RelPath,
+		})
+		if err != nil {
+			log.Printf("[userstorage] 删除节点文件未送达 id=%d: %v", file.ID, err)
+			return api.Unavailable("节点不可达，文件未删除；请稍后重试")
+		}
+		if !result.Success {
+			// 节点侧的失败原因更准（权限、路径越界），原样带出。
+			return api.ValidationFailed(result.Message)
+		}
+	}
+
 	if err := s.db.WithContext(ctx).Delete(&model.StorageFile{}, file.ID).Error; err != nil {
 		log.Printf("[userstorage] 删除文件失败 id=%d: %v", file.ID, err)
 		return api.Internal()
@@ -367,6 +394,14 @@ func (s *Service) CreateUpload(
 	if err != nil {
 		return nil, err
 	}
+	// 每个用户一个命名空间目录。
+	//
+	// rel_path 在 (node_id, rel_path) 上**全局唯一**，而它此前不含用户：
+	// 租户 A 上传了 `ubuntu.iso` 之后，租户 B 上传同名文件必然撞唯一约束
+	// （实机抓出：管理员与租户各传一份 `dup.iso`，第二个收到「该位置已存在
+	// 同名文件」，而那个位置根本不是他的）。节点侧只是把存储根与 rel_path
+	// 拼接，因此加一层 `u<id>/` 前缀对所有既有路径解析都是透明的。
+	relPath = userNamespace(userID) + "/" + relPath
 
 	// 配额在**授予上传之前**检查：一个 40GB 的上传传到一半才被告知超配额，
 	// 用户已经等了几十分钟，而那时除了丢弃别无选择。
@@ -378,22 +413,35 @@ func (s *Service) CreateUpload(
 
 	// 秒传：摘要命中**自己已有的**文件时直接完成。
 	if req.SHA256 != "" {
-		if existing, err := s.FindByDigest(ctx, userID, req.NodeID, req.SHA256); err != nil {
+		existing, err := s.FindByDigest(ctx, userID, req.NodeID, req.SHA256)
+		if err != nil {
 			return nil, err
-		} else if existing != nil {
+		}
+		if existing != nil {
 			file, err := s.instantCopy(ctx, existing, relPath, req.Filename, req.Category, userID, req.NodeID)
-			if err != nil {
+			switch {
+			case err == nil:
+				s.record(ctx, audit.Entry{
+					OperatorID: v.UserID, OperatorName: operatorName,
+					NodeID: req.NodeID, ResourceType: "storage_file", ResourceID: file.ID,
+					ResourceName: req.Filename, Action: "storage_file.instant",
+					Params:  map[string]any{"sha256": req.SHA256, "rel_path": relPath},
+					Success: true, ClientIP: clientIP,
+				})
+				view := toFileView(file)
+				return &UploadView{Status: model.UploadCompleted, Instant: true, File: &view}, nil
+			case errors.Is(err, errInstantSourceCorrupt):
+				// 来源记录本身不可信：退化为普通上传，而不是把请求判失败。
+				//
+				// 实机抓出：一旦库里有一条「摘要与内容不符」的记录（脏数据、
+				// 或节点上的文件被带外改动），秒传必然失败；若直接返回 422，
+				// 这条坏记录会把该摘要**永久**堵死——用户换名字、换时间都传
+				// 不上去。退化为完整上传后，完成时摘要会被重新校验并写对。
+				log.Printf("[userstorage] 秒传来源内容与摘要不一致，退化为普通上传: user=%d sha=%s",
+					userID, req.SHA256)
+			default:
 				return nil, err
 			}
-			s.record(ctx, audit.Entry{
-				OperatorID: v.UserID, OperatorName: operatorName,
-				NodeID: req.NodeID, ResourceType: "storage_file", ResourceID: file.ID,
-				ResourceName: req.Filename, Action: "storage_file.instant",
-				Params:  map[string]any{"sha256": req.SHA256, "rel_path": relPath},
-				Success: true, ClientIP: clientIP,
-			})
-			view := toFileView(file)
-			return &UploadView{Status: model.UploadCompleted, Instant: true, File: &view}, nil
 		}
 	}
 
@@ -648,12 +696,18 @@ func (s *Service) CompleteUpload(
 		}
 	}()
 
-	// 交给节点落盘。
+	// 交给节点落盘：先把拼接好的内容**分块推送**到节点（跨机部署下节点
+	// 拿不到控制面的本机路径，旧实现把 assembledPath 塞进 staged 参数、
+	// agent 在节点上 rename 一个不存在的文件必然失败——mock 移除后实机
+	// 暴露），再用 commit 收口。
 	//
 	// 契约要求节点回传的摘要与控制面算出的**必须一致**——不一致说明传输
 	// 过程中出了问题，此时应当把这次上传判为失败并清理，而不是登记一条
 	// 指向损坏内容的记录（用户会在装系统时才发现，而那时已经很难追查）。
 	if s.agent != nil {
+		if err := s.streamStagedFile(ctx, *session.NodeID, relPath, assembledPath); err != nil {
+			return nil, err
+		}
 		result, err := s.agent.Execute(ctx, agent.Operation{
 			Kind:   agent.OpStorageFileCommit,
 			NodeID: *session.NodeID,
@@ -662,7 +716,6 @@ func (s *Service) CompleteUpload(
 				"rel_path": relPath,
 				"size":     session.TotalSize,
 				"checksum": assembledSum,
-				"staged":   assembledPath,
 			},
 		})
 		if err != nil {
@@ -685,12 +738,34 @@ func (s *Service) CompleteUpload(
 		}
 	}
 
+	// 摘要校验：客户端声明的 SHA256 只是「期望值」，**落库一律用服务端算出的
+	// assembledSum**。
+	//
+	// 此前直接用 session.SHA256 落库，产生两个实机可复现的问题：
+	//   - 客户端不传摘要（协议允许为空）时，文件登记为 sha256=NULL，
+	//     这份文件**永远不会命中秒传**，功能对这类上传等于不存在；
+	//   - 客户端报一个与内容不符的摘要时，假摘要照样入库。此后任何人用该
+	//     摘要请求秒传，都会拿到「目标文件内容与来源不一致」的 422，
+	//     且真正的正确文件被这条假记录挡住（按摘要 First 取到假的）。
+	// 内容与声明不一致本身就说明传输出了问题，此时应当失败而不是登记。
+	if session.SHA256 != nil && *session.SHA256 != "" &&
+		!strings.EqualFold(*session.SHA256, assembledSum) {
+		if s.chunks != nil {
+			_ = s.chunks.Discard(session.UploadID)
+		}
+		log.Printf("[userstorage] 摘要不匹配 upload=%s 声明=%s 实际=%s",
+			session.UploadID, *session.SHA256, assembledSum)
+		return nil, api.ValidationFailed(
+			"文件校验失败：内容与声明的 SHA256 不一致，请重新上传")
+	}
+
 	now := s.now()
+	digest := assembledSum
 	file := model.StorageFile{
 		NodeID: *session.NodeID, UserID: session.OwnerID,
 		RelPath: relPath, Category: session.Target,
 		Filename: path.Base(relPath), SizeBytes: session.TotalSize,
-		SHA256: session.SHA256, UploadedAt: &now,
+		SHA256: &digest, UploadedAt: &now,
 	}
 	if err := s.db.WithContext(ctx).Create(&file).Error; err != nil {
 		if isDuplicateKey(err) {
@@ -732,6 +807,55 @@ func (s *Service) CompleteUpload(
 	return &view, nil
 }
 
+// pushChunkSize 是文件推送的单块原始大小。块经 Execute 通道走 JSON（base64
+// 后约 2.8MB），必须低于 gRPC 默认 4MB 的单条消息上限；取小一半留足余量，
+// 避免 JSON 转义（multipart 边界、非 UTF-8 字节序列）把体积顶过线。
+const pushChunkSize = 2 << 20
+
+// streamStagedFile 把拼接好的文件内容分块推送到节点。
+//
+// 失败返回 Unavailable（分片仍保留在控制面，用户可重试完成）——上传的
+// 语义是"整份内容安全落到节点"，中途断掉就当没传完，不做部分登记。
+func (s *Service) streamStagedFile(ctx context.Context, nodeID int64, relPath, srcPath string) error {
+	f, err := os.Open(srcPath)
+	if err != nil {
+		return api.Internal()
+	}
+	defer func() { _ = f.Close() }()
+
+	buf := make([]byte, pushChunkSize)
+	var offset int64
+	for {
+		n, rerr := f.Read(buf)
+		if n > 0 {
+			result, err := s.agent.Execute(ctx, agent.Operation{
+				Kind:   agent.OpStorageFilePush,
+				NodeID: nodeID,
+				Target: relPath,
+				Params: map[string]any{
+					"rel_path": relPath,
+					"offset":   offset,
+					"data":     base64.StdEncoding.EncodeToString(buf[:n]),
+				},
+			})
+			if err != nil {
+				return api.Unavailable("节点不可达，文件推送中断（分片已保留，可重试）")
+			}
+			if !result.Success {
+				return api.ValidationFailed(result.Message)
+			}
+			offset += int64(n)
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			return api.Internal()
+		}
+	}
+	return nil
+}
+
 // FindByDigest 按内容摘要查找用户**自己**已有的文件（秒传）。
 //
 // **查重范围必须限定在同一用户内**。按摘要全局查会让用户 A 通过
@@ -764,6 +888,12 @@ func (s *Service) FindByDigest(
 	}
 	return &file, nil
 }
+
+// errInstantSourceCorrupt 表示秒传来源文件的内容与登记的摘要不一致。
+//
+// 它不是「用户输入错误」，而是那条记录本身不可信；调用方应据此退化为
+// 普通上传，而不是把整个请求判失败（否则一条坏记录会永久堵住该摘要）。
+var errInstantSourceCorrupt = errors.New("秒传来源内容与登记摘要不一致")
 
 // instantCopy 在秒传命中时把内容落到新路径，并登记一条新记录。
 //
@@ -807,7 +937,7 @@ func (s *Service) instantCopy(
 			if info.Checksum != "" && srcSum != "" && !strings.EqualFold(info.Checksum, srcSum) {
 				log.Printf("[userstorage] 秒传内容校验不一致 rel=%s 来源=%s 节点=%s",
 					relPath, srcSum, info.Checksum)
-				return nil, api.ValidationFailed("秒传失败：目标文件内容与来源不一致")
+				return nil, errInstantSourceCorrupt
 			}
 		}
 	}
@@ -865,6 +995,14 @@ func (s *Service) assembleAndStage(
 }
 
 // --- 内部 ---
+
+// userNamespace 是用户在存储根下的命名空间目录名。
+//
+// 用 ID 而不是用户名：用户名可以改（F-1-11），而文件路径一旦落盘就该稳定；
+// 改用户名若牵动目录迁移，会让一次普通改名变成一次跨目录的数据移动。
+func userNamespace(userID int64) string {
+	return "u" + strconv.FormatInt(userID, 10)
+}
 
 // resolveFileRelPath 把目标目录与文件名拼成存储根下的相对路径。
 func (s *Service) resolveFileRelPath(dir, filename string) (string, error) {

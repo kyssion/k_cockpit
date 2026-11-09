@@ -38,6 +38,7 @@ export function UserAdminPage() {
   const [editing, setEditing] = useState<UserView | null>(null)
   const [assignTarget, setAssignTarget] = useState<UserView | null>(null)
   const [confirmBan, setConfirmBan] = useState<UserView | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<UserView | null>(null)
   const [banResult, setBanResult] = useState<SetStatusResult | null>(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -91,11 +92,17 @@ export function UserAdminPage() {
   const remove = useMutation({
     mutationFn: (u: UserView) => userApi.remove(u.id),
     onSuccess: () => {
+      setConfirmDelete(null)
       setError('')
       setNotice('用户已删除')
       refresh()
     },
-    onError: (err) => setError(describe(err)),
+    onError: (err) => {
+      // 名下还有虚拟机时服务端会 409；关掉弹窗把原因放回页面顶部，
+      // 用户接着能直接点「分配 VM」。
+      setConfirmDelete(null)
+      setError(describe(err))
+    },
   })
 
   if (list.isPending) return <PageLoading />
@@ -236,10 +243,10 @@ export function UserAdminPage() {
                       >
                         分配 VM
                       </button>
+                      {/* 删除不可撤销（软删除），点错就没有补救——因此必须过一道确认。 */}
                       <button
                         className="text-sm text-danger hover:underline"
-                        disabled={remove.isPending}
-                        onClick={() => remove.mutate(u)}
+                        onClick={() => setConfirmDelete(u)}
                       >
                         删除
                       </button>
@@ -323,6 +330,38 @@ export function UserAdminPage() {
         <p className="mt-2 text-sm text-ink-3">
           第二件事只改状态、不会立即在宿主机上关机（封禁不等待节点）。
           如果这一步没做成，封禁本身<span className="text-ink-2">仍然生效</span>，你会看到一条说明。
+        </p>
+      </Modal>
+
+      {/* 删除前说清它到底做什么：软删除，账号登不上了，但用户名会留在审计
+          记录里。下半句同样要说——名下还有虚拟机时这次删除会被拒绝。 */}
+      <Modal
+        open={confirmDelete !== null}
+        title={`删除用户「${confirmDelete?.username ?? ''}」`}
+        description="删除是软删除，但没有撤销入口："
+        onClose={() => setConfirmDelete(null)}
+        footer={
+          <>
+            <Button variant="secondary" size="sm" onClick={() => setConfirmDelete(null)}>
+              取消
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              loading={remove.isPending}
+              onClick={() => confirmDelete && remove.mutate(confirmDelete)}
+            >
+              确认删除
+            </Button>
+          </>
+        }
+      >
+        <ul className="flex flex-col gap-1.5 text-base text-ink-2">
+          <li>· 该账号将无法登录，已登录的会话一并失效</li>
+          <li>· 用户名仍保留在审计记录中——历史操作不会失去归属，账号本身也不会因此恢复</li>
+        </ul>
+        <p className="mt-2 text-sm text-ink-3">
+          名下仍有虚拟机时无法删除，请先用「分配 VM」转移。
         </p>
       </Modal>
 

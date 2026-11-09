@@ -51,6 +51,8 @@ const (
 	KeySchedulerRetention = "scheduler.retention"
 	// KeyStorageTrim 是存储空间的自动回收（G-52）。
 	KeyStorageTrim = "storage.trim"
+	// KeyStorageCapacityRefresh 是存储池容量的周期刷新（f-5-01 R-009）。
+	KeyStorageCapacityRefresh = "storage.pool.stat"
 	// KeyVMMediaEject 是安装介质的自动弹出（F-2-17）。
 	KeyVMMediaEject = "vm.media_eject"
 )

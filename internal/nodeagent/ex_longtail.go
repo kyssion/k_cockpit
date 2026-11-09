@@ -425,6 +425,22 @@ func vmReinstall(ctx context.Context, op agent.Operation, report Reporter) (*age
 			_ = osRename(backupPath, sourcePath)
 			return failResult("从模板重建失败: " + err.Error()), nil
 		}
+		// 模板盘的虚拟容量通常**小于**请求的 disk_gb（模板 3.5G、用户建的是
+		// 10G），而 convert 只复制内容、不改虚拟容量。少了这一步就是实机抓出
+		// 的那个结果：任务成功、控制面记 10G、配额按 10G 计，而
+		// `virsh domblkinfo` 的 Capacity 仍是模板原大小——来宾里看到的盘也小。
+		//
+		// 用 growDiskTo 而不是直接 resize：它只扩不缩，且容量已足够时不动盘
+		// （缩容会截断数据，重复扩也没有意义）。克隆路径（ex_vm_write.go）用的
+		// 就是同一个实现，两条路径的容量语义因此一致。
+		if int(diskGB) > 0 {
+			if gerr := growDiskTo(ctx, sourcePath, int(diskGB)); gerr != nil {
+				// 与重建失败同等处理：还原备份、如实报错，绝不留下一个
+				// 「容量不对」的系统盘交给用户开机。
+				_ = osRename(backupPath, sourcePath)
+				return failResult("从模板重建后扩容失败: " + gerr.Error()), nil
+			}
+		}
 	} else {
 		if _, err := sys.Run(ctx, "qemu-img", "create", "-f", "qcow2", sourcePath,
 			fmt.Sprintf("%dG", int(diskGB))); err != nil {
@@ -454,6 +470,10 @@ func vmReinstall(ctx context.Context, op agent.Operation, report Reporter) (*age
 			"（原盘数据已还原，但域定义已被移除；重试重装或重建虚拟机可恢复）"), nil
 	}
 	_ = ensureQemuReadable(sourcePath)
+	// 磁盘清单（vm_disk_manifest.go）**不需要**重写：重装是在同一个路径上
+	// 用模板重建系统盘（sourcePath 前后不变），数据盘完全没动，清单里的
+	// 每条路径仍然成立。只有"换路径 / 增删盘"才需要更新清单，那不在重装的
+	// 语义内（增删盘走 vm.disk.* 对应的独立操作）。
 	uuid, _ := sys.DomainUUID(ctx, op.Target)
 	return &agent.Result{Success: true, Data: map[string]any{
 		"uuid": uuid,
@@ -502,6 +522,15 @@ func vmReinstallPurge(ctx context.Context, op agent.Operation, report Reporter) 
 // 第一位 → 挂救援 ISO 并开机；exit：按保存的定义还原。
 func vmRescueEnter(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	snapshotXML := strParam(op.Params, "snapshot")
+	// 只接受**真正的域 XML**。控制面为审计另存了一份 JSON 摘要
+	// （boot_order / firmware 等字段），它随任务参数一起下发；旧实现
+	// 直接把它当 XML 写进救援快照文件，退出时 `virsh define` 报
+	// "Start tag expected, '<' not found"——救援**进得去、出不来**（实机抓出）。
+	// 以 '<' 开头是域 XML 的最低判据；不满足时回落到本机 dumpxml（节点才是
+	// 真实配置的唯一来源）。
+	if !strings.HasPrefix(strings.TrimSpace(snapshotXML), "<") {
+		snapshotXML = ""
+	}
 	rescueISO := strParam(op.Params, "rescue_iso")
 	report(Stage{Key: "save_config", Name: "保存配置", Index: 1, Total: 2})
 	if snapshotXML == "" {

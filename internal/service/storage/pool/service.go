@@ -248,6 +248,11 @@ func (s *Service) Create(
 	if disk.Mounted {
 		return nil, api.ValidationFailed("该设备或其分区处于挂载状态，请先卸载")
 	}
+	// 零容量设备拒绝（空闲 nbd / zram 在清单里表现为 size=0 的整盘）：
+	// 对它 mkfs 必然失败，拦截在这里而不是让用户等到任务执行时。
+	if disk.SizeBytes <= 0 {
+		return nil, api.ValidationFailed("该设备容量为 0，不能用于存储池")
+	}
 	// 已有数据的设备必须显式确认，否则拒绝（§4.1）。
 	if disk.HasData && !req.ConfirmDataLoss {
 		return nil, api.ValidationFailed("该设备上已存在分区表或文件系统，请确认数据可被销毁后重试")
@@ -483,10 +488,18 @@ func (s *Service) probeDisk(ctx context.Context, nodeID int64, deviceID string) 
 
 // scanVolumes 探测存储池内的磁盘。
 func (s *Service) scanVolumes(ctx context.Context, pool *model.StoragePool) ([]string, error) {
+	// 扫描目标是**挂载点目录**（池内磁盘是它下面的文件）。DevicePath 是
+	// 块设备——把它当目录读永远 ENOTDIR，删除池因此必然失败（实机测试
+	// 抓出）。旧记录缺失 MountPath 时回退设备路径：宁可得到一个明确的
+	// 失败，也不猜一个路径。
+	target := derefStr(pool.MountPath)
+	if target == "" {
+		target = derefStr(pool.DevicePath)
+	}
 	result, err := s.agent.Execute(ctx, agent.Operation{
 		Kind:   agent.OpStoragePoolScan,
 		NodeID: pool.NodeID,
-		Target: derefStr(pool.DevicePath),
+		Target: target,
 	})
 	if err != nil {
 		return nil, api.Unavailable("节点不可达，无法确认存储池占用情况")

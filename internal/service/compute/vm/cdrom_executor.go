@@ -56,5 +56,29 @@ func (e *CDROMExecutor) Run(ctx context.Context, t *model.Task) error {
 		// 下一次操作会重发完整状态——这个操作是幂等的。
 		return api.ValidationFailed(result.Message)
 	}
+
+	// 只有换总线需要在成功后回写记录：它是**唯一**一个受理时不能先改库的
+	// 动作（节点上是 detach + attach 两步，失败则域里仍是旧设备）。其余动作
+	// 的记录在受理时就已写好，语义是"控制面希望的状态"。
+	if strOf(p["action"]) == "bus" {
+		e.markBusApplied(ctx, p)
+	}
 	return nil
+}
+
+// markBusApplied 把新总线写回光驱记录；记录已不存在时只记日志。
+func (e *CDROMExecutor) markBusApplied(ctx context.Context, p map[string]any) {
+	id, ok := specInt64(p, "cdrom_id")
+	bus := strOf(p["bus"])
+	if !ok || id <= 0 || bus == "" {
+		log.Printf("[vm] 换总线任务缺少 cdrom_id/bus，跳过回写: %#v", p)
+		return
+	}
+	res := e.db.WithContext(ctx).Model(&model.VMCDROM{}).
+		Where("id = ?", id).Update("bus", bus)
+	if res.Error != nil {
+		// 域里已经换好了：回写失败不影响结果，只记日志。下一次换总线或列表
+		// 刷新会暴露这条记录，而让任务失败会让用户以为节点上没生效。
+		log.Printf("[vm] 回写光驱总线失败 id=%d bus=%s: %v", id, bus, res.Error)
+	}
 }

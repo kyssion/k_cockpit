@@ -7,6 +7,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/service/compute/vm"
 )
@@ -14,8 +15,17 @@ import (
 // cdromEnv 造一台虚拟机与一份 ISO。
 func cdromEnv(t *testing.T) (*vm.Service, *gorm.DB, int64, int64) {
 	t.Helper()
-	svc, q, db := newTestEnv(t)
-	q.Register(vm.NewCDROMExecutor(db, newStubClient()))
+	return cdromEnvWithClient(t, newStubClient())
+}
+
+// cdromEnvWithClient 允许替换 agent 替身：换总线要在意"节点回报什么"，
+// 固定成功的桩覆盖不到失败分支。
+func cdromEnvWithClient(
+	t *testing.T, client agent.Client,
+) (*vm.Service, *gorm.DB, int64, int64) {
+	t.Helper()
+	svc, q, db := newTestEnvWithClient(t, client)
+	q.Register(vm.NewCDROMExecutor(db, client))
 
 	owner := int64(7)
 	node := model.Node{Name: "n1", EnrollState: model.NodeEnrollEnrolled}

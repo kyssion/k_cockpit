@@ -32,6 +32,7 @@ type backgroundLoops struct {
 	alertLoop      *alert.Loop
 	schedRetention *scheduler.RetentionLoop
 	trimLoop       *pool.TrimLoop
+	poolStatLoop   *pool.CapacityRefreshLoop
 	mediaEjectLoop *vm.MediaEjectLoop
 	netReconcile   *reconcile.Loop
 	passAuditLoop  *passaudit.Loop
@@ -83,6 +84,7 @@ func (a *app) setupSchedulerRegistry() {
 		RetentionInterval:      time.Hour,
 		TrimInterval:           24 * time.Hour,
 		MediaEjectInterval:     time.Minute,
+		PoolStatInterval:       pool.DefaultCapacityOptions().Interval,
 	})
 	// 记录器在这里建好（在**所有**周期组件之前）：定时任务扫描器与采集器
 	// 构造之后马上就要接上它。
@@ -150,6 +152,11 @@ func (a *app) setupBackground() {
 		},
 	})
 
+	// 存储池容量刷新（f-5-01 R-009「容量随指标周期上报」的落地）：
+	// 按节点批量 statfs 挂载点，写回池记录；失败才记调度事件。
+	a.bg.poolStatLoop = pool.NewCapacityRefreshLoop(a.db, a.agentClient, a.schedRecorder, pool.CapacityOptions{})
+	a.bg.poolStatLoop.Observe(a.schedRecorder)
+
 	// 安装介质自动弹出（F-2-17）：Windows 初始化就绪后弹出安装 ISO。
 	a.bg.mediaEjectLoop = vm.NewMediaEjectLoop(a.compute.vmSvc, a.db, a.agentClient, a.schedRecorder, vm.MediaEjectOptions{})
 
@@ -176,6 +183,7 @@ func (a *app) startBackground() {
 	a.bg.quotaLoop.Start(ctx)
 	a.bg.alertLoop.Start(ctx)
 	a.bg.collector.Start(ctx)
+	a.bg.poolStatLoop.Start(ctx)
 	a.bg.goLoop(func() { a.bg.passAuditLoop.Start(ctx) })
 	a.bg.goLoop(func() { a.bg.authKeyLoop.Start(ctx) })
 	a.bg.goLoop(func() { a.bg.schedRetention.Start(ctx) })
@@ -197,6 +205,7 @@ func (a *app) stopBackground() {
 	a.bg.quotaLoop.Stop()
 	a.bg.schedRetention.Stop()
 	a.bg.trimLoop.Stop()
+	a.bg.poolStatLoop.Stop()
 	a.bg.mediaEjectLoop.Stop()
 	a.queue.Stop()
 }

@@ -187,7 +187,7 @@ func (h *Auth) StagedBeginTOTP(ctx context.Context, c *app.RequestContext) {
 		api.Fail(c, api.InvalidParameter("请求参数不合法"))
 		return
 	}
-	user, _, err := h.svc.AuthenticateStage(ctx, req.LoginToken, model.TokenTypeLogin, auth.ClientInfoOf(c))
+	user, err := h.svc.AuthenticateBootstrapStage(ctx, req.LoginToken, auth.ClientInfoOf(c))
 	if err != nil {
 		api.Fail(c, err)
 		return
@@ -211,7 +211,7 @@ func (h *Auth) StagedConfirmTOTP(ctx context.Context, c *app.RequestContext) {
 		api.Fail(c, api.InvalidParameter("请求参数不合法"))
 		return
 	}
-	user, _, err := h.svc.AuthenticateStage(ctx, req.LoginToken, model.TokenTypeLogin, auth.ClientInfoOf(c))
+	user, err := h.svc.AuthenticateBootstrapStage(ctx, req.LoginToken, auth.ClientInfoOf(c))
 	if err != nil {
 		api.Fail(c, err)
 		return

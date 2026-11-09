@@ -68,21 +68,21 @@ type PCIDevice struct {
 // IOMMUStatus 是直通能力的就绪状态。
 type IOMMUStatus struct {
 	// Enabled 为 true 表示内核已启用 IOMMU。
-	Enabled bool
+	Enabled bool `json:"enabled"`
 	// VFIOAvailable 为 true 表示 vfio-pci 模块可用。
-	VFIOAvailable bool
+	VFIOAvailable bool `json:"vfio_available"`
 	// Reason 说明为什么不可用。
-	Reason string
+	Reason string `json:"reason"`
 	// Fix 给出**要做什么**（改哪个内核参数、装哪个包、是否需要重启）。
 	//
 	// 必须是可操作的指令：这一项在面板上做不了，而"不支持"三个字让用户
 	// 只能放弃。告诉他加哪个参数、重启之后回来，他几分钟就能解决。
-	Fix string
+	Fix string `json:"fix"`
 	// NeedReboot 为 true 表示改完参数需要重启宿主机。
 	//
 	// 必须显式说出来——重启宿主机意味着**上面所有虚拟机会停机**，而用户
 	// 在看到这条之前不会意识到那一点。
-	NeedReboot bool
+	NeedReboot bool `json:"need_reboot"`
 }
 
 // PCIBindInfo 是绑定/解绑的结果。

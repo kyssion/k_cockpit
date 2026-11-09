@@ -33,7 +33,11 @@ type StoragePool struct {
 	// （与迁移 0001 的 `(node_id) WHERE is_default` 对齐）：默认池的唯一性
 	// 是**节点内**的。漏掉 node_id 会退化成全局唯一——AutoMigrate 建的库
 	// （测试 / e2e / 预览）里第二台节点的默认池永远建不出来，曾因此翻车。
-	NodeID int64 `gorm:"not null;index:idx_storage_pool_node_id;uniqueIndex:uniq_storage_pool_node_device,priority:1;uniqueIndex:uniq_storage_pool_default,priority:1,where:is_default"`
+	// uniq_storage_pool_node_device 带 `where:deleted_at IS NULL`：池是软删除
+	// （删除执行器只置 deleted_at），旧的无条件唯一索引会让「删掉池后在同一
+	// 块盘上重建」永远撞唯一约束——设备明明空闲，入库却报占用。与
+	// uniq_template_node_name / uniq_vpc_switch_node_name 是同一类修正。
+	NodeID int64 `gorm:"not null;index:idx_storage_pool_node_id;uniqueIndex:uniq_storage_pool_node_device,priority:1,where:deleted_at IS NULL;uniqueIndex:uniq_storage_pool_default,priority:1,where:is_default"`
 	// DeviceID 是设备的稳定标识；DevicePath 仅用于展示。
 	DeviceID   string  `gorm:"size:128;not null;uniqueIndex:uniq_storage_pool_node_device,priority:2"`
 	DevicePath *string `gorm:"size:255"`

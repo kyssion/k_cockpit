@@ -124,7 +124,11 @@ func TestInstantCopyFailsWithoutNodeFile(t *testing.T) {
 
 // TestInstantCopyRejectsChecksumMismatch 覆盖节点回报的内容与来源不一致。
 //
-// 不一致说明链接/复制拿到了坏数据；登记记录等于把一个损坏文件当成功交给用户。
+// 不一致说明链接/复制拿到了坏数据；此时**不得登记记录**（等于把损坏文件
+// 当成功交给用户），但也不能把请求判失败——退化为普通上传。
+//
+// 实机抓出：把请求判失败后，只要库里有一条「摘要与内容不符」的记录，
+// 该摘要的秒传就永久失败，用户换文件名也传不上去（创建会话这一步就 422）。
 func TestInstantCopyRejectsChecksumMismatch(t *testing.T) {
 	svc, db := newTestEnv(t, &fakeQuota{allow: true})
 	svc = svc.WithAgent(&recordingAgent{result: &agent.Result{Success: true, Data: map[string]any{
@@ -136,11 +140,18 @@ func TestInstantCopyRejectsChecksumMismatch(t *testing.T) {
 	ctx := context.Background()
 	seedFile(t, db, userA, "mine.iso", instantDigest)
 
-	if _, err := svc.CreateUpload(ctx, userA, userstorage.CreateUploadRequest{
+	view, err := svc.CreateUpload(ctx, userA, userstorage.CreateUploadRequest{
 		NodeID: 1, Category: model.FileCategoryISO, RelDir: "iso3",
 		Filename: "copy.iso", TotalSize: 1024, ChunkSize: 1024, SHA256: instantDigest,
-	}, owner(userA), "alice", ""); err == nil {
-		t.Fatal("内容摘要不一致时必须失败")
+	}, owner(userA), "alice", "")
+	if err != nil {
+		t.Fatalf("内容摘要不一致时应退化为普通上传，而不是失败: %v", err)
+	}
+	if view.Instant {
+		t.Error("摘要不一致时不得标记为秒传成功")
+	}
+	if view.UploadID == "" {
+		t.Error("退化路径必须给出可续传的上传会话")
 	}
 	var n int64
 	_ = db.Model(&model.StorageFile{}).Where("filename = ?", "copy.iso").Count(&n).Error

@@ -61,6 +61,31 @@ func (s *Service) EnterRescue(
 		return nil, api.ValidationFailed("该虚拟机已处于救援模式")
 	}
 
+	// 救援镜像（G-47）必须是**显式配置**的，没有就明确拒绝。
+	//
+	// 这里此前的假设是「设置里没填 → 节点有内置的默认救援镜像」，而节点侧的
+	// vmRescueEnter 在 rescue_iso 为空时只保存一份快照就返回成功——于是演练
+	// 出来的结果是：任务成功、rescue_active 置 true，而宿主机上的域定义与
+	// 电源状态一个都没变（实机复现）。那是比失败更糟的结果：用户会按救援
+	// 环境去操作一台其实还从系统盘引导的机器。
+	//
+	// 配置类前置条件放在状态校验之前说清楚：它和「机器开没开机」无关，
+	// 用户改完设置就能重试，不必先去关机再撞上同一个错。
+	rescueISO := ""
+	if s.settings != nil {
+		rescueISO = strings.TrimSpace(s.settings.String(settings.KeyVMRescueISO, ""))
+	}
+	if rescueISO == "" {
+		return nil, api.ValidationFailed(
+			"未配置救援镜像（系统设置 → 救援 ISO），无法进入救援模式：" +
+				"请管理员先指定节点 ISO 存放目录下的救援镜像")
+	}
+	// 路径按宿主机语义校验：相对 ISO 存放目录、不允许绝对路径，
+	// 前导斜杠之后 path.Clean 会消掉全部 ".." 段，根化的结果不可能是目录逃逸。
+	if strings.HasPrefix(rescueISO, "/") || path.Clean("/"+rescueISO) == "/" {
+		return nil, api.InvalidParameter("救援 ISO 路径不合法（必须是 ISO 存放目录内的相对路径）")
+	}
+
 	// 与删除、电源操作一致：以**实时探测**为准，不用投影（f-2-01 R-002）。
 	current, err := s.probeStatus(ctx, vm)
 	if err != nil {
@@ -86,18 +111,6 @@ func (s *Service) EnterRescue(
 	}
 	snapshot := string(snap)
 
-	// 救援镜像（G-47）：设置里指定了就随指令下发，否则用节点内置的默认
-	// 镜像。路径按宿主机语义校验：相对 ISO 存放目录、不允许绝对路径，
-	// 前导斜杠之后 path.Clean 会消掉全部 ".." 段，根化的结果不可能是目录逃逸。
-	rescueISO := ""
-	if s.settings != nil {
-		rescueISO = strings.TrimSpace(s.settings.String(settings.KeyVMRescueISO, ""))
-	}
-	if rescueISO != "" &&
-		(strings.HasPrefix(rescueISO, "/") || path.Clean("/"+rescueISO) == "/") {
-		return nil, api.InvalidParameter("救援 ISO 路径不合法（必须是 ISO 存放目录内的相对路径）")
-	}
-
 	params := map[string]any{
 		"vm_id":   vm.ID,
 		"vm_name": vm.Name,
@@ -106,9 +119,7 @@ func (s *Service) EnterRescue(
 		// 会拿它去还原一台从未进入过救援的机器。
 		"snapshot":        snapshot,
 		"observed_status": current,
-	}
-	if rescueISO != "" {
-		params["rescue_iso"] = rescueISO
+		"rescue_iso":      rescueISO,
 	}
 
 	t, err := s.queue.Enqueue(ctx, task.Spec{
@@ -125,15 +136,14 @@ func (s *Service) EnterRescue(
 		return nil, err
 	}
 
-	auditParams := map[string]any{"task_id": t.ID}
-	if rescueISO != "" {
-		auditParams["rescue_iso"] = rescueISO
-	}
+	// 救援镜像一定非空（上面已拒绝未配置的情况），因此直接记进审计：
+	// 事后看「那次救援用的是哪个盘」只有这一处留痕。
 	s.record(ctx, audit.Entry{
 		OperatorID: v.UserID, OperatorName: operatorName,
 		NodeID: vm.NodeID, ResourceType: "vm", ResourceID: vm.ID,
 		ResourceName: vm.Name, Action: "vm.rescue.enter",
-		Params: auditParams, Success: true, ClientIP: clientIP,
+		Params:  map[string]any{"task_id": t.ID, "rescue_iso": rescueISO},
+		Success: true, ClientIP: clientIP,
 	})
 	return t, nil
 }

@@ -245,6 +245,13 @@ type ApplyRequest struct {
 func (s *Service) Apply(
 	ctx context.Context, req ApplyRequest, v authz.Viewer, operatorName, clientIP string,
 ) (*model.Task, error) {
+	// 服务层再拦一道：node_id 为 0 时下面的 Preview 会发出一次注定失败的
+	// agent 调用，再以 503「节点不支持 ACL 预览」的形式回到调用方——把一次
+	// 参数错误伪装成节点故障。接口层已拦，这里保证直接调用服务的人也得到
+	// 正确语义。
+	if req.NodeID <= 0 {
+		return nil, api.InvalidParameter("必须指定 node_id")
+	}
 	// 应用前**再预览一次**并比对版本号：预览与应用之间可能隔了几分钟，
 	// 而这期间规则完全可能被改动。
 	preview, err := s.Preview(ctx, req.NodeID, req.SwitchID)

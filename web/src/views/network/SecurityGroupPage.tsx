@@ -53,6 +53,13 @@ export function SecurityGroupPage() {
     enabled: effectiveNodeID > 0,
   })
 
+  // 选中的组被删除后，列表刷新不再包含它，详情面板必须一起收起。
+  // 用「从最新列表里反查」而不是在 effect 里 setState：渲染期派生天然与列表
+  // 同源，不会出现「列表已删、面板还留着」的中间态（第 9 轮实机抓到）。
+  const activeGroup = selectedGroup
+    ? (groups.data?.items ?? []).find((g) => g.id === selectedGroup.id) ?? null
+    : null
+
   const vms = useQuery({
     queryKey: ['vms', { node_id: effectiveNodeID, page_size: 200 }],
     queryFn: () => vmApi.list({ node_id: effectiveNodeID, page_size: 200 }),
@@ -152,9 +159,9 @@ export function SecurityGroupPage() {
             </div>
           )}
 
-          {selectedGroup && (
+          {activeGroup && (
             <RuleEditor
-              group={selectedGroup}
+              group={activeGroup}
               onError={showError}
               onChanged={(msg) => {
                 setNotice(msg)
@@ -356,6 +363,7 @@ function RuleEditor({
   onError: (error: unknown) => void
 }) {
   const [addOpen, setAddOpen] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   const rules = useQuery({
     queryKey: ['sg-rules', group.id],
@@ -370,9 +378,20 @@ function RuleEditor({
 
   const removeGroup = useMutation({
     mutationFn: () => securityGroupApi.remove(group.id),
-    onSuccess: () => onChanged(`已删除安全组「${group.name}」`),
-    onError,
+    onSuccess: () => {
+      setConfirmDelete(false)
+      onChanged(`已删除安全组「${group.name}」`)
+    },
+    onError: (err) => {
+      // 仍被网口使用时服务端会 409（按钮正常情况下已被禁用，这里兜住并发改动）。
+      setConfirmDelete(false)
+      onError(err)
+    },
   })
+
+  // 删组会连规则一起删掉，所以条数必须来自**服务端**：规则已加载就用实际条数，
+  // 拿不到就只说通用文案，不编数字。
+  const loadedRuleCount = rules.data?.items.length
 
   return (
     <div className="rounded-card border border-line bg-surface p-4">
@@ -396,7 +415,7 @@ function RuleEditor({
                   : ''
             }
             loading={removeGroup.isPending}
-            onClick={() => removeGroup.mutate()}
+            onClick={() => setConfirmDelete(true)}
           >
             删除组
           </Button>
@@ -437,6 +456,40 @@ function RuleEditor({
           onError(err)
         }}
       />
+
+      {/* 删组是不可撤销的连带删除：组内规则一起没了。条数只在已从服务端
+          拿到规则时才写进文案——拿不到就只说通用后果，不编数字。 */}
+      <Modal
+        open={confirmDelete}
+        title={`删除安全组「${group.name}」`}
+        description="删除会连同组内全部规则一起提交，且没有撤销入口："
+        onClose={() => setConfirmDelete(false)}
+        footer={
+          <>
+            <Button variant="secondary" size="sm" onClick={() => setConfirmDelete(false)}>
+              取消
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              loading={removeGroup.isPending}
+              onClick={() => removeGroup.mutate()}
+            >
+              确认删除
+            </Button>
+          </>
+        }
+      >
+        <ul className="flex flex-col gap-1.5 text-base text-ink-2">
+          {loadedRuleCount !== undefined && loadedRuleCount > 0 && (
+            <li>· 将同时删除 {loadedRuleCount} 条规则</li>
+          )}
+          <li>· 该组仍被网口使用时无法删除，需先解除挂载</li>
+        </ul>
+        <p className="mt-2 text-sm text-ink-3">
+          组和规则都会被直接删除，不会进入任何回收站——删完只能重新建一遍。
+        </p>
+      </Modal>
     </div>
   )
 }

@@ -118,6 +118,26 @@ func (s *Service) AuthenticateStage(
 	return user, session, nil
 }
 
+// AuthenticateBootstrapStage 校验「登录中间态令牌 + 当前确实停在安全初始化」。
+//
+// 引导期的四个动作（跳过、绑定验证器两步、绑定邮箱两步）都必须走这里：
+// 它们只传登录中间态令牌，若只校验令牌级别，一个处于**强制改密**阶段的
+// 用户也能拿同一张令牌调用这些接口——跳过引导会直接换到访问会话（绕过
+// 强制改密，实机测试抓出），绑定验证器/邮箱则能在他还没改掉初始密码时
+// 改写账号的安全信息。
+func (s *Service) AuthenticateBootstrapStage(
+	ctx context.Context, token string, ci ClientInfo,
+) (*model.User, error) {
+	user, _, err := s.AuthenticateStage(ctx, token, model.TokenTypeLogin, ci)
+	if err != nil {
+		return nil, err
+	}
+	if stageOfStaged(user) != StageBootstrap {
+		return nil, ErrStageMismatch
+	}
+	return user, nil
+}
+
 // VerifyLogin 完成登录阶段的二次验证，换发访问会话。
 func (s *Service) VerifyLogin(
 	ctx context.Context, token, code string, ci ClientInfo,
@@ -228,6 +248,15 @@ func (s *Service) SkipBootstrap(
 	user, session, err := s.AuthenticateStage(ctx, token, model.TokenTypeLogin, ci)
 	if err != nil {
 		return nil, err
+	}
+	// 只有真的停在「安全初始化」这一步才接受跳过。
+	//
+	// 少了这条判定会形成一个**绕过强制改密的入口**（实机测试抓出）：新建
+	// 用户的初始密码由管理员设置，登录后必须改密；而此时用同一张登录中间态
+	// 令牌调本接口，会直接换到访问会话——前端按阶段渲染界面并不构成防线，
+	// 阶段必须由服务端逐个动作校验（VerifyLogin 早已这么做，这里补齐）。
+	if stageOfStaged(user) != StageBootstrap {
+		return nil, ErrStageMismatch
 	}
 	if err := s.UpdateUser(ctx, user.ID, map[string]any{"bootstrap_skipped": true}); err != nil {
 		return nil, err

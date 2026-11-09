@@ -128,6 +128,13 @@ func (s *Service) CreateFormOf(ctx context.Context, nodeID int64, v authz.Viewer
 	}
 
 	values := createValues()
+	// 架构相关的默认值取自节点自报的宿主架构：ARM 宿主上给出
+	// aarch64 + virt + UEFI，而不是让用户对着 x86_64 的默认值提交后被拒。
+	if arch := s.nodeArch(ctx, nodeID); arch != "" {
+		for k, v := range archDefaults(arch) {
+			values[k] = v
+		}
+	}
 	// 默认磁盘 IOPS（G-45）来自系统设置而不是矩阵里的静态 "0"：向导里
 	// 预填它，用户看到的第一眼就是"这台机器会带上什么限速"，而不是提交
 	// 之后才发现被补了一个默认值。
@@ -158,8 +165,10 @@ func (s *Service) CreateFormOf(ctx context.Context, nodeID int64, v authz.Viewer
 	// --- 存储池：没有可用池就没有地方放磁盘 ---
 	pre = Prerequisite{Key: PreStorage, Label: "存在可用存储池"}
 	var pools int64
+	// deleted_at 过滤不可少：软删是自定义列（*time.Time），GORM 不会自动
+	// 排除（实机测试抓出的 migrate_targets 同款问题）。
 	if err := s.db.WithContext(ctx).Model(&model.StoragePool{}).
-		Where("node_id = ? AND status = ?", nodeID, model.StoragePoolReady).
+		Where("node_id = ? AND status = ? AND deleted_at IS NULL", nodeID, model.StoragePoolReady).
 		Count(&pools).Error; err != nil {
 		log.Printf("[vm] 统计存储池失败 node=%d: %v", nodeID, err)
 		return nil, api.Internal()
@@ -175,7 +184,12 @@ func (s *Service) CreateFormOf(ctx context.Context, nodeID int64, v authz.Viewer
 	// --- 网络：至少有一个可接入的交换机 ---
 	pre = Prerequisite{Key: PreNetwork, Label: "存在可接入的网络"}
 	var switches []model.VpcSwitch
-	if err := s.db.WithContext(ctx).Where("node_id = ?", nodeID).
+	// deleted_at 过滤不可少：软删是自定义列（*time.Time），GORM 不会自动
+	// 排除。少了它，已删除的交换机会继续出现在创建向导里，而它在宿主机上
+	// 的网桥已经不在了——用户选它建出来的虚拟机连不上任何东西（实机复现：
+	// 同名已删记录 id=5/6 仍在 switches 里）。
+	if err := s.db.WithContext(ctx).
+		Where("node_id = ? AND deleted_at IS NULL", nodeID).
 		Order("is_system DESC, id").Find(&switches).Error; err != nil {
 		log.Printf("[vm] 查询交换机失败 node=%d: %v", nodeID, err)
 		return nil, api.Internal()
@@ -348,7 +362,7 @@ func (s *Service) ensureCreatePrerequisites(ctx context.Context, nodeID int64) e
 	}
 	var pools int64
 	if err := s.db.WithContext(ctx).Model(&model.StoragePool{}).
-		Where("node_id = ? AND status = ?", nodeID, model.StoragePoolReady).
+		Where("node_id = ? AND status = ? AND deleted_at IS NULL", nodeID, model.StoragePoolReady).
 		Count(&pools).Error; err != nil {
 		log.Printf("[vm] 复核存储池失败 node=%d: %v", nodeID, err)
 		return api.Internal()

@@ -43,6 +43,12 @@ func osMkdirAllErr(path string) error { return os.MkdirAll(path, 0o755) }
 
 func osRename(src, dst string) error { return os.Rename(src, dst) }
 
+// osOpenFile 打开文件（os.OpenFile 的封装，与上面各 osXxx 同一约定：
+// 测试可替换的统一入口）。
+func osOpenFile(path string, flag int, perm os.FileMode) (*os.File, error) {
+	return os.OpenFile(path, flag, perm)
+}
+
 func osRemoveAll(path string) error { return os.RemoveAll(path) }
 
 func osReadFileBytes(path string) ([]byte, error) { return os.ReadFile(path) }

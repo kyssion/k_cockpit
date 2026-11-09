@@ -78,13 +78,6 @@ type QuotaRequest struct {
 // 问题。
 func (s *Service) SetAgent(c agent.Client) { s.agent = c }
 
-// NewService 构造服务。
-// CreateFromInvite 由邀请流程创建账号。
-//
-// 与 Create 的区别只有一处：**密码是受邀人自己设的**，因此不走强制改密——
-// 他自己刚设的密码，再让他改一遍没有意义。其余校验（角色、用户名）与 Create
-// 保持一致，避免两条创建路径长成两套口径。
-
 // usernamePattern 与 auth 引导同一口径：用户名会下发到节点（SSH 开关
 // 的 pkill、域命名等）——字符集必须收敛到注入安全的子集。
 var usernamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{3,64}$`)
@@ -103,6 +96,13 @@ func validateUsername(username string) error {
 	return nil
 }
 
+// CreateFromInvite 由邀请流程创建账号。
+//
+// 与 Create 的区别有两处，都源于同一件事——**密码是受邀人自己设的**：
+// 不走强制改密（他自己刚设的密码，再让他改一遍没有意义），并且账号直接
+// 是 active 而不是 pending（没有「管理员先确认、再让人用」这一步，管理员
+// 从头到尾不知道这个密码）。其余校验（角色、用户名）与 Create 保持一致，
+// 避免两条创建路径长成两套口径。
 func (s *Service) CreateFromInvite(
 	ctx context.Context, email, username, password, role string,
 	quotaEnabled bool, quotaBytes int64,
@@ -126,11 +126,35 @@ func (s *Service) CreateFromInvite(
 	}
 
 	// 复用 Create：配额、审计、状态都在那一条路径上。
-	_, err = s.Create(ctx, CreateRequest{
+	created, err := s.Create(ctx, CreateRequest{
 		Username: username, Password: password, Role: role, Email: email,
 	}, authz.Viewer{UserID: 0, IsAdmin: true}, "invite", "")
 	if hash == "" || err != nil {
 		return err
+	}
+
+	// 受邀人的账号**此刻就应当能登录**：密码是他自己设的，邀请流程里没有
+	// 「管理员给初始密码 → 首次登录改密」这一步。
+	//
+	// 而 Create 沿用管理员建账号的默认值（pending + 强制改密），于是接受
+	// 邀请之后登录恒返回 401「用户名或密码错误」——账号明明建好了、密码也
+	// 是对的，受邀人却必须等管理员手动激活（实机复现）。这不是一个小瑕疵：
+	// 邀请注册的整条链路止步于此。
+	//
+	// 因此这里把两个默认值改掉。**不动 Create 的默认值**：管理员建账号时
+	// 「先建好、确认无误、再让人用」是既有行为，且有测试保护；只有邀请这
+	// 条路径的语义不同（密码由本人设置，不该再强制改一次）。
+	//
+	// 写库失败返回错误而不是静默放过：否则又会回到「接口成功、实际登不进
+	// 去」那种结果。此时账号已存在，管理员仍可在用户列表里手动激活。
+	if err := s.db.WithContext(ctx).Model(&model.User{}).
+		Where("id = ?", created.ID).
+		Updates(map[string]any{
+			"status":                model.UserStatusActive,
+			"force_password_change": false,
+		}).Error; err != nil {
+		log.Printf("[useradmin] 激活受邀账号失败 user=%d: %v", created.ID, err)
+		return api.Internal()
 	}
 
 	// 配额：邀请时就把额度定下来。此前 NodeID 写死 0——quota.Set 对
@@ -155,6 +179,7 @@ func (s *Service) CreateFromInvite(
 	return nil
 }
 
+// NewService 构造服务。
 func NewService(db *gorm.DB, recorder *audit.Recorder, q quotaSetter) *Service {
 	return &Service{db: db, audit: recorder, hasher: auth.HashPassword, quota: q}
 }

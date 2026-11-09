@@ -9,11 +9,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"k_cockpit/internal/agent"
@@ -35,8 +38,43 @@ func boolParam(params map[string]any, key string) bool {
 // 声明为变量而非常量：测试需要把它指到临时目录，避免在 CI 上写 /var/lib。
 var imagesDir = "/var/lib/k_cockpit/images"
 
-// userdataRoot 是「我的存储」的节点侧根（storage.file.commit 的落盘前缀）。
-const userdataRoot = "/var/lib/k_cockpit/userdata"
+// defaultUserdataRoot 是「我的存储」的历史默认根目录。
+//
+// 它落在系统盘上：只要节点有独立的数据盘（存储池），控制面就会通过
+// storage.root.set 把根指到池内（`<池挂载点>/userdata`）。保留这个默认值
+// 是为了两件事：旧部署升级后原有文件仍可读；以及"没有存储池"的最小环境
+// 仍能传文件。
+//
+// 声明为变量而非常量：与 imagesDir 同理，测试需要把它指到临时目录才能
+// 覆盖「删除历史根里的文件」这类路径（在开发机上往 /var/lib 写既不可行
+// 也不该留痕）。
+var defaultUserdataRoot = "/var/lib/k_cockpit/userdata"
+
+// userdataRootValue 承载运行期的存储根（atomic：读发生在多个执行器
+// goroutine 里，写来自 storage.root.set 那一条指令）。
+var userdataRootValue atomic.Value
+
+func init() { userdataRootValue.Store(defaultUserdataRoot) }
+
+// userdataRoot 返回当前「我的存储」的节点侧根。
+func userdataRoot() string { return userdataRootValue.Load().(string) }
+
+// trashDir 保存移入回收站时的域定义，供 vm.restore 重建域。
+//
+// 放在节点侧而不是控制面：域 XML 里全是本机绝对路径，只有同一台宿主机
+// 才解释得通；而磁盘本来就没离开这台机器。
+//
+// 声明成 var 而不是 const：测试需要把它指到临时目录（写到真实的
+// /var/lib 下在开发机上既不可写也不该留痕）。
+var trashDir = "/var/lib/k_cockpit/trash"
+
+// trashXMLPath 返回某台虚拟机在回收站中的域定义路径。
+//
+// 名字直接参与路径拼接，因此拒绝任何可能越出 trashDir 的输入（斜杠、
+// 上跳）——这里的数据来自控制面，但"来自内部"不构成跳过校验的理由。
+func trashXMLPath(name string) string {
+	return filepath.Join(trashDir, name+".xml")
+}
 
 // vmCreate 实现 vm.create / vm.clone。
 //
@@ -46,6 +84,21 @@ const userdataRoot = "/var/lib/k_cockpit/userdata"
 // 用户点「开机」才启动）。
 func vmCreate(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	spec := parseCreateSpec(op.Target, op.Params)
+	// 网桥不存在时退回用户态网络，并把「退化」如实带回控制面。
+	//
+	// 静默退回是最坏的选项：界面显示网口接在交换机上，而实际是 SLIRP，
+	// 端口转发、安全组、DHCP 全部不生效，用户只会看到"配了但没效果"。
+	// 直接失败也不合适——节点刚纳管、还没建网络时，建机器仍然应当成功。
+	bridgeDegraded := ""
+	if spec.NicBridge != "" && !hostBridgeExists(ctx, spec.NicBridge) {
+		bridgeDegraded = spec.NicBridge
+		spec.NicBridge = ""
+	}
+	// OVS 桥必须在域 XML 里显式声明 virtualport，否则 libvirt 按 Linux 桥
+	// 处理并在开机时失败（见 NicBridgeOVS 的说明）。
+	if spec.NicBridge != "" {
+		spec.NicBridgeOVS = hostIsOVSBridge(ctx, spec.NicBridge)
+	}
 	if spec.VCPU <= 0 || spec.MemoryMB <= 0 || spec.DiskGB <= 0 {
 		return failResult("vcpu / memory_mb / disk_gb 必须为正数"), nil
 	}
@@ -78,6 +131,14 @@ func vmCreate(ctx context.Context, op agent.Operation, report Reporter) (*agent.
 		if err != nil {
 			return failResult("克隆系统盘失败: " + err.Error()), nil
 		}
+		// 模板盘的容量由模板决定，而请求里的 disk_gb 可能更大（创建向导允许
+		// 在模板 min_disk 之上指定）。不落实这一步，控制面记录的容量与真实
+		// 磁盘会永久不一致：列表显示 10G，qemu-img 只有 3.5G，配额也按 10G
+		// 计费（实机测试抓出：从模板创建时 disk_gb 被静默忽略）。
+		if err := growDiskTo(ctx, diskPath, spec.DiskGB); err != nil {
+			_ = os.Remove(diskPath)
+			return failResult("调整系统盘容量失败: " + err.Error()), nil
+		}
 	} else {
 		report(Stage{Key: "disk_allocate", Name: "分配磁盘", Index: 2, Total: 4})
 		if _, err := os.Stat(diskPath); err == nil {
@@ -92,11 +153,11 @@ func vmCreate(ctx context.Context, op agent.Operation, report Reporter) (*agent.
 
 	report(Stage{Key: "domain_define", Name: "生成域配置", Index: 3, Total: 4})
 	xml := spec.BuildDomainXML()
-	xmlFile := filepath.Join(os.TempDir(), "kc-define-"+spec.Name+".xml")
-	if err := os.WriteFile(xmlFile, []byte(xml), 0o600); err != nil {
+	xmlFile, cleanup, err := writeTempXML("define", xml)
+	if err != nil {
 		return failResult("写域定义失败: " + err.Error()), nil
 	}
-	defer func() { _ = os.Remove(xmlFile) }()
+	defer cleanup()
 	if _, err := sys.Run(ctx, "virsh", "define", xmlFile); err != nil {
 		// define 失败必须回滚已建的盘：半成品盘会让下次同名创建撞上
 		// 「磁盘文件已存在」，而用户无从清理。
@@ -165,6 +226,19 @@ func vmCreate(ctx context.Context, op agent.Operation, report Reporter) (*agent.
 		seedAttached = true
 	}
 
+	// 落盘磁盘清单：域定义被外部删除（`virsh undefine`，僵尸机的常见形态）
+	// 之后，删除路径就再也读不到这台机器的磁盘了——清单是那时唯一的依据。
+	//
+	// 位置：磁盘全部建成、首次启动介质也挂好之后（早于此写，一旦后续失败
+	// 回滚磁盘，清单会指向已不存在的文件）。created 里是系统盘 + 全部数据盘
+	// 的绝对路径，顺序即创建顺序。
+	//
+	// 写失败不阻断创建：清单是兜底信息，不是创建的必要产物；没有清单的
+	// 机器删除时会退到"按精确文件名删系统盘"的第 2 层兜底。
+	if err := writeDiskManifest(spec.Name, created); err != nil {
+		log.Printf("[nodeagent] 记录磁盘清单失败 vm=%s: %v", spec.Name, err)
+	}
+
 	// MAC 由 libvirt 分配；创建向导填写的静态地址靠它登记 DHCP 静态租约。
 	mac := primaryMACOf(ctx, spec.Name)
 	uuid, _ := sys.DomainUUID(ctx, spec.Name)
@@ -177,6 +251,15 @@ func vmCreate(ctx context.Context, op agent.Operation, report Reporter) (*agent.
 			agent.StatusDataKey:       "stopped",
 			agent.CloneDataKey:        agent.CloneInfo{DiskPath: diskPath, BackingPath: backingOf(spec)},
 			"seed_iso_path":           seedPath,
+			// 非空表示主网口**没有**接到这个网桥（已退回用户态网络）。
+			"network_degraded_bridge": bridgeDegraded,
+			// 回传**实际生效**的架构/机型/固件：控制面的默认值来自创建
+			// 矩阵（x86_64 视角），节点按自身架构解析出的值可能不同
+			// （aarch64 → virt + UEFI）。控制面按回传值写投影，否则
+			// 详情页显示的配置与真实运行的域不一致。
+			"arch":     spec.Arch,
+			"machine":  spec.Machine,
+			"firmware": spec.Firmware,
 		},
 	}, nil
 }
@@ -206,8 +289,27 @@ func powerOp(kind string, virshArgs ...string) Handler {
 		if _, err := sys.Run(ctx, "virsh", append(virshArgs, op.Target)...); err != nil {
 			return failResult("电源操作失败: " + err.Error()), nil
 		}
-		// 状态回读：shutdown/destroy 之后状态立即变化，start 之后也稳定；
-		// reboot 是异步的（来宾决定何时回来），回读当前态即可。
+		// 优雅关机是**异步**的：`virsh shutdown` 只是发一个 ACPI 电源键事件，
+		// 来宾什么时候关由它自己决定（甚至可能永远不关——没装 ACPI 处理、
+		// 卡在固件里、内核挂了）。
+		//
+		// 旧实现发完命令立刻回读状态并返回 success，于是任务显示"关机成功"
+		// 而机器还在跑（实机抓出：空盘虚拟机停在 UEFI Shell，shutdown 任务
+		// success、domstate 仍是 running）。等待并如实报告"没关掉"比一个
+		// 漂亮的成功任务有用得多——后者会让用户以为机器已经安全停机。
+		if kind == "shutdown" {
+			state := waitShutdown(ctx, op.Target, shutdownWait)
+			if state == "running" || state == "paused" {
+				return failResult("来宾未在 " + shutdownWait.String() +
+					" 内响应关机请求（可能未安装 ACPI 支持或来宾已失去响应）。" +
+					"请改用强制断电，或进控制台确认来宾状态。"), nil
+			}
+			return &agent.Result{Success: true, Data: map[string]any{
+				agent.StatusDataKey: state,
+			}}, nil
+		}
+		// 其余动作是同步的（destroy 立即生效；start 之后状态稳定；
+		// reboot 由来宾决定何时回来，回读当前态即可）。
 		state, err := sys.DomainStateOf(ctx, op.Target)
 		if err != nil {
 			state = "unknown"
@@ -222,6 +324,8 @@ func powerOp(kind string, virshArgs ...string) Handler {
 func vmDelete(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	force := boolParam(op.Params, "force")
 	diskAction := strParam(op.Params, "disk_action")
+	// residueNote 收集「有残留但不敢自动删」的提示（见 disksForDomainMissing）。
+	residueNote := ""
 
 	if !force {
 		report(Stage{Key: "power_off", Name: "停止虚拟机", Index: 1, Total: 4})
@@ -253,6 +357,25 @@ func vmDelete(ctx context.Context, op agent.Operation, report Reporter) (*agent.
 	}
 
 	report(Stage{Key: "domain_undefine", Name: "清理域配置", Index: 2, Total: 4})
+	// 移入回收站（保留磁盘）时**先把域定义留存一份**，恢复才有依据。
+	//
+	// 之前只删定义不留副本，于是"回收站"里的机器永远无法恢复——恢复接口
+	// 只能回一句「域定义已不存在」，用户看到的是一个只能彻底删除的回收站
+	// （实机抓出）。域 XML 引用的都是本机绝对路径，磁盘还在原处，重定义
+	// 出来就是原来那台机器。
+	//
+	// 只在 keep 时留存：transfer 会把磁盘搬进「我的存储」，原 XML 里的
+	// 路径随即失效，留着只会让恢复出一个指向空路径的域。
+	if diskAction != "delete" && diskAction != "transfer" && !force && xml != "" {
+		if err := os.MkdirAll(trashDir, 0o755); err != nil {
+			return failResult("创建回收站目录失败: " + err.Error()), nil
+		}
+		if err := os.WriteFile(trashXMLPath(op.Target), []byte(xml), 0o600); err != nil {
+			// 存不下就不能删：删掉之后这台机器将无法恢复，而用户以为
+			// 自己只是"移到了回收站"。
+			return failResult("保存回收站域配置失败（未删除域定义）: " + err.Error()), nil
+		}
+	}
 	// 注意 virsh undefine **没有 --force 选项**（真机实测报 "command
 	// 'undefine' doesn't support option --force"）——force 语义是控制面
 	// 跳过状态校验，不是 virsh 参数。--managed-save 处理掉已保存状态的
@@ -289,7 +412,22 @@ func vmDelete(ctx context.Context, op agent.Operation, report Reporter) (*agent.
 		// **以本机名开头**的文件：本产品的命名约定里那是这台机器的快照
 		// overlay/原盘；linked clone 的模板盘不带本机前缀，绝不能顺链误删。
 		residue := backingChainOf(ctx, sysDisk, op.Target+".")
-		for _, path := range append([]string{sysDisk}, dataDiskPaths(dataDisks)...) {
+		paths := append([]string{sysDisk}, dataDiskPaths(dataDisks)...)
+		if sysDisk == "" && len(dataDisks) == 0 {
+			// 域定义里一块盘都读不到：多为僵尸机（外部 `virsh undefine`
+			// 之后 dumpxml 为空）。旧实现在这里什么都不删，于是任务成功、
+			// 系统盘留在 /var/lib/k_cockpit/images 下（实机复现）。
+			//
+			// 兜底顺序：创建时落盘的清单 → 按精确文件名删系统盘。
+			// 数据盘在兜底路径下**只提示不删**（命名无法与"另一台机器的
+			// 系统盘"区分：VM 名本身可能长成 foo-vdb）。
+			extra, note := disksForDomainMissing(op.Target)
+			paths = append(paths, extra...)
+			if note != "" {
+				residueNote = note
+			}
+		}
+		for _, path := range paths {
 			if path != "" {
 				_ = os.Remove(path)
 			}
@@ -339,6 +477,17 @@ func vmDelete(ctx context.Context, op agent.Operation, report Reporter) (*agent.
 		return failResult("复核发现域仍存在（删除未生效）"), nil
 	}
 
+	// 彻底删除（连同磁盘）：回收站里的域定义也没有意义了，一并清掉，
+	// 否则同名重建会继承一份指向已删磁盘的旧 XML。
+	//
+	// 磁盘清单同理：磁盘已经删了，留着一份指向空路径的清单会让"同名重建
+	// 后又删除"的路径误信旧清单。keep（回收站）**不删**清单——恢复回来的
+	// 机器还需要它。
+	if diskAction == "delete" || force {
+		_ = os.Remove(trashXMLPath(op.Target))
+		removeDiskManifest(op.Target)
+	}
+
 	data := map[string]any{}
 	if len(transferred) > 0 {
 		data[agent.VMDiskTransferDataKey] = transferred
@@ -346,7 +495,68 @@ func vmDelete(ctx context.Context, op agent.Operation, report Reporter) (*agent.
 	if force {
 		data["message"] = "已强制删除域定义并重启 libvirt"
 	}
-	return &agent.Result{Success: true, Data: data}, nil
+	if residueNote != "" {
+		// 残留提示必须**回传到控制面**：只写节点日志的话，用户看到的仍是
+		// 一个干干净净的"删除成功"，而宿主机上的盘还在。
+		if msg, _ := data["message"].(string); msg != "" {
+			data["message"] = msg + "；" + residueNote
+		} else {
+			data["message"] = residueNote
+		}
+	}
+	res := &agent.Result{Success: true, Data: data}
+	if msg, _ := data["message"].(string); msg != "" {
+		res.Message = msg
+	}
+	return res, nil
+}
+
+// vmRestore 实现 vm.restore：按回收站里留存的域定义重建域（F-2-04）。
+//
+// 只做 `virsh define`，**不开机**：恢复的语义是"这台机器回到列表里"，
+// 要不要运行由用户决定——自动开机会让一台误删的机器立刻占用资源。
+//
+// 幂等：域已存在直接成功（可能是恢复后又被别的路径定义了）。
+func vmRestore(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
+	name := strings.TrimSpace(op.Target)
+	if name == "" || strings.ContainsAny(name, "/\\") || name == "." || name == ".." {
+		return failResult("虚拟机名不合法"), nil
+	}
+
+	report(Stage{Key: "domain_check", Name: "确认域状态", Index: 1, Total: 2})
+	if sys.DomainExists(ctx, name) {
+		return &agent.Result{Success: true,
+			Data: map[string]any{"message": "域已存在，无需重建"}}, nil
+	}
+
+	report(Stage{Key: "domain_define", Name: "按回收站配置重建域", Index: 2, Total: 2})
+	raw, err := os.ReadFile(trashXMLPath(name))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return failResult(
+				"回收站里没有这台虚拟机的域配置（多为旧版本删除时未留存），" +
+					"无法恢复为可运行的机器；磁盘仍在节点上，可用于重新创建"), nil
+		}
+		return failResult("读取回收站域配置失败: " + err.Error()), nil
+	}
+
+	// virsh define 只接受文件路径，写一份临时文件交给它。
+	tmp, cleanup, err := writeTempXML("restore", string(raw))
+	if err != nil {
+		return failResult("写入临时域配置失败: " + err.Error()), nil
+	}
+	defer cleanup()
+
+	if _, err := sys.Run(ctx, "virsh", "define", tmp); err != nil {
+		return failResult("重建域定义失败: " + err.Error()), nil
+	}
+	if !sys.DomainExists(ctx, name) {
+		// define 返回成功但域仍不在，说明 XML 被 libvirt 接受却没有落库
+		//（极罕见）。如实失败，别让控制面把记录翻回"存在"。
+		return failResult("重建域后仍未在虚拟化层找到该域"), nil
+	}
+	return &agent.Result{Success: true,
+		Data: map[string]any{"message": "已按回收站配置重建域定义（关机态）"}}, nil
 }
 
 func dataDiskPaths(disks []sys.DiskXML) []string {
@@ -355,6 +565,23 @@ func dataDiskPaths(disks []sys.DiskXML) []string {
 		out = append(out, d.SourceFile)
 	}
 	return out
+}
+
+// growDiskTo 在镜像虚拟容量小于 wantGB 时扩容，**绝不缩小**。
+//
+// 只扩不缩：链式克隆与模板共享同一个父盘，缩容会截断父盘数据；而完整克隆
+// 缩容也只会在来宾里留下一个比文件系统更小的盘，开机即坏。
+func growDiskTo(ctx context.Context, path string, wantGB int) error {
+	cur, err := sys.QemuImgSize(ctx, path)
+	if err != nil {
+		return err
+	}
+	if cur >= int64(wantGB)<<30 {
+		return nil
+	}
+	_, err = sys.RunTimeout(ctx, qemuConvertTimeout, "qemu-img", "resize",
+		path, fmt.Sprintf("%dG", wantGB))
+	return err
 }
 
 // backingFileOf 读盘文件的 backing file 路径（无 backing 或读取失败返回空）。
@@ -484,16 +711,60 @@ func vmSnapshotRestore(ctx context.Context, op agent.Operation, report Reporter)
 }
 
 func vmSnapshotDelete(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
-	domainName := strParam(op.Params, "domain_name")
+	// 快照在虚拟化层里的名字。新键是 snapshot_name；domain_name 是同义旧键
+	// （名字起得不好，历史上被当成"域名"传过），仅为兼容在途任务而保留。
+	snapshotName := strings.TrimSpace(strParam(op.Params, "snapshot_name"))
+	if snapshotName == "" {
+		snapshotName = strings.TrimSpace(strParam(op.Params, "domain_name"))
+	}
 	report(Stage{Key: "snapshot_delete", Name: "删除快照", Index: 1, Total: 1})
+	if snapshotName == "" {
+		// 空名会让 virsh 报 `Failed to get option 'snapshotname': Option
+		// argument is empty`——那句话与"快照是否存在"毫无关系，用户和排障的
+		// 人都看不出真正的原因。在这里说清楚。
+		return failResult("删除快照缺少快照名（snapshot_name），无法定位要删除哪一个"), nil
+	}
 	if _, err := sys.Run(ctx, "virsh", "snapshot-delete", "--domain", op.Target,
-		"--snapshotname", domainName); err != nil {
-		// 已不存在的快照按成功处理（幂等删除）。
-		if !strings.Contains(err.Error(), "not find") {
-			return failResult("删除快照失败: " + err.Error()), nil
+		"--snapshotname", snapshotName); err != nil {
+		// 「快照已不存在」按幂等成功处理，但**不能只看错误字符串**：名字拼错、
+		// 域不存在同样可能带 "not found"，那样会得到「控制面删了记录、节点上
+		// 快照还在」的假成功。这里再查一次快照清单，确认那个名字真的不在了。
+		if isMissingSnapshotErr(err) && !snapshotExists(ctx, op.Target, snapshotName) {
+			return &agent.Result{Success: true, Message: "快照已不存在（幂等成功）"}, nil
 		}
+		return failResult("删除快照失败: " + err.Error()), nil
 	}
 	return &agent.Result{Success: true}, nil
+}
+
+// isMissingSnapshotErr 判断 virsh 的错误是否是"这个快照不存在"。
+//
+// 要求同时出现 snapshot 与 not-found 两个线索：只看 "not found" 会把
+// "domain not found"（域被删了）也当成幂等成功，而那是完全不同的一类故障。
+func isMissingSnapshotErr(err error) bool {
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "snapshot") && strings.Contains(msg, "not found") {
+		return true
+	}
+	return strings.Contains(msg, "快照") &&
+		(strings.Contains(msg, "不存在") || strings.Contains(msg, "未找到"))
+}
+
+// snapshotExists 报告域里是否还有指定名字的快照。
+//
+// 查不到清单时**按"还在"处理**：宁可让用户重试一次删除，也不要谎报已删除
+// 而把控制面记录抹掉。
+func snapshotExists(ctx context.Context, vm, name string) bool {
+	out, err := sys.Run(ctx, "virsh", "snapshot-list", "--name", vm)
+	if err != nil {
+		return true
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == name {
+			return true
+		}
+	}
+	return false
 }
 
 // vmConfigUpdate 实现 vm.config.update（差异提交，changes map）。
@@ -721,31 +992,53 @@ func vmCDROMApply(ctx context.Context, op agent.Operation, report Reporter) (*ag
 	if bus == "" {
 		bus = "scsi"
 	}
+	// fromBus 只在换总线时出现：旧设备名由它决定，见 case "bus"。
+	fromBus := strParam(op.Params, "from_bus")
 	dev := cdromDev(orderNo, bus)
 	isoPath := strParam(op.Params, "iso_path")
 	if isoPath != "" && !strings.HasPrefix(isoPath, "/") {
 		// 控制面下发的是「我的存储」相对路径；节点侧存储根 + rel_path。
-		isoPath = filepath.Join(userdataRoot, isoPath)
+		isoPath = filepath.Join(userdataRoot(), isoPath)
 		// Join 只做清洗不做约束：带 ../ 的 rel_path 会落到存储根之外
 		//（guest 可挂载宿主机任意文件）——越界直接拒绝。
-		if !strings.HasPrefix(isoPath, userdataRoot+"/") {
+		if !strings.HasPrefix(isoPath, userdataRoot()+"/") {
 			return failResult("镜像路径越出用户存储根: " + isoPath), nil
 		}
 		// qemu 要打开的 ISO 在 images 之外——AppArmor 只放行了镜像目录
 		//（review 抓出：挂 ISO 后开机 Permission denied，与快照链同根因）。
-		ensureAppArmorAllowsImages(userdataRoot)
+		ensureAppArmorAllowsImages(userdataRoot())
 	}
 
 	report(Stage{Key: "render_device", Name: "渲染光驱设备", Index: 1, Total: 2})
 	switch action {
-	case "attach", "load":
+	case "attach":
+		// **允许空托盘**：先挂一台没有介质的光驱、之后再「载入」镜像是正常用法
+		// （eject 之后也是这个状态）。此前 attach 与 load 共用「iso_path 必填」，
+		// 于是不选镜像的挂载会失败，而控制面已经写入了光驱记录——界面显示有
+		// 光驱、域里却没有（实机抓出）。
+	case "load":
+		// 载入光盘必须有介质。
 		if isoPath == "" {
-			return failResult("缺少 iso_path：控制面必须把 iso_file_id 解析为节点路径下发"), nil
+			return failResult("缺少 iso_path：载入光盘必须指定镜像"), nil
 		}
 	case "eject", "remove":
 		// 空托盘 / 摘除设备。
 	case "bus":
-		return failResult("换总线需要先移除再重新挂载，请分开操作（remove 后 attach 指定 bus）"), nil
+		// 换总线 = 摘掉旧设备 + 按新总线挂回。libvirt 没有"改总线"这种增量
+		// 操作，而旧设备名由旧总线决定（ide 是 hd*，sata/scsi 是 sd*）——
+		// 所以节点必须拿到 from_bus，否则只能猜一个设备名去摘，摘错就是
+		// 域里少一块盘。
+		if fromBus == "" {
+			return failResult("换总线缺少 from_bus：无法确定要摘除哪块旧光驱"), nil
+		}
+		// **动手之前**先确认目标总线被当前机型支持。libvirt 会照单全收
+		// 这个定义，直到**开机时**才报
+		// `unsupported configuration: IDE controllers are unsupported for
+		// this QEMU binary or machine type`——也就是说这个操作会"成功"地
+		// 把机器变成不可开机状态，而用户是在下一次开机时才发现。
+		if berr := ensureBusSupportedByMachine(ctx, op.Target, bus); berr != nil {
+			return failResult(berr.Error()), nil
+		}
 	default:
 		return failResult("未知光驱动作: " + action), nil
 	}
@@ -771,6 +1064,8 @@ func vmCDROMApply(ctx context.Context, op agent.Operation, report Reporter) (*ag
 		if cdromExists(ctx, op.Target, dev) {
 			_, err = sys.Run(ctx, "virsh", "update-device", op.Target, getStdinXML(op.Target, dev, bus, ""))
 		}
+	case "bus":
+		err = switchCDROMBus(ctx, op.Target, orderNo, fromBus, bus, isoPath)
 	}
 	if err != nil {
 		return failResult("光驱操作失败: " + err.Error()), nil
@@ -784,6 +1079,98 @@ func vmCDROMApply(ctx context.Context, op agent.Operation, report Reporter) (*ag
 		info.RebootNeeded = true
 	}
 	return &agent.Result{Success: true, Data: map[string]any{agent.CDROMDataKey: info}}, nil
+}
+
+// ideSupportedByMachine 判断某机型是否带 IDE 控制器。
+//
+// 为什么拆成纯函数、把 arch 显式传进来：`runtime.GOARCH` 是编译期常量，
+// 测试进程里改不了，而「定义里没有 machine 属性时按架构推断」这条分支
+// 恰恰必须被覆盖——不拆就只能靠实机分别跑 amd64/arm64 两套节点。
+func ideSupportedByMachine(machine, arch string) bool {
+	machine = strings.ToLower(strings.TrimSpace(machine))
+	if machine == "" {
+		// 旧定义可能不带 machine 属性，此时 libvirt 用默认机型：
+		// x86 的默认是 i440fx（有 IDE），arm64 的默认是 virt（没有）。
+		// 按架构推断而不是一律放行：放行的代价是写进一个开不了机的定义，
+		// 而用户要到下一次开机才发现。
+		return arch == "amd64"
+	}
+	// q35 / i440fx / pc-* 都有 IDE 控制器；virt（aarch64 上的常见选择）
+	// 以及将来可能出现的 virt-* 变体一律按"没有 IDE"处理。
+	return !strings.HasPrefix(machine, "virt")
+}
+
+// ensureBusSupportedByMachine 校验目标总线被域当前的机型支持。
+//
+// 目前只拦 IDE：IDE 控制器不是每种机型都有——**virt 机型（aarch64 上的
+// 常见选择）没有**，而 libvirt 会接受写进定义，直到开机才报
+// `unsupported configuration: IDE controllers are unsupported for this
+// QEMU binary or machine type`。
+//
+// 放在 detach 之前调用：先摘旧设备再发现新总线不可用，用户会得到一台
+// **光驱消失**的机器，而且下次开机直接失败——那比"换总线被拒绝"糟得多。
+//
+// 读不到域定义时对 ide 一律拒绝：宁可让用户重试一次，也不要写进一个
+// 可能开不了机的配置。sata/scsi 不依赖机型，直接放行（它们在任何机型上
+// 都有控制器）。
+func ensureBusSupportedByMachine(ctx context.Context, vm, bus string) error {
+	if bus != "ide" {
+		return nil
+	}
+	xmlText, err := sys.DumpXML(ctx, vm, false)
+	if err != nil {
+		return fmt.Errorf("读取域定义失败，无法确认机型是否支持 IDE 控制器（%v）；请选择 sata 或 scsi", err)
+	}
+	machine := sys.MachineTypeOf(xmlText)
+	if ideSupportedByMachine(machine, runtime.GOARCH) {
+		return nil
+	}
+	// 报错里要写清"当前是什么机型"：只说"不支持 IDE"，用户会以为是选错了
+	// 总线，而不是这台机器根本没有 IDE 控制器。
+	name := strings.ToLower(strings.TrimSpace(machine))
+	if name == "" {
+		name = "默认机型/" + runtime.GOARCH
+	}
+	return fmt.Errorf("当前机型 %s 不支持 IDE 控制器，请选择 sata 或 scsi", name)
+}
+
+// switchCDROMBus 把光驱从 fromBus 换到 toBus：先摘旧设备，再按新总线挂回。
+//
+// 两步而不是一步：libvirt 没有"改总线"的增量操作，`attach-device` 只会新增
+// 设备。`--config` 意味着改的是持久定义（下次开机生效），与其它光驱动作
+// 一致——换总线本身几乎一定需要重启。
+//
+// 挂回时保留原介质（isoPath）：用户换总线是为了让光驱能引导/被识别，把盘
+// 顺手丢掉会得到一台"光驱空了"的机器，而他并没有要求弹出。
+//
+// 第二步失败时把旧设备挂回去：否则用户得到的是一台**光驱消失**的机器——
+// 那比"换总线失败"更糟，因为原来的盘也读不到了。
+func switchCDROMBus(
+	ctx context.Context, vm string, orderNo int, fromBus, toBus, isoPath string,
+) error {
+	oldDev := cdromDev(orderNo, fromBus)
+	newDev := cdromDev(orderNo, toBus)
+
+	// 旧设备不在域里也算成功：这一步的语义是"让旧设备不在"，而它可能已经
+	// 被上一次操作摘掉了（控制面记录与域定义不一致时的自愈路径）。
+	detached := false
+	if cdromExists(ctx, vm, oldDev) {
+		if _, err := sys.Run(ctx, "virsh", "detach-device", "--config", vm,
+			getStdinXML(vm, oldDev, fromBus)); err != nil {
+			return fmt.Errorf("摘除旧总线的光驱（%s）失败: %w", oldDev, err)
+		}
+		detached = true
+	}
+	if _, err := sys.Run(ctx, "virsh", "attach-device", "--config", vm,
+		getStdinXML(vm, newDev, toBus, isoPath)); err != nil {
+		if detached {
+			// 尽力挂回旧设备；挂不回去也要把原始错误报出去（那才是根因）。
+			_, _ = sys.Run(ctx, "virsh", "attach-device", "--config", vm,
+				getStdinXML(vm, oldDev, fromBus, isoPath))
+		}
+		return fmt.Errorf("按新总线（%s）挂载光驱失败: %w", toBus, err)
+	}
+	return nil
 }
 
 // cdromDev 光驱设备名：scsi 总线 sda 起、IDE 总线 hdc 起。
@@ -822,19 +1209,34 @@ func cdromExists(ctx context.Context, vm, dev string) bool {
 // getStdinXML 把设备片段经临时文件交给 virsh attach/update-device。
 // 文件名带域名：不同 VM 的同名光驱（sda/hdb 很常见）并发操作时共用
 // 一个 /tmp 文件会互相覆盖（review 抓出的碰撞）。
+// getStdinXML 把光驱设备片段写成临时文件，返回给 virsh 当 <file> 参数。
+//
+// 每次调用创建**唯一**文件而不是固定路径（曾经是
+// /tmp/kc-cdrom-<vm>-<dev>.xml）：固定名有两个真实后果——
+//  1. 同一台虚拟机上并发/连续的光驱操作会互相覆盖对方的 XML；
+//  2. 5 秒后删除的定时器会让「5 秒后再用同一个名字」拿到空文件，
+//     表现是 attach-device 收到空描述、错误信息指向 libvirt 参数。
+//
+// 实机测试里它以「偶发失败」的形态出现：同一用例单独跑必过、整包跑偶发
+// 失败（前一个用例的定时器恰好删掉了同名文件）。唯一文件把这条时序依赖
+// 彻底去掉，清理仍由定时器兜底（不阻塞调用方）。
 func getStdinXML(vm, dev, bus string, isoPath ...string) string {
 	frag := cdromFragment(dev, bus, "")
 	if len(isoPath) > 0 {
 		frag = cdromFragment(dev, bus, isoPath[0])
 	}
-	f := filepath.Join(os.TempDir(), "kc-cdrom-"+vm+"-"+dev+".xml")
-	_ = os.WriteFile(f, []byte(frag), 0o600)
-	// virsh attach-device file；留 2 秒清理窗口。
+	name, cleanup, err := writeTempXML("cdrom-"+vm+"-"+dev, frag)
+	if err != nil {
+		// 落盘失败时仍返回一个路径，让 virsh 的报错指向"文件不存在"，
+		// 而不是让调用方拿到空字符串去猜。
+		log.Printf("[nodeagent] 创建光驱 XML 临时文件失败 vm=%s dev=%s: %v", vm, dev, err)
+		return filepath.Join(os.TempDir(), "kc-cdrom-missing.xml")
+	}
 	go func() {
 		time.Sleep(5 * time.Second)
-		_ = os.Remove(f)
+		cleanup()
 	}()
-	return f
+	return name
 }
 
 // vmNVRAMRepair 实现 vm.nvram.repair（UEFI 启动项修复）。
@@ -932,8 +1334,8 @@ func vmFloppyApply(ctx context.Context, op agent.Operation, report Reporter) (*a
 		if filepath.IsAbs(rel) {
 			return failResult("rel_path 必须是相对于用户存储根的路径"), nil
 		}
-		source := filepath.Join(userdataRoot, rel)
-		if source != userdataRoot && !strings.HasPrefix(source, userdataRoot+"/") {
+		source := filepath.Join(userdataRoot(), rel)
+		if source != userdataRoot() && !strings.HasPrefix(source, userdataRoot()+"/") {
 			return failResult("软盘路径越出用户存储根: " + source), nil
 		}
 		if st, err := os.Stat(source); err != nil || st.IsDir() {
@@ -954,7 +1356,7 @@ func vmFloppyApply(ctx context.Context, op agent.Operation, report Reporter) (*a
 		if err := ensureQemuReadable(source); err != nil {
 			return failResult("设置软盘镜像属主失败: " + err.Error()), nil
 		}
-		ensureAppArmorAllowsImages(userdataRoot)
+		ensureAppArmorAllowsImages(userdataRoot())
 		if !hasFDCController(xmlText) {
 			xmlText = addFDCController(xmlText)
 			if err := defineXML(ctx, xmlText); err != nil {
@@ -1035,6 +1437,52 @@ func waitLibvirtdUp(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(time.Second):
+		}
+	}
+}
+
+// hostBridgeExists 判断宿主机上是否存在该网桥（Linux 桥或 OVS 桥）。
+//
+// 两种后端都要查：基础模式建的是 Linux 桥，增强模式的交换机是 OVS 桥；
+// 只查一种会让另一类交换机上的创建全部退化为用户态网络。
+func hostBridgeExists(ctx context.Context, bridge string) bool {
+	if bridge == "" {
+		return false
+	}
+	if _, err := sys.Run(ctx, "ip", "link", "show", bridge); err == nil {
+		return true
+	}
+	_, err := sys.Run(ctx, "ovs-vsctl", "br-exists", bridge)
+	return err == nil
+}
+
+// hostIsOVSBridge 判断同名网桥是否由 OVS 管理。
+func hostIsOVSBridge(ctx context.Context, bridge string) bool {
+	_, err := sys.Run(ctx, "ovs-vsctl", "br-exists", bridge)
+	return err == nil
+}
+
+// shutdownWait 是优雅关机的等待上限。
+//
+// 60s 足以覆盖正常系统的关机流程（systemd 默认 90s 的 StopTimeout 里，
+// 常见服务几秒内就结束了）；再长会让用户对着一个"进行中"的任务无所适从，
+// 而强制断电是显式的另一个按钮。
+const shutdownWait = 60 * time.Second
+
+// waitShutdown 轮询到域停机或超时，返回最后一次读到的状态。
+func waitShutdown(ctx context.Context, domain string, timeout time.Duration) string {
+	deadline := time.Now().Add(timeout)
+	state := "running"
+	for {
+		time.Sleep(time.Second)
+		if s, err := sys.DomainStateOf(ctx, domain); err == nil {
+			state = s
+			if s != "running" && s != "paused" {
+				return s
+			}
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return state
 		}
 	}
 }

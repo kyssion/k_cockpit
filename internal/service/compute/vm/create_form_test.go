@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
@@ -85,6 +86,54 @@ func TestCreateFormReportsMissingPrerequisites(t *testing.T) {
 			if p.Message == "" || p.Link == "" {
 				t.Errorf("前置条件缺少可执行的提示或入口: %+v", p)
 			}
+		}
+	}
+}
+
+// TestCreateFormExcludesSoftDeletedSwitches 覆盖「已删交换机仍出现在向导里」。
+//
+// 交换机删除是软删，而 deleted_at 是自定义列（*time.Time）——GORM 不会像
+// gorm.DeletedAt 那样自动过滤，漏写条件就会把已删记录当有效数据返回。
+// 实机后果很具体：向导里能选到一台宿主机上已不存在网桥的网络，建出来的
+// 虚拟机连不上任何东西，而用户看不出哪里选错了。
+func TestCreateFormExcludesSoftDeletedSwitches(t *testing.T) {
+	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
+	ctx := context.Background()
+
+	live := model.VpcSwitch{NodeID: 1, Name: "vpc-live", BridgeName: "br-live", Status: "active"}
+	if err := db.Create(&live).Error; err != nil {
+		t.Fatalf("创建交换机失败: %v", err)
+	}
+	now := time.Now()
+	gone := model.VpcSwitch{
+		NodeID: 1, Name: "vpc-gone", BridgeName: "br-gone", Status: "active",
+		DeletedAt: &now,
+	}
+	if err := db.Create(&gone).Error; err != nil {
+		t.Fatalf("创建已删交换机失败: %v", err)
+	}
+	// 同名重建在实机上是常见操作（删掉再建），两条记录同时在库里——那条
+	// 已删的绝不能出现在向导里，否则用户会选到 id 更小的那条死记录。
+	reborn := model.VpcSwitch{NodeID: 1, Name: "vpc-gone", BridgeName: "br-gone-2", Status: "active"}
+	if err := db.Create(&reborn).Error; err != nil {
+		t.Fatalf("创建同名交换机失败: %v", err)
+	}
+
+	form, err := svc.CreateFormOf(ctx, 1, authz.Viewer{UserID: 7})
+	if err != nil {
+		t.Fatalf("获取创建表单失败: %v", err)
+	}
+
+	ids := make(map[int64]bool, len(form.Switches))
+	for _, sw := range form.Switches {
+		ids[sw.ID] = true
+	}
+	if ids[gone.ID] {
+		t.Errorf("已软删的交换机 %d（%s）仍出现在创建向导里", gone.ID, gone.Name)
+	}
+	for _, want := range []model.VpcSwitch{live, reborn} {
+		if !ids[want.ID] {
+			t.Errorf("未删除的交换机 %d（%s）没有出现在创建向导里", want.ID, want.Name)
 		}
 	}
 }

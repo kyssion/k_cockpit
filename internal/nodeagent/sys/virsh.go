@@ -356,3 +356,54 @@ func QemuImgSize(ctx context.Context, path string) (int64, error) {
 	}
 	return info.VirtualSize, nil
 }
+
+// DomBlkInfo 是一个域块设备的容量信息（字节）。
+type DomBlkInfo struct {
+	// Capacity 是虚拟容量（磁盘"标称"多大）。
+	Capacity int64
+	// Allocation 是实际占用（稀疏盘的已分配量）。
+	Allocation int64
+	// Physical 是宿主侧物理占用（含元数据开销）。
+	Physical int64
+}
+
+// DomainBlkInfo 通过 libvirt 读取域块设备容量。
+//
+// 为什么不用 qemu-img：**运行中的域对镜像持有写锁**，`qemu-img info` 直接
+// 失败（Failed to get shared "write" lock），而磁盘页签恰恰最常在运行中打开
+// ——实机表现为「8GB 系统盘显示 0GB」，用户会以为盘没建出来。
+// domblkinfo 走 libvirt，运行中与关机态都能读，且不需要绕锁（-U）。
+func DomainBlkInfo(ctx context.Context, domain, dev string) (*DomBlkInfo, error) {
+	out, err := virsh(ctx, "domblkinfo", domain, dev)
+	if err != nil {
+		return nil, err
+	}
+	return parseDomBlkInfo(out)
+}
+
+// parseDomBlkInfo 解析 `virsh domblkinfo` 的 "Key:   value" 行格式。
+func parseDomBlkInfo(out string) (*DomBlkInfo, error) {
+	info := &DomBlkInfo{}
+	for _, line := range strings.Split(out, "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok {
+			continue
+		}
+		n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		if err != nil {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(k)) {
+		case "capacity":
+			info.Capacity = n
+		case "allocation":
+			info.Allocation = n
+		case "physical":
+			info.Physical = n
+		}
+	}
+	if info.Capacity == 0 {
+		return nil, fmt.Errorf("domblkinfo 输出缺少 capacity: %q", strings.TrimSpace(out))
+	}
+	return info, nil
+}

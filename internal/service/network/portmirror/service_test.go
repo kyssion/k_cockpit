@@ -361,3 +361,144 @@ func assertStatus(t *testing.T, err error, want int) {
 		t.Errorf("状态码 = %d, 期望 %d（%s）", apiErr.Status, want, apiErr.Message)
 	}
 }
+
+// boolPtr 让「显式传了 false」与「没传」在测试里可以分别构造。
+func boolPtr(v bool) *bool { return &v }
+
+// --- VLAN 标签：一个曾经看起来生效、实际不生效的选项 ---
+
+// TestCreateRejectsVlanStripRequest 覆盖「假选项必须变成明确的报错」。
+//
+// 旧行为：`vlan_preserve: false` 被接受并原样落库，界面上那一栏于是显示成
+// 「已关闭保留标签」，用户据此以为抓到的包已经脱了 VLAN——而 OVS 的 Mirror
+// 原样复制帧，标签一个都没少。这种「配置说 A、行为是 B」的假象，比缺功能
+// 更危险：它会让人基于错误的抓包结论做判断。
+//
+// 因此显式 false 现在是 400，且**不落库**——不能留下一条自相矛盾的记录。
+func TestCreateRejectsVlanStripRequest(t *testing.T) {
+	svc, db := newTestEnv(t)
+
+	_, err := svc.Create(context.Background(), portmirror.Request{
+		NodeID: 1, SourcePorts: []string{"tap0"}, TargetSwitches: []string{"sw-a"},
+		VlanPreserve: boolPtr(false),
+	}, admin(), "root", "")
+	assertStatus(t, err, 400)
+
+	// 文案要能照着做：说清「做不到」以及「该去掉该字段或设为 true」。
+	for _, want := range []string{"原样复制", "VLAN", "true"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("拒绝文案缺少可执行信息（含 %q）: %v", want, err)
+		}
+	}
+
+	var count int64
+	if err := db.Model(&model.PortMirror{}).Count(&count).Error; err != nil {
+		t.Fatalf("统计镜像失败: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("被拒绝的请求不该落库, 库里有 %d 条", count)
+	}
+}
+
+// TestCreateDefaultsVlanPreserveTrue 覆盖「没传」这一侧。
+//
+// 不传该字段时取实现的真实行为（始终保留原始标签），而不是落库一个做不到
+// 的 false。这一条同时是存量自愈路径的基础：前端不再传这个字段之后，
+// 保存一次就会把老行修正为 true。
+func TestCreateDefaultsVlanPreserveTrue(t *testing.T) {
+	svc, db := newTestEnv(t)
+
+	view, err := svc.Create(context.Background(), portmirror.Request{
+		NodeID: 1, SourcePorts: []string{"tap0"}, TargetSwitches: []string{"sw-a"},
+	}, admin(), "root", "")
+	if err != nil {
+		t.Fatalf("创建失败: %v", err)
+	}
+	if !view.VlanPreserve {
+		t.Error("未提供 vlan_preserve 时应归一化为 true——实现本来就无法剥掉标签")
+	}
+
+	var row model.PortMirror
+	if err := db.Where("id = ?", view.ID).First(&row).Error; err != nil {
+		t.Fatalf("读取镜像失败: %v", err)
+	}
+	if !row.VlanPreserve {
+		t.Error("库里应为 true：要存的是实现的行为，不是一个做不到的选项")
+	}
+}
+
+// TestUpdateRejectsVlanStripRequest 覆盖 PATCH 路径。
+//
+// 只在创建时校验是不够的：改一条已有规则同样可以把那个假选项写回去，
+// 而「改」比「建」更容易被当成无害操作。
+func TestUpdateRejectsVlanStripRequest(t *testing.T) {
+	svc, db := newTestEnv(t)
+	ctx := context.Background()
+
+	m := seedMirror(t, svc, "keep", []string{"tap0"}, []string{"sw-a"}, model.MirrorIngress)
+
+	_, err := svc.Update(ctx, m.ID, portmirror.Request{
+		Name: "renamed", SourcePorts: []string{"tap0"}, TargetSwitches: []string{"sw-a"},
+		VlanPreserve: boolPtr(false),
+	}, admin(), "root", "")
+	assertStatus(t, err, 400)
+
+	var row model.PortMirror
+	if err := db.Where("id = ?", m.ID).First(&row).Error; err != nil {
+		t.Fatalf("读取镜像失败: %v", err)
+	}
+	// 被拒绝的更新**一个字段都不能动**：部分生效会比整体失败更难排查。
+	if !row.VlanPreserve {
+		t.Error("被拒绝的更新改掉了库里的 vlan_preserve")
+	}
+	if row.Name == nil || *row.Name != "keep" {
+		t.Errorf("被拒绝的更新改掉了名称: %v", row.Name)
+	}
+
+	// 不传该字段的更新照常可用，且不会把已有值改成 false。
+	view, err := svc.Update(ctx, m.ID, portmirror.Request{
+		Name: "renamed", SourcePorts: []string{"tap0"}, TargetSwitches: []string{"sw-a"},
+	}, admin(), "root", "")
+	if err != nil {
+		t.Fatalf("更新失败: %v", err)
+	}
+	if !view.VlanPreserve {
+		t.Error("PATCH 未提供该字段时不应把值改成 false")
+	}
+}
+
+// TestUpdateHealsLegacyVlanStripRow 覆盖存量行的自愈路径。
+//
+// 旧版本允许显式写 false，库里可能已有这样的行。它们不迁移、不刷库：
+// 用户下次编辑保存时不再传该字段，归一化把它修正为 true。
+func TestUpdateHealsLegacyVlanStripRow(t *testing.T) {
+	svc, db := newTestEnv(t)
+	ctx := context.Background()
+
+	m := seedMirror(t, svc, "legacy", []string{"tap0"}, []string{"sw-a"}, model.MirrorIngress)
+	// 模拟旧版本留下的行（当时的默认值就是 false）。
+	if err := db.Model(&model.PortMirror{}).Where("id = ?", m.ID).
+		Update("vlan_preserve", false).Error; err != nil {
+		t.Fatalf("构造存量行失败: %v", err)
+	}
+
+	// 存量行照常可读、可展示。
+	items, err := svc.List(ctx, 1)
+	if err != nil {
+		t.Fatalf("查询失败: %v", err)
+	}
+	if len(items) != 1 || items[0].VlanPreserve {
+		t.Error("存量行应先按库里的值展示（不迁移、不刷库）")
+	}
+
+	// 编辑保存（前端不再传该字段）→ 归一化为 true。
+	view, err := svc.Update(ctx, m.ID, portmirror.Request{
+		Name: "legacy", SourcePorts: []string{"tap0"}, TargetSwitches: []string{"sw-a"},
+	}, admin(), "root", "")
+	if err != nil {
+		t.Fatalf("更新失败: %v", err)
+	}
+	if !view.VlanPreserve {
+		t.Error("保存后应自愈为 true")
+	}
+}

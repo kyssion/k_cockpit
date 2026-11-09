@@ -15,6 +15,7 @@ const (
 	CodeUnauthenticated    = "UNAUTHENTICATED"
 	CodePermissionDenied   = "PERMISSION_DENIED"
 	CodeResourceNotFound   = "RESOURCE_NOT_FOUND"
+	CodeMethodNotAllowed   = "METHOD_NOT_ALLOWED"
 	CodeResourceConflict   = "RESOURCE_CONFLICT"
 	CodeValidationFailed   = "VALIDATION_FAILED"
 	CodeRiskVerification   = "RISK_VERIFICATION_REQUIRED"
@@ -61,6 +62,14 @@ func PermissionDenied(message string) *Error {
 
 // NotFound 资源不存在（404）。**越权访问他人的资源也返回此错误**，
 // 避免通过 403 与 404 的差异探测资源是否存在（见 f-1-06）。
+// MethodNotAllowed 表示路径存在但方法不支持。
+//
+// 与 404 分开：404 是"没有这个接口"，405 是"接口在、方法错了"。混成 404
+// 会让调用方去检查路径拼写，而实际只是把 GET 写成了 POST。
+func MethodNotAllowed(message string) *Error {
+	return &Error{Status: http.StatusMethodNotAllowed, Code: CodeMethodNotAllowed, Message: message}
+}
+
 func NotFound(message string) *Error {
 	return &Error{Status: http.StatusNotFound, Code: CodeResourceNotFound, Message: message}
 }

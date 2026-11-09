@@ -126,14 +126,16 @@ func (e *SwitchChangeExecutor) createRecord(
 		Name:       specStr(p.Spec, "name"),
 		Mode:       specStr(p.Spec, "mode"),
 		BridgeName: p.BridgeName,
-		IsSystem:   false,
-		Status:     model.NetworkActive,
-		VlanID:     specInt(p.Spec, "vlan_id"),
-		CIDR:       specOptStr(p.Spec, "cidr"),
-		GatewayIP:  specOptStr(p.Spec, "gateway_ip"),
-		DHCPStart:  specOptStr(p.Spec, "dhcp_start"),
-		DHCPEnd:    specOptStr(p.Spec, "dhcp_end"),
-		UplinkIf:   specOptStr(p.Spec, "uplink_if"),
+		// 系统基础网络由 EnsureSystemNetwork 以同一任务类型开通，靠这个
+		// 标志把它与用户自建交换机区分开（系统网络不可改、不可删）。
+		IsSystem:  specBool(p.Spec, "is_system"),
+		Status:    model.NetworkActive,
+		VlanID:    specInt(p.Spec, "vlan_id"),
+		CIDR:      specOptStr(p.Spec, "cidr"),
+		GatewayIP: specOptStr(p.Spec, "gateway_ip"),
+		DHCPStart: specOptStr(p.Spec, "dhcp_start"),
+		DHCPEnd:   specOptStr(p.Spec, "dhcp_end"),
+		UplinkIf:  specOptStr(p.Spec, "uplink_if"),
 
 		// 带宽上限（G-38）：spec 里是数字，缺省 0 = 不限。
 		BandwidthInMbps:  specIntDef(p.Spec, "bandwidth_in_mbps"),
@@ -313,6 +315,16 @@ func specIntDef(spec map[string]any, key string) int {
 		return *p
 	}
 	return 0
+}
+
+// specBool 读一个布尔字段；缺省为 false。
+func specBool(spec map[string]any, key string) bool {
+	v, ok := spec[key]
+	if !ok {
+		return false
+	}
+	b, _ := v.(bool)
+	return b
 }
 
 func specInt(spec map[string]any, key string) *int {

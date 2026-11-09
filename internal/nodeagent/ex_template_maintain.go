@@ -215,6 +215,64 @@ func stringSliceParam(params map[string]any, key string) []string {
 	}
 }
 
+// preprocessArgs 构造 virt-customize 的参数与「已安排」的步骤清单。
+//
+// 抽成独立函数是为了可测：这里有两处**必须逐字节正确**的细节——注入公钥
+// 的选择器形式，以及临时公钥文件的权限与清理。它们藏在真实执行路径深处，
+// 而错一次的代价是整条预处理任务失败（实机抓出过）。
+//
+// cleanup 总是非 nil，调用方无条件 defer 即可；它负责删除本次创建的临时
+// 文件。返回错误时 args/done 为 nil，但 cleanup 仍需执行。
+func preprocessArgs(target string, steps []string, sshKey string) (
+	args []string, done []string, cleanup func(), err error,
+) {
+	args = []string{"-a", target}
+	done = make([]string, 0, len(steps))
+	tmpFiles := make([]string, 0, 1)
+	cleanup = func() {
+		for _, f := range tmpFiles {
+			_ = os.Remove(f)
+		}
+	}
+
+	for _, step := range steps {
+		switch step {
+		case "install_agent":
+			args = append(args, "--install", "qemu-guest-agent")
+		case "inject_ssh_key":
+			// 0600：文件里是用户的公钥。公钥本身不是秘密，但没有理由让它
+			// 比必要更可读——临时目录在多用户宿主上是共享的。
+			keyFile, kerr := os.CreateTemp("", "kc-ssh-key-*.pub")
+			if kerr != nil {
+				return nil, nil, cleanup, fmt.Errorf("写入 SSH 公钥临时文件失败: %w", kerr)
+			}
+			tmpFiles = append(tmpFiles, keyFile.Name())
+			if _, werr := keyFile.WriteString(sshKey + "\n"); werr != nil {
+				_ = keyFile.Close()
+				return nil, nil, cleanup, fmt.Errorf("写入 SSH 公钥失败: %w", werr)
+			}
+			_ = keyFile.Close()
+			// 选择器必须是 `用户:file:路径`。只写 `root:<路径>` 时 virt-customize
+			// 会把路径当成**公钥内容本身**去解析，报
+			// `invalid ssh-inject selector '/tmp/kc-ssh-key-<n>.pub'`——
+			// 于是「注入 SSH 公钥」这一项永远失败，还会连带同一任务里的其它
+			// 预处理项一起失败（实机复现）。
+			args = append(args, "--ssh-inject", "root:file:"+keyFile.Name())
+		case "reset_machine_id":
+			args = append(args,
+				"--run-command", "truncate -s 0 /etc/machine-id",
+				"--run-command", "rm -f /var/lib/dbus/machine-id",
+			)
+		case "remove_cloud_init":
+			args = append(args, "--run-command", "rm -rf /var/lib/cloud/*")
+		default:
+			return nil, nil, cleanup, fmt.Errorf("不支持的预处理项: %s", step)
+		}
+		done = append(done, step)
+	}
+	return args, done, cleanup, nil
+}
+
 // vmTemplatePreprocess 实现 template.preprocess：用 virt-customize 离线改写镜像。
 //
 // 先备份再改：virt-customize 是原地改写，中途失败会把模板留在半改状态；
@@ -258,43 +316,13 @@ func vmTemplatePreprocess(ctx context.Context, op agent.Operation, report Report
 		_ = os.Rename(backup, target)
 	}
 
-	args := []string{"-a", target}
-	done := make([]string, 0, len(steps))
-	for _, step := range steps {
-		switch step {
-		case "install_agent":
-			args = append(args, "--install", "qemu-guest-agent")
-			done = append(done, step)
-		case "inject_ssh_key":
-			keyFile, kerr := os.CreateTemp("", "kc-ssh-key-*.pub")
-			if kerr != nil {
-				restore()
-				return failResult("写入 SSH 公钥临时文件失败: " + kerr.Error()), nil
-			}
-			if _, werr := keyFile.WriteString(sshKey + "\n"); werr != nil {
-				_ = keyFile.Close()
-				_ = os.Remove(keyFile.Name())
-				restore()
-				return failResult("写入 SSH 公钥失败: " + werr.Error()), nil
-			}
-			_ = keyFile.Close()
-			// virt-customize 从文件读取公钥；defer 在函数返回后删除。
-			defer os.Remove(keyFile.Name())
-			args = append(args, "--ssh-inject", "root:"+keyFile.Name())
-			done = append(done, step)
-		case "reset_machine_id":
-			args = append(args,
-				"--run-command", "truncate -s 0 /etc/machine-id",
-				"--run-command", "rm -f /var/lib/dbus/machine-id",
-			)
-			done = append(done, step)
-		case "remove_cloud_init":
-			args = append(args, "--run-command", "rm -rf /var/lib/cloud/*")
-			done = append(done, step)
-		default:
-			restore()
-			return failResult("不支持的预处理项: " + step), nil
-		}
+	args, done, cleanup, perr := preprocessArgs(target, steps, sshKey)
+	// 无条件 defer：中途返回也必须删掉临时公钥文件（它含用户的公钥，
+	// 留在 /tmp 里没有理由）。
+	defer cleanup()
+	if perr != nil {
+		restore()
+		return failResult(perr.Error()), nil
 	}
 
 	report(Stage{Key: "image_tune", Name: "改写镜像内容", Index: 2, Total: 3})

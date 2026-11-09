@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"runtime"
 	"sort"
 	"time"
 
@@ -50,7 +51,11 @@ type Daemon struct {
 
 	// conn 是当前会话的 gRPC 连接（StreamData 回拨需要与通道同一条 mTLS
 	// 连接；由 session 建立时写入）。
-	conn *grpc.ClientConn
+	//
+	// 声明成 grpc.ClientConnInterface 而不是 *grpc.ClientConn：回拨 RPC 的
+	// **ctx 生命周期**是本文件最容易被写错的一处（见 handleOpenStream），
+	// 而验证它只能靠注入一个假的 ClientConn——用真连接无法在单测里观察 ctx。
+	conn grpc.ClientConnInterface
 }
 
 func (d *Daemon) now() time.Time {
@@ -78,6 +83,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// 镜像看门狗的定时器在内存里，上个进程退出即丢——先按 /run 落盘的
 	// 到期时刻补上（已到期的立刻补撤销），再进入主循环。
 	rearmMirrorWatchdogs()
+	// 同上：dnsmasq 是 agent 的子进程，重启后必须按落盘的配置重新拉起，
+	// 否则所有交换机的 DHCP 静默消失（面板仍显示已启用）。
+	rearmDnsmasqForBridges()
+	// 用户存储根是控制面下发的节点级配置（默认存储池的 <mount>/userdata）。
+	// 读回它，否则重启后大镜像又会写回系统盘。
+	LoadUserdataRoot()
 
 	failures := 0
 	var lastSession time.Duration
@@ -215,15 +226,25 @@ func (d *Daemon) session(ctx context.Context) error {
 		case *agentproto.ServerToAgent_OpenStream:
 			// dial 限 3s：VNC 端口异常时不能让接收循环整体卡住
 			//（心跳与后续指令都被压在后面）。
+			//
+			// **这个 ctx 只用于拨号，绝不能传给 StreamData RPC**：它带着
+			// 3 秒超时，而且下面 `dialCancel()` 会在 handleOpenStream 返回
+			// 后立刻执行。用它派生 RPC 的 context 会让刚建立的回拨流被
+			// 立即取消——控制面那边 Recv 马上 EOF、桥被关、控制台 101 之后
+			// 一个字节都收不到（f-2-08 实机黑屏的真因）。长连接用 ctx，
+			// 会话级退出时才该结束。
 			dialCtx, dialCancel := context.WithTimeout(ctx, 3*time.Second)
-			if out := d.handleOpenStream(dialCtx, p.OpenStream); out != nil {
+			out := d.handleOpenStream(ctx, dialCtx, p.OpenStream)
+			// dial 的使命到此为止：只取消拨号窗口，回拨 RPC 用的是上面
+			// 那个长生命周期的 ctx（见 handleOpenStream 的说明）。
+			dialCancel()
+			if out != nil {
 				select {
 				case outbox <- out:
 				default:
-					_ = dialCancel
+					// 上行通道已死：控制面侧会按未送达处理，丢弃即可。
 				}
 			}
-			dialCancel()
 		default:
 			// 未知下行消息忽略（协议兼容承诺）。
 		}
@@ -240,10 +261,14 @@ func (d *Daemon) RefreshHostCapabilities(ctx context.Context) {
 
 func (d *Daemon) heartbeatMsg() *agentproto.AgentToServer {
 	caps := d.Registry.Capabilities()
+	// 宿主架构随心跳自报：创建向导据此把 arch / machine_type / firmware
+	// 的默认值对齐到这台机器，而不是让 ARM 宿主上的用户每次手动改三项。
+	// agent 与宿主同架构编译部署，runtime.GOARCH 即宿主架构。
+	caps = append(caps, agent.CapabilityArchPrefix+libvirtArch(runtime.GOARCH))
 	if d.SPICESupported {
 		caps = append(caps, agent.CapabilitySPICE)
-		sort.Strings(caps)
 	}
+	sort.Strings(caps)
 	return &agentproto.AgentToServer{Payload: &agentproto.AgentToServer_Heartbeat{
 		Heartbeat: &agentproto.Heartbeat{
 			AgentVersion:    d.AgentVersion,

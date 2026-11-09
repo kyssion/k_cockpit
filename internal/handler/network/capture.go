@@ -64,7 +64,7 @@ func (h *Capture) Start(ctx context.Context, c *app.RequestContext) {
 		api.Fail(c, err)
 		return
 	}
-	api.OK(c, map[string]any{"capture": view, "task": t})
+	api.OK(c, api.WithTask(map[string]any{"capture": view}, t.ID, t.Status))
 }
 
 // Delete 删除抓包（API-262）。
@@ -85,7 +85,7 @@ func (h *Capture) Delete(ctx context.Context, c *app.RequestContext) {
 		api.Fail(c, err)
 		return
 	}
-	api.OK(c, map[string]any{"task": t})
+	api.OK(c, api.WithTask(nil, t.ID, t.Status))
 }
 
 // Download 取回一份抓包文件（G-38）。

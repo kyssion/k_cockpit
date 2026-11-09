@@ -43,10 +43,15 @@ type Service struct {
 }
 
 // NewService 构造模板服务。
+//
+// 构造期顺带做一次**启动自愈**：把上一个进程遗留的在途导出记录收敛为失败
+// （理由见 recoverInterruptedExports）。放在构造里而不是单开一个 Startup 方法，
+// 是为了让"启动时一定会收敛"这件事不依赖装配代码记得调用它。
 func NewService(
 	db *gorm.DB, queue *task.Queue, recorder *audit.Recorder, client agent.Client,
 	quotaChecker vm.QuotaChecker,
 ) *Service {
+	recoverInterruptedExports(db)
 	return &Service{
 		db: db, queue: queue, audit: recorder, agent: client, quota: quotaChecker,
 	}
@@ -182,6 +187,20 @@ type CreateFromVMRequest struct {
 // 模板会被**反复克隆成新机器**——一个崩溃一致性的模板意味着每一台克隆机
 // 开机时都要做 fsck，运气不好就是只读挂载。这类问题会以「克隆机启动后
 // 文件系统只读」的形式出现，而几乎不可能被追溯到模板制备的那一刻。
+// videoModelOf 返回适合做模板默认值的显卡型号。
+//
+// 历史数据里 DisplayDevice（vnc/spice 协议）曾被误写成视频模型，这里
+// 同时兜住那种值：拿到协议名时退回 virtio，而不是把一个必定非法的型号
+// 传给下一次克隆。
+func videoModelOf(vm model.VM) string {
+	m := strings.TrimSpace(vm.VideoModel)
+	switch strings.ToLower(m) {
+	case "", "vnc", "spice":
+		return "virtio"
+	}
+	return m
+}
+
 func (s *Service) CreateFromVM(
 	ctx context.Context, req CreateFromVMRequest, v authz.Viewer, operatorName, clientIP string,
 ) (*model.Task, error) {
@@ -308,7 +327,11 @@ func (s *Service) CreateFromVM(
 			"default_nic_model":    vmRow.NicModel,
 			"default_machine_type": vmRow.MachineType,
 			"default_firmware":     vmRow.Firmware,
-			"default_display":      vmRow.DisplayDevice,
+			// 显卡型号取自 VideoModel，**不是 DisplayDevice**：后者是控制台
+			// 协议（vnc / spice），写进模板的「默认显卡」会变成
+			// `<video><model type='vnc'/>`——libvirt 直接拒绝。实机抓出：
+			// 模板详情里 default_video_model 显示为 "vnc"。
+			"default_display": videoModelOf(vmRow),
 			// 族与版本：只有派生制备才有值，独立制备时留空（version 仍为 1）。
 			"parent_id": req.ParentID,
 			"family_id": familyID,
@@ -328,15 +351,38 @@ func (s *Service) CreateFromVM(
 // 取**族内最大值 + 1**而不是"父版本 + 1"：同一个父下派生两次应当得到
 // v2 与 v3；按父版本算则两者都叫 v2，而名字唯一约束会让第二次制备以一个
 // 看不懂的冲突失败。
+//
+// 族的范围必须与 Family 一致——`id = ? OR family_id = ?`：**根模板自己的
+// family_id 是 NULL**，只按 family_id 统计会把根漏掉，于是从一个还没有
+// 任何子级的根派生出来的第一代固定拿到 1，与根重号（实机复现：
+// 家族 versions 出现 [1,1]，此后每代整体偏小 1）。
 func (s *Service) nextVersion(ctx context.Context, familyID int64) (int, error) {
 	var maxVersion int
 	if err := s.db.WithContext(ctx).Model(&model.Template{}).
-		Where("family_id = ?", familyID).
+		Where("id = ? OR family_id = ?", familyID, familyID).
 		Select("COALESCE(MAX(version), 0)").Scan(&maxVersion).Error; err != nil {
 		log.Printf("[template] 计算版本号失败 family=%d: %v", familyID, err)
 		return 0, api.Internal()
 	}
 	return maxVersion + 1, nil
+}
+
+// normalizeVisibility 校验并归一化模板可见性取值。
+//
+// 只认模型里定义的两个枚举值，并**统一小写**：这个字段决定「别人能不能看到
+// 这个模板」，比较用的都是等值字符串。落进去一个未知值（或大小写不一致的
+// 值）会让模板对任何人都算"不满足条件"——既不是已发布也不是自己创建的，
+// 于是它从所有人的列表里消失，而没有任何一处会报错（实机复现：
+// PATCH visibility=nonsense → 200 落库）。
+func normalizeVisibility(raw string) (string, error) {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	switch v {
+	case model.TemplatePrivate, model.TemplatePublic:
+		return v, nil
+	default:
+		return "", api.ValidationFailed(
+			"不支持的可见性「" + raw + "」：只能是 private（仅自己可见）或 public（所有租户可用）")
+	}
 }
 
 // Family 返回同一个模板族里的全部模板（按版本排序）。
@@ -396,8 +442,15 @@ func (s *Service) Update(
 	if req.CloneEnabled != nil {
 		updates["clone_enabled"] = *req.CloneEnabled
 	}
-	if req.Visibility != "" {
-		updates["visibility"] = req.Visibility
+	if strings.TrimSpace(req.Visibility) != "" {
+		// 枚举校验 + 归一化在落库前做：这个字段决定"别人能不能看到这个模板"，
+		// 未知值或大小写不一致会让模板从所有人的列表里消失且不报错
+		// （见 normalizeVisibility）。
+		normalized, err := normalizeVisibility(req.Visibility)
+		if err != nil {
+			return nil, err
+		}
+		updates["visibility"] = normalized
 	}
 	if req.Remark != "" {
 		updates["remark"] = req.Remark

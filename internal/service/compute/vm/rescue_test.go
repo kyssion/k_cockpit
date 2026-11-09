@@ -2,13 +2,47 @@ package vm_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"gorm.io/gorm"
+
+	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/service/compute/vm"
+	"k_cockpit/internal/service/platform/settings"
 )
+
+// rescueISOSettings 是救援用例的最小设置源。
+//
+// 只有「救援 ISO」一项有值，其余一律返回调用方给的默认值——与 settings 为
+// nil 时的行为完全一致，因此这些用例不会被别的设置项意外影响。
+type rescueISOSettings struct{ iso string }
+
+func (s *rescueISOSettings) Int(_ string, fallback int) int { return fallback }
+
+func (s *rescueISOSettings) Bool(_ string, fallback bool) bool { return fallback }
+
+func (s *rescueISOSettings) String(key, fallback string) string {
+	if key == settings.KeyVMRescueISO {
+		return s.iso
+	}
+	return fallback
+}
+
+// newRescueEnv 构造一个带「救援 ISO」设置的环境（iso 为空即未配置）。
+func newRescueEnv(
+	t *testing.T, client agent.Client, iso string,
+) (*vm.Service, *gorm.DB, *rescueISOSettings) {
+	t.Helper()
+	provider := &rescueISOSettings{iso: iso}
+	svc, _, db := newTestEnvWithSettings(t, client, provider)
+	return svc, db, provider
+}
 
 // waitForVM 轮询直到详情满足条件。
 //
@@ -34,7 +68,11 @@ func TestEnterRescueRequiresStopped(t *testing.T) {
 	// 探测返回 running：救援要改硬件配置，热改会让控制面记录的配置与
 	// 虚拟化层实际的配置分叉——而那份分叉在退出还原时会变成一个
 	// 「还原成什么样」说不清的状态。
-	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusRunning})
+	//
+	// 救援 ISO 在这里**必须配置**：未配置时会被配置校验先拒掉（见
+	// TestEnterRescueRejectsUnconfiguredISO），那样这个用例就测不到
+	// 它本来的意思（状态判定）了。
+	svc, db, _ := newRescueEnv(t, &probeClient{newStubClient(), model.VMStatusRunning}, rescueISO)
 	ctx := context.Background()
 
 	row := model.VM{NodeID: 1, Name: "vm-r1", Status: model.VMStatusRunning, OwnerID: ptr(int64(7))}
@@ -42,6 +80,73 @@ func TestEnterRescueRequiresStopped(t *testing.T) {
 
 	_, err := svc.EnterRescue(ctx, row.ID, authz.Viewer{UserID: 7}, "alice", "10.0.0.1")
 	assertAPIError(t, err, 422)
+
+	var apiErr *api.Error
+	if errors.As(err, &apiErr) && !strings.Contains(apiErr.Message, "关机") {
+		t.Errorf("拒绝原因未说明需要关机: %q", apiErr.Message)
+	}
+}
+
+// rescueISO 是「已配置救援镜像」这一前提的取值。
+//
+// 相对路径而不是绝对路径：设置项只接受 ISO 存放目录内的相对路径，
+// 用绝对路径会让用例卡在路径校验上，而不是它要验证的那条规则。
+const rescueISO = "rescue/systemrescue.iso"
+
+// TestEnterRescueRejectsUnconfiguredISO 覆盖「成功但没做事」的那条路径。
+//
+// 未配置救援 ISO 时，节点侧的 vmRescueEnter 只保存一份快照就返回成功——
+// 任务成功、rescue_active 置 true，而宿主机上的域定义与电源状态一个都没变。
+// 那比失败更糟：用户会按救援环境的预期去操作一台其实还从系统盘引导的机器。
+// 因此控制面必须**在受理时**就明确拒绝，且不留下任何任务与状态。
+func TestEnterRescueRejectsUnconfiguredISO(t *testing.T) {
+	svc, db, provider := newRescueEnv(
+		t, &probeClient{newStubClient(), model.VMStatusStopped}, "")
+	ctx := context.Background()
+	viewer := authz.Viewer{UserID: 7}
+
+	row := model.VM{NodeID: 1, Name: "vm-no-iso", Status: model.VMStatusStopped,
+		OwnerID: ptr(int64(7))}
+	db.Create(&row)
+
+	_, err := svc.EnterRescue(ctx, row.ID, viewer, "alice", "10.0.0.1")
+	assertAPIError(t, err, 422)
+
+	// 文案必须**可执行**：只说「失败」会让人去怀疑节点状态，而真正要改的是
+	// 系统设置里的救援镜像。
+	var apiErr *api.Error
+	if errors.As(err, &apiErr) {
+		if !strings.Contains(apiErr.Message, "救援镜像") {
+			t.Errorf("拒绝原因未说明缺少救援镜像: %q", apiErr.Message)
+		}
+		if !strings.Contains(apiErr.Message, "系统设置") {
+			t.Errorf("拒绝原因未说明去哪里配置: %q", apiErr.Message)
+		}
+	}
+
+	// 不入队、不改状态：拒绝必须发生在任何副作用之前。
+	var count int64
+	db.Model(&model.Task{}).Where("type = ?", model.TaskVMRescueEnter).Count(&count)
+	if count != 0 {
+		t.Errorf("未配置救援镜像时仍入队了 %d 个救援任务", count)
+	}
+	var stored model.VM
+	if err := db.First(&stored, row.ID).Error; err != nil {
+		t.Fatalf("读取记录失败: %v", err)
+	}
+	if stored.RescueActive {
+		t.Error("被拒绝的进入请求把记录置成了救援中")
+	}
+	if stored.RescueConfig != nil {
+		t.Error("被拒绝的进入请求写入了配置快照")
+	}
+
+	// 配上镜像后同一台机器应能正常受理——只测拒绝的用例拦不住一个
+	// 「永远拒绝」的实现。
+	provider.iso = rescueISO
+	if _, err := svc.EnterRescue(ctx, row.ID, viewer, "alice", "10.0.0.1"); err != nil {
+		t.Fatalf("配置救援镜像后应受理: %v", err)
+	}
 }
 
 // TestRescueRoundTripRestoresConfig 覆盖 F-2-12 的核心承诺：**退出还原**。
@@ -50,7 +155,9 @@ func TestEnterRescueRequiresStopped(t *testing.T) {
 // 那是悄悄改掉用户的配置——他进入救援是为了修系统，退出后发现引导顺序被
 // 重置成了默认值，机器起不来了。
 func TestRescueRoundTripRestoresConfig(t *testing.T) {
-	svc, _, db := newTestEnvWithClient(t, &probeClient{newStubClient(), model.VMStatusStopped})
+	// 救援 ISO 必填（未配置时进入救援会被直接拒绝，见
+	// TestEnterRescueRejectsUnconfiguredISO）。
+	svc, db, _ := newRescueEnv(t, &probeClient{newStubClient(), model.VMStatusStopped}, rescueISO)
 	ctx := context.Background()
 	viewer := authz.Viewer{UserID: 7}
 

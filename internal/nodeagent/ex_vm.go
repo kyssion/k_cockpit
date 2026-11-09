@@ -98,11 +98,21 @@ func vmDiskList(ctx context.Context, op agent.Operation, report Reporter) (*agen
 			Hotpluggable: !sysIsSystemDev(d.Dev),
 		}
 		if d.SourceFile != "" {
-			if sz, serr := sys.QemuImgSize(ctx, d.SourceFile); serr == nil {
-				vd.CapacityGB = int(sz / (1024 * 1024 * 1024))
-			}
-			if st, serr := os.Stat(d.SourceFile); serr == nil {
-				vd.ActualBytes = st.Size()
+			// 容量优先问 libvirt：运行中的域对镜像持有写锁，qemu-img info 会
+			// 直接失败，而「运行中打开磁盘页签」恰恰是最常见的场景。只有
+			// domblkinfo 也不可用时才退回 qemu-img / stat。
+			if bi, berr := sys.DomainBlkInfo(ctx, op.Target, d.Dev); berr == nil {
+				vd.CapacityGB = int(bi.Capacity / (1024 * 1024 * 1024))
+				vd.CapacityBytes = bi.Capacity
+				vd.ActualBytes = bi.Allocation
+			} else {
+				if sz, serr := sys.QemuImgSize(ctx, d.SourceFile); serr == nil {
+					vd.CapacityGB = int(sz / (1024 * 1024 * 1024))
+					vd.CapacityBytes = sz
+				}
+				if st, serr := os.Stat(d.SourceFile); serr == nil {
+					vd.ActualBytes = st.Size()
+				}
 			}
 		}
 		out = append(out, vd)

@@ -18,8 +18,13 @@ import (
 )
 
 // DiskResizeResult 是扩容结果。
+//
+// 任务字段与其它接口保持同一形状（task_id / status）：直接内嵌任务模型会
+// 让这个接口成为唯一返回大驼峰 `{"task":{"ID":..}}` 的地方，前端要为此写
+// 第二套解析（实机测试抓出）。
 type DiskResizeResult struct {
-	Task *model.Task `json:"task"`
+	TaskID int64  `json:"task_id"`
+	Status string `json:"status"`
 	// OldGB / NewGB 是扩容前后的容量。
 	OldGB int `json:"old_gb"`
 	NewGB int `json:"new_gb"`
@@ -155,7 +160,8 @@ func (s *Service) ResizeDisk(
 	})
 
 	return &DiskResizeResult{
-		Task: t, OldGB: vm.DiskGB, NewGB: newGB,
+		TaskID: t.ID, Status: t.Status,
+		OldGB: vm.DiskGB, NewGB: newGB,
 		// **由服务端给出而不是让界面自己填一句固定文案**：这一步是否必要
 		// 取决于扩容路径，而那是服务端才知道的事。
 		GuestGrowNeeded: true,

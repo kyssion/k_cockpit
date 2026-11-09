@@ -127,6 +127,9 @@ func cmdRun(args []string) error {
 	if err != nil {
 		return fmt.Errorf("尚未 enroll 或身份损坏（先运行 enroll 子命令）: %w", err)
 	}
+	// 状态目录同时承载「我的存储」根配置（storage-root）；先告诉包内，
+	// 再由 Daemon.Run 读回——否则重启后又写回系统盘的默认目录。
+	nodeagent.SetStateDir(*stateDir)
 	addr := st.Server
 	if *server != "" {
 		addr = *server

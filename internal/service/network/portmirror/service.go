@@ -90,7 +90,27 @@ type Request struct {
 	SourcePorts    []string
 	TargetSwitches []string
 	Direction      string
-	VlanPreserve   bool
+
+	// VlanPreserve 报告「复制出去的帧是否保留 VLAN 标签」。
+	//
+	// **本字段用指针，是为了区分「没传」与「传了 false」**——而后者必须被
+	// 拒绝，因为当前实现根本做不到「剥掉标签」：
+	//
+	//	OVS 的 Mirror 是**原样复制帧**，镜像口上的帧始终带着原始 VLAN 标签。
+	//	节点侧也从未读过 vlan_preserve 这个参数（见 nodeagent 的镜像实现）。
+	//
+	// 也就是说 false 曾经是一个**假选项**：界面上写着「默认剥掉」，用户据此
+	// 以为抓到的包已经脱了 VLAN，实际一个标签都没少。安全假象比缺功能更糟，
+	// 因此这里让契约与实现对齐：
+	//
+	//	nil   → 归一化为 true（调用方不关心这件事，取实现的真实行为）；
+	//	true  → 接受（与实现一致）；
+	//	false → 拒绝（见 normalize 里的说明）。
+	//
+	// 存量兼容：旧版本允许显式写 false，库里可能已有这样的行。它们**不做
+	// 迁移**，读出来照常展示；用户下次编辑保存时前端不再传该字段，于是
+	// 归一化为 true——这就是自愈路径，不需要一次性刷库。
+	VlanPreserve *bool
 }
 
 // List 返回节点上的镜像规则。
@@ -125,7 +145,7 @@ func (s *Service) Create(
 
 	row := model.PortMirror{
 		NodeID: req.NodeID, Direction: n.direction,
-		VlanPreserve: req.VlanPreserve, Enabled: false,
+		VlanPreserve: n.vlanPreserve, Enabled: false,
 	}
 	name, sources, targets := n.name, strings.Join(n.sources, "\n"), strings.Join(n.targets, "\n")
 	row.Name, row.SourcePorts, row.TargetSwitches = &name, &sources, &targets
@@ -169,7 +189,10 @@ func (s *Service) Update(
 
 	name, sources, targets := n.name, strings.Join(n.sources, "\n"), strings.Join(n.targets, "\n")
 	row.Name, row.SourcePorts, row.TargetSwitches = &name, &sources, &targets
-	row.Direction, row.VlanPreserve = n.direction, req.VlanPreserve
+	// VlanPreserve 与创建走同一套归一化（见 normalize）：PATCH 不传该字段时
+	// 归一化为 true，因此「只改名字」不会把已有的值改成 false；存量 false 行
+	// 也会在这一步被修正为 true（自愈路径）。
+	row.Direction, row.VlanPreserve = n.direction, n.vlanPreserve
 	if err := s.db.WithContext(ctx).Save(row).Error; err != nil {
 		log.Printf("[portmirror] 更新失败: %v", err)
 		return nil, api.Internal()
@@ -346,11 +369,15 @@ func (s *Service) Enable(
 		NodeID: row.NodeID,
 		Target: mirrorLabel(row),
 		Params: map[string]any{
-			"name":             mirrorLabel(row),
-			"source_ports":     splitList(row.SourcePorts),
-			"target_switches":  splitList(row.TargetSwitches),
-			"direction":        row.Direction,
-			"vlan_preserve":    row.VlanPreserve,
+			"name":            mirrorLabel(row),
+			"source_ports":    splitList(row.SourcePorts),
+			"target_switches": splitList(row.TargetSwitches),
+			"direction":       row.Direction,
+			// vlan_preserve 固定下发 true：它描述的是**实现事实**，而不是那行
+			// 可能早已失真的历史配置。存量库里可能存在旧版留下的 false 行
+			// （旧版允许显式关掉「保留标签」），但节点侧的镜像实现从未读过这个
+			// 参数，发 false 只会让下发记录与实际行为互相矛盾。
+			"vlan_preserve":    true,
 			"watchdog_seconds": seconds,
 		},
 	})
@@ -509,10 +536,11 @@ func (s *Service) Reconcile(ctx context.Context) (int, error) {
 // --- 内部 ---
 
 type normalized struct {
-	name      string
-	sources   []string
-	targets   []string
-	direction string
+	name         string
+	sources      []string
+	targets      []string
+	direction    string
+	vlanPreserve bool
 }
 
 func (n normalized) auditParams() map[string]any {
@@ -567,7 +595,44 @@ func normalize(req Request) (normalized, error) {
 		// 靠 id 分辨，而 id 是给机器看的。
 		name = "镜像-" + sources[0]
 	}
-	return normalized{name: name, sources: sources, targets: targets, direction: direction}, nil
+
+	vlanPreserve, err := normalizeVlanPreserve(req.VlanPreserve)
+	if err != nil {
+		return normalized{}, err
+	}
+
+	return normalized{
+		name: name, sources: sources, targets: targets,
+		direction: direction, vlanPreserve: vlanPreserve,
+	}, nil
+}
+
+// normalizeVlanPreserve 归一化「保留 VLAN 标签」这一项。
+//
+// 归一化只有一种合法结论，因为实现只有一种行为：OVS 的 Mirror 原样复制帧，
+// 镜像出来的帧**始终**保留原始 VLAN 标签。节点侧从未读过 vlan_preserve 这个
+// 参数，因此「剥掉标签」这件事从来没有发生过——它只是一个看起来生效的选项。
+//
+// 于是：
+//
+//   - 没传（nil）：取实现的真实行为 true。调用方不关心这件事时不该被迫表态，
+//     更不该因为「没表态」而落库一个做不到的值。
+//   - 传了 true：与实现一致，接受。
+//   - 传了 false：**拒绝**。这是本函数的全部意义——旧版接受 false 并原样
+//     落库，用户于是以为抓到的包已经脱了 VLAN，而实际一个标签都没少。
+//     这种「配置说 A、行为是 B」的假象必须变成一次明确的报错。
+//
+// 文案要说清**怎么办**：报错如果只讲「不支持」，用户只会反复重试同一个请求。
+func normalizeVlanPreserve(v *bool) (bool, error) {
+	if v == nil {
+		return true, nil
+	}
+	if !*v {
+		return false, api.InvalidParameter(
+			"当前镜像实现通过 OVS 原样复制帧，不做 VLAN 处理（始终保留原始标签）；" +
+				"请去掉该字段或设为 true")
+	}
+	return true, nil
 }
 
 func (s *Service) load(ctx context.Context, id int64) (*model.PortMirror, error) {

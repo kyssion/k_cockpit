@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -396,5 +397,48 @@ func ExportFormatLabel(format string) string {
 		return "QCOW2 系统盘"
 	default:
 		return format
+	}
+}
+
+// interruptedExportMessage 是「重启中断」的唯一文案。
+//
+// 与模板导出（template 包）用同一句话：两者都是"一个打包任务"，对用户来说
+// 是同一件事，两种说法只会让人以为是两个不同的问题。
+const interruptedExportMessage = "控制面重启，导出中断，请重试"
+
+// recoverInterruptedExports 在构造期把重启前遗留的在途导出记录收敛为失败。
+//
+// **要解决的问题**：vm_export 行在**入队之前**就创建（Export 里
+// Status=ExportPending），终态由 export_executor.go 在任务成功/失败时写回。
+// 进程被强杀时执行器不会跑，而启动恢复（ops/task 的 recoverStale）只处理
+// task 表——于是记录会永久停在 pending：界面一直显示"导出中"，用户既拿不到
+// 产物也无法重新导出（DeleteExport 还会以"仍在进行中"拒绝删除）。
+//
+// **为什么可以无条件收敛所有 pending/running，而不必按时间阈值判断**：控制面
+// 是单实例的（internal/platform/database/instancelock.go 用 PostgreSQL 会话级
+// advisory lock 保证同一个库只有一处写入；SQLite 形态本身就是单进程写者），
+// 而且那把锁在 cmd/server 装配服务**之前**就已经拿到，因此进程启动的这一瞬间**不可能**存在另一个实例在途的导出任务——凡是仍为
+// pending/running 的行，其执行器一定随上一个进程一起消失了。按时间给宽限期
+// 反而留下"重启后仍然显示导出中"的窗口，而那正是本函数要消灭的现象。
+//
+// **只改状态与 error，不动节点侧文件**：进程被强杀时节点上的打包可能仍在
+// 收尾，控制面无法可靠判断产物是否完整；置 failed 后用户能重新导出，残留文件
+// 的清理由删除导出那条路径（DeleteExport → delete 执行器）负责。
+//
+// 失败只记日志：这是启动期的自愈，不该因为一条展示用的记录而阻断启动。
+func recoverInterruptedExports(db *gorm.DB) {
+	res := db.Model(&model.VMExport{}).
+		Where("status IN ?", []string{model.ExportPending, model.ExportRunning}).
+		Updates(map[string]any{
+			"status":      model.ExportFailed,
+			"error":       interruptedExportMessage,
+			"finished_at": time.Now(),
+		})
+	if res.Error != nil {
+		log.Printf("[vm] 收敛重启前遗留的在途导出记录失败: %v", res.Error)
+		return
+	}
+	if res.RowsAffected > 0 {
+		log.Printf("[vm] 已把 %d 条重启前遗留的导出记录标记为失败", res.RowsAffected)
 	}
 }

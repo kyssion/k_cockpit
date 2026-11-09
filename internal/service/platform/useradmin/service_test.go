@@ -128,6 +128,57 @@ func TestDuplicateUsernameRejected(t *testing.T) {
 	assertStatus(t, err, 409)
 }
 
+// TestInvitedUserIsActiveAndNeedNotChangePassword 覆盖「接受邀请后登不进去」。
+//
+// 邀请流程里密码是受邀人**自己设的**，没有「管理员给初始密码 → 首次登录
+// 改密」这一步。而 Create 复用来的默认值是 pending + 强制改密，于是接受
+// 邀请返回 204、账号也建好了，登录却恒 401「用户名或密码错误」——受邀人
+// 必须等管理员手动激活才能进来（实机复现）。
+func TestInvitedUserIsActiveAndNeedNotChangePassword(t *testing.T) {
+	svc, db := newTestEnv(t)
+	ctx := context.Background()
+
+	if err := svc.CreateFromInvite(ctx,
+		"invited@example.com", "invited", "self-chosen-pass-1", model.RoleTenant,
+		false, 0); err != nil {
+		t.Fatalf("接受邀请创建账号失败: %v", err)
+	}
+
+	var row model.User
+	if err := db.Where("username = ?", "invited").First(&row).Error; err != nil {
+		t.Fatalf("读取用户失败: %v", err)
+	}
+	// 可登录的判定就是 IsActive()（登录链路用的同一个方法），直接断它。
+	if !row.IsActive() {
+		t.Errorf("受邀账号状态 = %q，期望 %q（否则登录恒 401）",
+			row.Status, model.UserStatusActive)
+	}
+	if row.ForcePasswordChange {
+		t.Error("受邀人自己设的密码不应再强制改一次")
+	}
+	if row.PasswordHash == "self-chosen-pass-1" {
+		t.Fatal("密码被明文存储了")
+	}
+
+	// 管理员创建的账号必须**保持** pending + 强制改密：两条创建路径的语义
+	// 不同，修复邀请这条不能顺手把管理员的默认值改掉。
+	if _, err := svc.Create(ctx, useradmin.CreateRequest{
+		Username: "by-admin", Password: "initial-pass",
+	}, admin(), "root", ""); err != nil {
+		t.Fatalf("管理员创建用户失败: %v", err)
+	}
+	var byAdmin model.User
+	if err := db.Where("username = ?", "by-admin").First(&byAdmin).Error; err != nil {
+		t.Fatalf("读取用户失败: %v", err)
+	}
+	if byAdmin.Status != model.UserStatusPending {
+		t.Errorf("管理员创建的账号状态 = %q，期望 pending", byAdmin.Status)
+	}
+	if !byAdmin.ForcePasswordChange {
+		t.Error("管理员创建的账号仍应要求首次登录改密")
+	}
+}
+
 func TestShortPasswordRejected(t *testing.T) {
 	svc, _ := newTestEnv(t)
 

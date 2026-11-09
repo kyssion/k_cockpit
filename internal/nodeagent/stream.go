@@ -22,20 +22,45 @@ import (
 
 // handleOpenStream 处理控制面的流打开请求。
 //
+// **两个 context 必须分开，不能合并**——这是控制台实机黑屏的根因，
+// 别再"顺手"把它们收敛成一个：
+//
+//   - dialCtx 只管拨号。daemon 给它套了 3 秒超时，并且在**本函数返回后
+//     立刻 cancel**（为了 VNC 端口异常时不阻塞接收循环）。
+//   - streamCtx 管回拨的 StreamData RPC 的**整条寿命**（daemon 的会话级
+//     ctx，控制面断线/agent 关停时才取消）。
+//
+// 曾经两者是同一个：`rpcCtx := context.WithCancel(ctx)`，而 ctx 就是那个
+// 3 秒的 dialCtx。于是 handleOpenStream 一回 StreamOpened(ok)、接收循环
+// 执行 dialCancel()，刚建立的 StreamData 立刻被取消 → 控制面 `Recv()`
+// 立即 EOF → streamBridge 关闭 → 控制面 `stream.Read` 立刻返回
+// 「stream: 已关闭」→ pipeConsole 结束。表现是：WS 101 之后零字节、
+// 「会话建立」与「会话结束」在同一毫秒、而节点上直接
+// `bash /dev/tcp/127.0.0.1:5902` 明明能读到 `RFB 003.008`。
+//
 // 在 daemon 的接收循环里**同步执行**：StreamOpened 应答必须先于 StreamData
 // RPC 到达控制面（OpenStream 的等待者先收到 ok，handler 再拿到桥）。
 // 返回要经通道发出的应答。
-func (d *Daemon) handleOpenStream(ctx context.Context, req *agentproto.OpenStreamRequest) *agentproto.AgentToServer {
+func (d *Daemon) handleOpenStream(
+	streamCtx, dialCtx context.Context, req *agentproto.OpenStreamRequest,
+) *agentproto.AgentToServer {
 	if agent.StreamKind(req.Kind) != agent.StreamVNC {
 		return streamOpenedMsg(req.StreamId, false, "不支持的流类型: "+req.Kind)
 	}
-	conn, err := dialVNC(ctx, req.Target)
+	conn, err := dialVNC(dialCtx, req.Target)
 	if err != nil {
 		return streamOpenedMsg(req.StreamId, false, err.Error())
 	}
 
 	// 回拨 StreamData：复用 daemon 持有的 gRPC 连接（同一 mTLS 通道）。
-	rpcCtx, cancel := context.WithCancel(ctx)
+	// rpcCtx 派生自 streamCtx（会话级），**不是** dialCtx——拨号超时不
+	// 继承给长连接 RPC。
+	//
+	// 代价与取舍：接收循环「不被卡住」的保证现在只由 dialVNC 的 3 秒窗口
+	// 承担。这不影响原意——StreamData 在一条**已建立**的 ClientConn 上创建
+	// 时不会等待握手，失败会立刻返回（gRPC 默认不耐烦等 WaitForReady）；
+	// 真正会等的是流建立之后的 Recv，那本来就在独立 goroutine 里。
+	rpcCtx, cancel := context.WithCancel(streamCtx)
 	rpcCtx = metadata.AppendToOutgoingContext(rpcCtx, "x-kc-stream-id", req.StreamId)
 	gwClient := agentproto.NewAgentGatewayClient(d.conn)
 	stream, err := gwClient.StreamData(rpcCtx)

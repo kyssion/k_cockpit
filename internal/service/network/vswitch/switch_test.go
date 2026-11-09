@@ -145,18 +145,42 @@ func TestSystemSwitchIsProtected(t *testing.T) {
 	svc, db := newTestEnv(t, newStubClient())
 	ctx := context.Background()
 
-	// 系统基础网络在首次列出网络时**幂等**建立，因此用读接口把它触发出来，
-	// 而不是去调一个私有方法——测的是用户实际会走的路径。
-	if _, err := svc.Networks(ctx, 1); err != nil {
-		t.Fatalf("建立系统网络失败: %v", err)
+	// 系统基础网络**不再由读接口直接写库**：读接口只受理一次「开通」任务，
+	// 由执行器在宿主机建好网桥之后才落记录（旧实现直接插一条 kbr0 记录，
+	// 宿主上根本没有那座桥——实机抓出）。
+	var before int64
+	if err := db.Model(&model.Task{}).Count(&before).Error; err != nil {
+		t.Fatal(err)
 	}
-	var sys model.VpcSwitch
-	if err := db.Where("node_id = ? AND is_system = ?", 1, true).First(&sys).Error; err != nil {
-		t.Fatalf("未找到系统网络: %v", err)
+	if _, err := svc.Networks(ctx, 1); err != nil {
+		t.Fatalf("受理系统网络开通失败: %v", err)
+	}
+	var after int64
+	if err := db.Model(&model.Task{}).Count(&after).Error; err != nil {
+		t.Fatal(err)
+	}
+	if after <= before {
+		t.Fatal("首次列出网络应受理一次系统网络开通任务")
+	}
+	var pending int64
+	if err := db.Model(&model.VpcSwitch{}).
+		Where("node_id = ? AND is_system = ?", 1, true).Count(&pending).Error; err != nil {
+		t.Fatal(err)
+	}
+	if pending != 0 {
+		t.Errorf("开通任务尚未执行，不应先写出系统网络记录（实际 %d 条）", pending)
 	}
 
-	// 改它的网段会让该节点上所有已接入的虚拟机立刻失去网络，而这件事
-	// 在界面上没有任何提示——用户只是改了一个看起来普通的字段。
+	// 按执行器落库后的形态构造记录，验证它不可改、不可删：改它的网段会让
+	// 该节点上所有已接入的虚拟机立刻失去网络，而界面上没有任何提示。
+	sys := model.VpcSwitch{
+		NodeID: 1, Name: model.NetworkDefaultName, Mode: model.NetworkModeNAT,
+		BridgeName: "kbrsystem", IsSystem: true, Status: model.NetworkActive,
+	}
+	if err := db.Create(&sys).Error; err != nil {
+		t.Fatalf("构造系统网络记录失败: %v", err)
+	}
+
 	req := validSwitch()
 	req.Name = "renamed"
 	_, err := svc.UpdateSwitch(ctx, sys.ID, req, 7, "admin", "")

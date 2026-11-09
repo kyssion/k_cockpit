@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/crc32"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,7 +21,7 @@ import (
 	"k_cockpit/internal/nodeagent/sys"
 )
 
-// timeNowSec / fileSizeOr0 / osMkdirAll / fmtAnyString / timeTimer / schedule
+// timeNowSec / fileSizeOr0 / osMkdirAll / timeTimer / schedule
 // 是本文件用到的小助手。
 func timeNowSec() int64 { return time.Now().Unix() }
 
@@ -32,11 +33,6 @@ func fileSizeOr0(st os.FileInfo) int64 {
 }
 
 func osMkdirAll(path string) { _ = os.MkdirAll(path, 0o755) }
-
-func fmtAnyString(v any) string {
-	s, _ := v.(string)
-	return s
-}
 
 func schedule(sec int, f func()) *time.Timer {
 	return time.AfterFunc(time.Duration(sec)*time.Second, f)
@@ -312,6 +308,7 @@ func hostFirewallApply(ctx context.Context, op agent.Operation, report Reporter)
 		return firewallRollback(ctx, op, report)
 	}
 	enabled := boolParam(op.Params, "enabled")
+	defaultAction := strParam(op.Params, "default_action")
 	report(Stage{Key: "apply", Name: "应用宿主机防火墙", Index: 1, Total: 1})
 
 	const chain = "KC-HFW"
@@ -366,6 +363,16 @@ func hostFirewallApply(ctx context.Context, op agent.Operation, report Reporter)
 			iptablesAdd(ctx, append([]string{chain}, args...)...)
 			applied++
 		}
+	}
+	// 兜底拒绝放在所有放行之后：默认动作必须由**本链**兜住，
+	// 而不能依赖宿主机恰好已有 DROP 策略——那会让"默认拒绝"在
+	// 没有 ufw 的主机上形同虚设（实机复现：INPUT 仍是 ACCEPT）。
+	//
+	// 顺序是语义的一部分：这条必须排在白名单与规则集的 -j ACCEPT 之后，
+	// 否则任何放行都不可能命中。链每次 apply 都被 -F 重建，因此重复 apply
+	// 不会叠加（幂等）。
+	if enabled && (defaultAction == "deny" || defaultAction == "drop") {
+		iptablesAdd(ctx, chain, "-j", "DROP")
 	}
 	_, _ = sys.Run(ctx, "iptables", "-D", "INPUT", "-j", chain)
 	if enabled {
@@ -768,48 +775,262 @@ func macOf(ctx context.Context, ifname string) string {
 	return ""
 }
 
+// —— 端口镜像 ——
+//
+// P2 缺陷（实机确认）：原实现只取 source_ports 的第一个元素、**从不读
+// target_switches**，建出的 OVS Mirror 只有 select_src_port/select_dst_port
+// 而**没有 output_port**——OVS 没有任何复制目标，一个报文都不会被复制
+// （`ovs-vsctl list Mirror` 里 output_port 为空即可证），多源/方向/多目标
+// 全部被静默忽略。
+//
+// 参考语义（docs/08-reference/qvmconsole/capabilities.md §端口镜像）是
+// 「用 tc 复制一个或多个接口的入站或出站报文，经专用 veth 注入一个或多个
+// 空交换机」。OVS 侧的等价做法：为每个目标交换机准备一条专用通路——
+// 跨桥用 veth 对（一端接源桥、一端接目标桥），把**源桥那端**设为 Mirror 的
+// output_port；目标与源同桥时改用 internal 端口（同桥把 veth 两端都接上
+// 会成环，广播包会自我放大成风暴）。
+//
+// 现场落盘在 /run/kc-mirror-state-<name>.json：disable 与看门狗必须能
+// **只**回收本次创建的东西（行名、端口、veth、两端网桥），否则同桥上的
+// 其它镜像会被误删，或者留下一套没人认识的口子。
+
+// mirrorRunDir 是镜像运行态文件的目录（/run 在 agent 重启间保留，整机重启
+// 才清空）。抽成变量是为了让测试能指到临时目录。
+var mirrorRunDir = "/run"
+
+// mirrorKindVeth / mirrorKindInternal 标记端口类型：internal 端口只需
+// del-port（OVS 自建的 netdev 随之消失），veth 还要 ip link del。
+const (
+	mirrorKindVeth     = "veth"
+	mirrorKindInternal = "internal"
+)
+
+// mirrorPort 是本次创建的端口以及它挂在哪个 OVS 桥上。
+type mirrorPort struct {
+	Bridge string `json:"bridge"`
+	Port   string `json:"port"`
+	Kind   string `json:"kind"`
+}
+
+// mirrorState 是一次 enable 在节点上留下的完整现场，供精确回收。
+type mirrorState struct {
+	Name      string       `json:"name"`
+	Source    string       `json:"source_bridge"`
+	Direction string       `json:"direction"`
+	Mirrors   []string     `json:"mirrors"`
+	Ports     []mirrorPort `json:"ports"`
+	Veths     []string     `json:"veths"`
+	CreatedAt int64        `json:"created_at"`
+}
+
+// mirrorRowPrefix 是 Mirror 行名的前缀（旧版单行镜像名 = 前缀本身）。
+func mirrorRowPrefix(name string) string { return "kc-mir-" + name }
+
+// mirrorRowName 是第 idx 个目标对应的 Mirror 行名。
+func mirrorRowName(name string, idx int) string {
+	return mirrorRowPrefix(name) + "-" + strconv.Itoa(idx)
+}
+
+// mirrorPortBase 返回某个目标交换机的端口名前缀。
+//
+// Linux ifname 上限 15 字符，因此固定 "kcm" + 8 位 hex（由镜像名与目标
+// 交换机稳定哈希得出），加上 a/b 后缀共 12/13 字符；哈希里带上目标名，
+// 多目标时各自的端口名天然不冲突，重复 enable 也得到同一组名字（幂等）。
+func mirrorPortBase(name, target string) string {
+	return fmt.Sprintf("kcm%08x", crc32.ChecksumIEEE([]byte(name+"|"+target)))
+}
+
+// mirrorFileKey 把镜像名变成文件名安全的后缀（名字可能是任意字符）。
+func mirrorFileKey(name string) string {
+	if k := pathSafe(name); k != "" {
+		return k
+	}
+	return fmt.Sprintf("h%08x", crc32.ChecksumIEEE([]byte(name)))
+}
+
+// mirrorStatePath / mirrorConfirmPath / mirrorWDFile 是镜像的三类运行态文件。
+func mirrorStatePath(name string) string {
+	return mirrorRunDir + "/kc-mirror-state-" + mirrorFileKey(name) + ".json"
+}
+
+func mirrorConfirmPath(name string) string {
+	return mirrorRunDir + "/kc-mirror-confirm-" + mirrorFileKey(name)
+}
+
+func mirrorWDFile(name string) string {
+	return mirrorRunDir + "/kc-mirror-wd-" + mirrorFileKey(name)
+}
+
+// stringListParam 把参数里的列表解成去重后的字符串切片。
+//
+// 控制面发的是 JSON 数组（channel 还原成 []any）；逗号分隔字符串是同一
+// 语义的另一种历史形状，一并容忍——漏读一个元素就等于少镜像一个端口。
+func stringListParam(raw any) []string {
+	out := make([]string, 0, 4)
+	add := func(s string) {
+		if s = strings.TrimSpace(s); s == "" {
+			return
+		}
+		for _, seen := range out {
+			if seen == s {
+				return
+			}
+		}
+		out = append(out, s)
+	}
+	switch v := raw.(type) {
+	case []any:
+		for _, it := range v {
+			if s, ok := it.(string); ok {
+				add(s)
+			}
+		}
+	case []string:
+		for _, s := range v {
+			add(s)
+		}
+	case string:
+		for _, s := range strings.Split(v, ",") {
+			add(s)
+		}
+	}
+	return out
+}
+
+// mirrorPortRefs 生成 @p0,@p1… 形式的引用列表（引用列必须用 UUID）。
+func mirrorPortRefs(count int) string {
+	refs := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		refs = append(refs, "@p"+strconv.Itoa(i))
+	}
+	return strings.Join(refs, ",")
+}
+
+// normalizeMirrorDirection 把方向词表归一到 both/ingress/egress。
+//
+// 未知值按 both 处理：宁可多镜像一个方向（用户能看见并能关掉），也不要
+// 因为一个拼写差异就静默只镜像一半。
+func normalizeMirrorDirection(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "ingress", "in", "rx", "src":
+		return "ingress"
+	case "egress", "out", "tx", "dst":
+		return "egress"
+	default:
+		return "both"
+	}
+}
+
+// mirrorSourceBridge 解析全部源端口所在的 OVS 网桥。
+//
+// 一个 Mirror 只能挂在一座桥上，因此全部源端口必须同桥。跨桥源需要为每座
+// 桥各建一个镜像，当前不支持——**明确失败**，而不是像缺陷版本那样只镜像
+// 第一个口却报告成功。
+func mirrorSourceBridge(ctx context.Context, sources []string) (string, error) {
+	bridge, first := "", ""
+	for _, s := range sources {
+		br, err := sys.OVSInterfaceBridge(ctx, s)
+		if err != nil {
+			return "", fmt.Errorf("源端口 %s 不在任何 OVS 交换机上: %v", s, err)
+		}
+		if bridge == "" {
+			bridge, first = br, s
+			continue
+		}
+		if br != bridge {
+			return "", fmt.Errorf(
+				"源端口 %s 在交换机 %s，而 %s 在交换机 %s；跨交换机的源需要为每座桥各建一个镜像，当前不支持",
+				s, br, first, bridge)
+		}
+	}
+	if bridge == "" {
+		return "", fmt.Errorf("缺少镜像源端口")
+	}
+	return bridge, nil
+}
+
+// mirrorValidateTargets 校验每个目标交换机都是**已存在**的 OVS 网桥。
+//
+// 不存在就明确失败：静默跳过等于建一个没有出口的镜像——正是本次缺陷的
+// 形状（看起来成功、实际什么都不复制）。
+func mirrorValidateTargets(ctx context.Context, targets []string) error {
+	for _, t := range targets {
+		if !sys.RunOK(ctx, "ovs-vsctl", "br-exists", t) {
+			return fmt.Errorf("目标交换机 %s 不存在；镜像必须注入到一个已存在的空交换机", t)
+		}
+	}
+	return nil
+}
+
 // portMirrorEnable 实现 port_mirror.enable（OVS mirror + 节点侧看门狗）。
+//
+// 顺序是语义的一部分：先解析并校验（失败不留痕）→ 清理同名旧拓扑（重复
+// enable 不叠行）→ 建目标通路与 Mirror 行 → 落盘现场 → 布防看门狗。
 func portMirrorEnable(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
-	name := strParam(op.Params, "name")
-	report(Stage{Key: "create_mirror", Name: "建立镜像", Index: 1, Total: 2})
-	sources, _ := op.Params["source_ports"].([]any)
+	report(Stage{Key: "preflight", Name: "解析镜像源与目标", Index: 1, Total: 3})
+	name := strings.TrimSpace(strParam(op.Params, "name"))
+	if name == "" {
+		name = strings.TrimSpace(op.Target)
+	}
+	if name == "" {
+		return failResult("缺少镜像名称"), nil
+	}
+	sources := stringListParam(op.Params["source_ports"])
 	if len(sources) == 0 {
 		return failResult("缺少镜像源端口"), nil
 	}
-	bridge, err := sys.OVSInterfaceBridge(ctx, fmtAnyString(sources[0]))
+	targets := stringListParam(op.Params["target_switches"])
+	if len(targets) == 0 {
+		return failResult("缺少镜像目标交换机：没有注入目标，OVS 不会把报文复制到任何地方"), nil
+	}
+	direction := normalizeMirrorDirection(strParam(op.Params, "direction"))
+
+	srcBridge, err := mirrorSourceBridge(ctx, sources)
 	if err != nil {
 		return failResult(err.Error()), nil
 	}
-	mirrorName := "kc-mir-" + name
-	// ovs-vsctl 的事务语义（OVS 3.3 真机逐一实测）：
-	//   - create 没有 --may-exist（报 "no option"），幂等只能「先查后建」；
-	//   - create 同事务内被引用必须带 --id=@m，且引用列要在 create 上
-	//     直接内联（@m 不能出现在 record 位置）；
-	//   - 引用列的值不能写端口名字符串（"vnet0 is not a valid UUID"），
-	//     要先 --id=@p0 get Port 换成命名 UUID；
-	//   - 行已存在时 set 的 record 用名字、add 的值必须先 get _uuid。
-	ensureMirror := func(source string) error {
-		if mirrorRowExists(ctx, mirrorName) {
-			args := []string{"--", "--id=@p0", "get", "Port", source,
-				"--", "set", "Mirror", mirrorName,
-				"select_src_port=@p0", "select_dst_port=@p0",
-				"--", "--id=@m", "get", "Mirror", mirrorName, "_uuid",
-				"--", "add", "Bridge", bridge, "mirrors", "@m"}
-			_, err := sys.Run(ctx, "ovs-vsctl", args...)
-			return err
-		}
-		args := []string{"--", "--id=@p0", "get", "Port", source,
-			"--", "--id=@m", "create", "Mirror", "name=" + mirrorName,
-			"select_src_port=@p0", "select_dst_port=@p0",
-			"--", "add", "Bridge", bridge, "mirrors", "@m"}
-		_, err := sys.Run(ctx, "ovs-vsctl", args...)
-		return err
-	}
-	if err := ensureMirror(fmtAnyString(sources[0])); err != nil {
-		return failResult("建立镜像失败: " + err.Error()), nil
+	if err := mirrorValidateTargets(ctx, targets); err != nil {
+		return failResult(err.Error()), nil
 	}
 
-	report(Stage{Key: "watch_arm", Name: "布防看门狗", Index: 2, Total: 2})
+	// 幂等：先清掉同名旧拓扑（含旧版单行 kc-mir-<name> 与它的端口/veth），
+	// 否则重复 enable 会一条一条地叠 Mirror 行、留一串孤儿 veth。
+	//
+	// 清理会顺带删掉看门狗文件，因此先把原窗口读出来：修复重下发
+	// （watchdog_seconds 为负）必须沿用原到期时刻，而不是把「限时镜像」
+	// 变成永久镜像。
+	priorDeadline, hadPriorWD := readMirrorWatchdog(name)
+	cleanupMirror(ctx, name)
+
+	report(Stage{Key: "create_mirror", Name: "建立镜像", Index: 2, Total: 3})
+	st := mirrorState{
+		Name: name, Source: srcBridge, Direction: direction, CreatedAt: timeNowSec(),
+		Mirrors: []string{}, Ports: []mirrorPort{}, Veths: []string{},
+	}
+	for idx, target := range targets {
+		if err := buildOneMirror(ctx, &st, idx, target, sources, direction); err != nil {
+			// 失败不留半套拓扑：已建的 Mirror 行/端口/veth 全部回滚。
+			// 回滚本身失败只记日志，但原始原因必须如实返回。
+			msg := err.Error()
+			if rbErrs := cleanupMirrorState(ctx, st); len(rbErrs) > 0 {
+				log.Printf("[nodeagent] 镜像 %s 回滚时出错: %v", name, rbErrs)
+				msg += "（回滚时出错: " + strings.Join(rbErrs, "; ") + "）"
+			} else {
+				msg += "（已回滚本次已创建的部分）"
+			}
+			return failResult(msg), nil
+		}
+	}
+	if err := writeMirrorState(st); err != nil {
+		msg := "写入镜像现场失败: " + err.Error()
+		if rbErrs := cleanupMirrorState(ctx, st); len(rbErrs) > 0 {
+			log.Printf("[nodeagent] 镜像 %s 回滚时出错: %v", name, rbErrs)
+			msg += "（回滚时出错: " + strings.Join(rbErrs, "; ") + "）"
+		}
+		return failResult(msg), nil
+	}
+
+	report(Stage{Key: "watch_arm", Name: "布防看门狗", Index: 3, Total: 3})
 	wd := 120
 	switch v := op.Params["watchdog_seconds"].(type) {
 	case float64:
@@ -817,20 +1038,137 @@ func portMirrorEnable(ctx context.Context, op agent.Operation, report Reporter) 
 	case int:
 		wd = v
 	}
-	confirmFile := "/run/kc-mirror-confirm-" + name
-	_ = osRemove(confirmFile)
-	// 负数表示“修复重下发”，不布防看门狗：修复的目标是恢复持续状态，
-	// 而不是重新进入等待用户确认的窗口。
+	_ = osRemove(mirrorConfirmPath(name))
+	// 负数表示“修复重下发”，不布防新看门狗：修复的目标是恢复持续状态，
+	// 而不是重新进入等待用户确认的窗口——但原有的自动撤销窗口要保住，
+	// 否则一次修复就把「N 分钟自动撤销」变成了「永久复制」。
 	if wd > 0 {
-		armMirrorWatchdog(name, mirrorName, wd)
+		armMirrorWatchdog(name, wd)
+	} else if hadPriorWD {
+		restoreMirrorWatchdog(name, priorDeadline)
 	}
 
 	return &agent.Result{Success: true, Data: map[string]any{
 		agent.PortMirrorDataKey: agent.PortMirrorInfo{
-			WatchdogSeconds: wd, Applied: 1,
-			Message: "镜像已建立；看门狗已同时在节点侧启动",
+			WatchdogSeconds: wd, Applied: len(st.Mirrors),
+			Message: fmt.Sprintf(
+				"已建立 %d 条镜像（%d 个源端口 → %d 个目标交换机，方向 %s）；看门狗已同时在节点侧启动",
+				len(st.Mirrors), len(sources), len(targets), direction),
 		},
 	}}, nil
+}
+
+// buildOneMirror 为一个目标交换机建立「输出端口 + Mirror 行」。
+//
+// 目标与源同桥 → internal 端口；不同桥 → veth 对。两种情况下 output_port
+// 都指向**源桥那一端**，这样被复制的报文才会从源桥流向目标桥。
+func buildOneMirror(
+	ctx context.Context, st *mirrorState, idx int, target string,
+	sources []string, direction string,
+) error {
+	base := mirrorPortBase(st.Name, target)
+	output := base + "a"
+	rowName := mirrorRowName(st.Name, idx)
+
+	if target == st.Source {
+		// 同桥：veth 两端都接同一座桥会成环（广播包自我放大），改用
+		// internal 端口——它一样能被设成 Mirror 的 output_port。
+		if _, err := sys.Run(ctx, "ovs-vsctl", "--may-exist", "add-port", st.Source, output,
+			"--", "set", "Interface", output, "type=internal"); err != nil {
+			return fmt.Errorf("在交换机 %s 上创建镜像输出端口 %s 失败: %v", st.Source, output, err)
+		}
+		st.Ports = append(st.Ports, mirrorPort{
+			Bridge: st.Source, Port: output, Kind: mirrorKindInternal,
+		})
+	} else {
+		peer := base + "b"
+		// 端口名由「镜像名 + 目标交换机」哈希而来，因此同名设备只可能是
+		// 本镜像上次留下的（例如 agent 在落盘前被杀）。先尽力删掉它：
+		// 否则 ip link add 会一直 EEXIST，这个镜像从此再也启不起来。
+		_, _ = sys.Run(ctx, "ip", "link", "del", output)
+		if _, err := sys.Run(ctx, "ip", "link", "add", output, "type", "veth", "peer", "name", peer); err != nil {
+			return fmt.Errorf("创建镜像 veth 对 %s/%s 失败: %v", output, peer, err)
+		}
+		// 先记账再继续：veth 一建出来就必须能被回滚看见。
+		st.Veths = append(st.Veths, output)
+		if _, err := sys.Run(ctx, "ip", "link", "set", output, "up"); err != nil {
+			return fmt.Errorf("拉起镜像 veth %s 失败: %v", output, err)
+		}
+		if _, err := sys.Run(ctx, "ip", "link", "set", peer, "up"); err != nil {
+			return fmt.Errorf("拉起镜像 veth %s 失败: %v", peer, err)
+		}
+		if _, err := sys.Run(ctx, "ovs-vsctl", "--may-exist", "add-port", st.Source, output); err != nil {
+			return fmt.Errorf("把镜像 veth %s 接入交换机 %s 失败: %v", output, st.Source, err)
+		}
+		st.Ports = append(st.Ports, mirrorPort{
+			Bridge: st.Source, Port: output, Kind: mirrorKindVeth,
+		})
+		if _, err := sys.Run(ctx, "ovs-vsctl", "--may-exist", "add-port", target, peer); err != nil {
+			return fmt.Errorf("把镜像 veth %s 接入目标交换机 %s 失败: %v", peer, target, err)
+		}
+		st.Ports = append(st.Ports, mirrorPort{
+			Bridge: target, Port: peer, Kind: mirrorKindVeth,
+		})
+	}
+
+	// ovs-vsctl 的事务语义（OVS 3.3 真机逐一实测）：
+	//   - create 没有 --may-exist（报 "no option"），幂等只能「先清后建」；
+	//   - create 同事务内被引用必须带 --id=@m，且引用列要在 create 上
+	//     直接内联（@m 不能出现在 record 位置）；
+	//   - 引用列的值不能写端口名字符串（"vnet0 is not a valid UUID"），
+	//     要先 --id=@p0 get Port 换成命名 UUID；
+	//   - 单个 Mirror 只能有一个 output_port，因此每个目标一条行。
+	args := make([]string, 0, 4*len(sources)+12)
+	for i, s := range sources {
+		args = append(args, "--", "--id=@p"+strconv.Itoa(i), "get", "Port", s)
+	}
+	args = append(args, "--", "--id=@o", "get", "Port", output)
+	args = append(args, "--", "--id=@m", "create", "Mirror", "name="+rowName)
+	// 方向映射：ingress 只镜像进入交换机的报文（select_src_port），
+	// egress 只镜像离开交换机的报文（select_dst_port）。两个选择列都要
+	// 包含**全部**源端口，否则多选里只有第一个口被复制。
+	switch direction {
+	case "ingress":
+		args = append(args, "select_src_port="+mirrorPortRefs(len(sources)))
+	case "egress":
+		args = append(args, "select_dst_port="+mirrorPortRefs(len(sources)))
+	default:
+		args = append(args, "select_src_port="+mirrorPortRefs(len(sources)),
+			"select_dst_port="+mirrorPortRefs(len(sources)))
+	}
+	args = append(args, "output_port=@o")
+	args = append(args, "--", "add", "Bridge", st.Source, "mirrors", "@m")
+	if _, err := sys.Run(ctx, "ovs-vsctl", args...); err != nil {
+		return fmt.Errorf("建立镜像行 %s 失败: %v", rowName, err)
+	}
+	st.Mirrors = append(st.Mirrors, rowName)
+	return nil
+}
+
+// writeMirrorState 落盘现场（0600：里面有内部端口与拓扑信息）。
+func writeMirrorState(st mirrorState) error {
+	blob, err := json.Marshal(st)
+	if err != nil {
+		return err
+	}
+	_ = osMkdirAllErr(mirrorRunDir)
+	return osWriteFile(mirrorStatePath(st.Name), blob, 0o600)
+}
+
+// readMirrorState 读回现场；文件缺失或损坏时返回 false（走兜底清理）。
+func readMirrorState(name string) (mirrorState, bool) {
+	raw, err := osReadFile(mirrorStatePath(name))
+	if err != nil {
+		return mirrorState{}, false
+	}
+	var st mirrorState
+	if err := json.Unmarshal([]byte(raw), &st); err != nil {
+		return mirrorState{}, false
+	}
+	if st.Name == "" {
+		st.Name = name
+	}
+	return st, true
 }
 
 // pathSafe 报告名字是否只含文件名安全字符（用于拼进路径的设备/接口名）。
@@ -855,51 +1193,241 @@ func mirrorRowExists(ctx context.Context, name string) bool {
 	return err == nil
 }
 
-// mirrorWDFile 是镜像看门狗的持久化文件（内容 = 到期 unix 秒）。
+// mirrorRowNames 列出全部 Mirror 行名（多目标镜像一个目标一行，回收必须
+// 按前缀找齐，不能只认一个固定名字）。
+func mirrorRowNames(ctx context.Context) []string {
+	out, err := sys.Run(ctx, "ovs-vsctl", "--format=csv", "--data=bare",
+		"--no-heading", "--columns=name", "list", "Mirror")
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, 4)
+	for _, line := range strings.Split(out, "\n") {
+		if s := strings.Trim(strings.TrimSpace(line), `"`); s != "" {
+			names = append(names, s)
+		}
+	}
+	return names
+}
+
+// mirrorRowNamesFor 返回属于镜像 name 的全部 Mirror 行名。
+func mirrorRowNamesFor(ctx context.Context, name string) []string {
+	rows := make([]string, 0, 2)
+	for _, row := range mirrorRowNames(ctx) {
+		if mirrorRowMatches(name, row) {
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
+// mirrorRowMatches 判定某个 Mirror 行名是否属于镜像 name。
+//
+// 匹配规则：旧版单行名（kc-mir-<name>）或「前缀 + 纯数字下标」。下标必须
+// 全是数字，否则名叫 web 的镜像会把名叫 web-2 的镜像的行也当成自己的
+// ——删别人的镜像比留一点残留糟得多。
+func mirrorRowMatches(name, row string) bool {
+	prefix := mirrorRowPrefix(name)
+	if !strings.HasPrefix(row, prefix) {
+		return false
+	}
+	rest := strings.TrimPrefix(row, prefix)
+	if rest == "" {
+		return true
+	}
+	if !strings.HasPrefix(rest, "-") {
+		return false
+	}
+	idx := rest[1:]
+	if idx == "" {
+		return false
+	}
+	for _, r := range idx {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// isMirrorPlumbingPort 判定端口名是否为本功能建立的镜像通路端口
+// （kcm + 8 位 hex + a/b）。状态文件缺失时靠它尽力清理。
+func isMirrorPlumbingPort(port string) bool {
+	if len(port) != 13 || !strings.HasPrefix(port, "kcm") {
+		return false
+	}
+	if last := port[12]; last != 'a' && last != 'b' {
+		return false
+	}
+	for _, r := range port[3:11] {
+		if !(r >= '0' && r <= '9') && !(r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// sweepMirrorPorts 是**状态文件缺失**时的尽力清理：扫遍所有桥，把符合
+// 镜像端口命名规律的端口摘掉（veth 端再删设备）。不报错——调用方是
+// disable 与看门狗，它们的目标是「尽力恢复干净」，而不是复述历史。
+func sweepMirrorPorts(ctx context.Context) {
+	brs, _ := sys.OVSListBridges(ctx)
+	for _, br := range brs {
+		ports, err := sys.OVSPortsOfBridge(ctx, br)
+		if err != nil {
+			continue
+		}
+		for _, p := range ports {
+			if !isMirrorPlumbingPort(p) {
+				continue
+			}
+			_, _ = sys.Run(ctx, "ovs-vsctl", "--if-exists", "del-port", br, p)
+			_, _ = sys.Run(ctx, "ip", "link", "del", p)
+		}
+	}
+}
+
+// mirrorPresentRow 报告镜像 name 在 OVS 上是否有行，并给出用于展示的行名。
+//
+// 旧版单行名（kc-mir-<name>）与多目标行名（kc-mir-<name>-<i>）都算存在：
+// 自检据此判断「配置是否还在」，只认一种形状就会把另一形状报成丢失。
+func mirrorPresentRow(ctx context.Context, name string) (string, bool) {
+	if legacy := mirrorRowPrefix(name); mirrorRowExists(ctx, legacy) {
+		return legacy, true
+	}
+	if rows := mirrorRowNamesFor(ctx, name); len(rows) > 0 {
+		return strings.Join(rows, ", "), true
+	}
+	return "", false
+}
+
+// cleanupMirrorState 按现场回收一条镜像的全部东西（回滚与撤销共用）。
+//
+// 顺序有语义：先摘 Mirror 行（行里的 output_port 指向下面要删的端口），
+// 再 del-port，最后删 veth。返回值为失败项（调用方决定记日志还是上报）。
+func cleanupMirrorState(ctx context.Context, st mirrorState) []string {
+	errs := make([]string, 0, 2)
+	for _, row := range st.Mirrors {
+		detachMirror(ctx, row)
+	}
+	for _, p := range st.Ports {
+		if p.Bridge == "" || p.Port == "" {
+			continue
+		}
+		_, _ = sys.Run(ctx, "ovs-vsctl", "--if-exists", "del-port", p.Bridge, p.Port)
+	}
+	// internal 端口随 del-port 一起消失（由 OVS 创建与销毁）；veth 必须
+	// 显式 ip link del，删一端即删两端。
+	for _, v := range st.Veths {
+		if _, err := sys.Run(ctx, "ip", "link", "del", v); err != nil {
+			if !strings.Contains(strings.ToLower(err.Error()), "cannot find") {
+				errs = append(errs, "删除 veth "+v+" 失败: "+err.Error())
+			}
+		}
+	}
+	return errs
+}
+
+// cleanupMirror 是本名前缀下镜像拓扑的**唯一**回收路径（disable、看门狗、
+// 重建前的清理都走这里）。
+//
+// 状态缺失时（旧版本建的镜像、或状态文件被清掉）按行名前缀摘行并扫端口
+// 兜底；无论状态如何，最后都按前缀再摘一遍行——状态与实际不一致时这是
+// 唯一兜底，且前缀精确到「名字 + 分隔符」，同桥其它镜像不受影响。
+func cleanupMirror(ctx context.Context, name string) {
+	if st, ok := readMirrorState(name); ok {
+		if errs := cleanupMirrorState(ctx, st); len(errs) > 0 {
+			log.Printf("[nodeagent] 回收镜像 %s 时出错: %v", name, errs)
+		}
+	} else {
+		sweepMirrorPorts(ctx)
+	}
+	for _, row := range mirrorRowNamesFor(ctx, name) {
+		detachMirror(ctx, row)
+	}
+	_ = osRemove(mirrorStatePath(name))
+	_ = osRemove(mirrorConfirmPath(name))
+	_ = osRemove(mirrorWDFile(name))
+}
+
+// mirrorWDFile 是镜像看门狗的持久化文件（首行 = 到期 unix 秒，次行 = 镜像名）。
 //
 // 看门狗定时器在内存里，agent 重启即丢——镜像复制的是全量流量，残留
 // 是隐私问题而不只是清洁问题。/run 在 agent 重启间保留（重启整机才清空），
-// 启动时 rearmMirrorWatchdogs 据此补上定时器。
-func mirrorWDFile(name string) string { return "/run/kc-mirror-wd-" + name }
-
-// armMirrorWatchdog 布防一个看门狗：落盘到期时刻 + 内存定时器。
-func armMirrorWatchdog(name, mirrorName string, seconds int) {
-	_ = osWriteFile(mirrorWDFile(name), []byte(fmt.Sprintf("%d", timeNowSec()+int64(seconds))), 0o600)
-	schedule(seconds, func() { fireMirrorWatchdog(name, mirrorName) })
+// 启动时 rearmMirrorWatchdogs 据此补上定时器。名字写进文件是为了让
+// 文件名被规范化（含非法字符的名字走哈希）后仍能还原出真正的镜像名。
+func armMirrorWatchdog(name string, seconds int) {
+	restoreMirrorWatchdog(name, timeNowSec()+int64(seconds))
 }
 
-// fireMirrorWatchdog 是到期的动作：已确认则跳过，否则摘挂；两种情况都
-// 清掉持久化文件（到期后文件只剩历史价值，留着会让下次重启重复撤销）。
-func fireMirrorWatchdog(name, mirrorName string) {
+// restoreMirrorWatchdog 按**给定到期时刻**布防（修复重下发与 agent 重启
+// 都走这里：窗口是原来那个，不能重新计时）。
+func restoreMirrorWatchdog(name string, deadline int64) {
+	body := fmt.Sprintf("%d\n%s", deadline, name)
+	_ = osWriteFile(mirrorWDFile(name), []byte(body), 0o600)
+	remaining := deadline - timeNowSec()
+	if remaining < 0 {
+		remaining = 0 // 已过期：立刻补撤销（agent 停机期间错过的窗口）
+	}
+	schedule(int(remaining), func() { fireMirrorWatchdog(name) })
+}
+
+// parseMirrorWDFile 解析看门狗文件：首行到期时刻，次行镜像名（旧格式没有次行）。
+func parseMirrorWDFile(raw string) (deadline int64, name string, ok bool) {
+	lines := strings.Split(strings.TrimSpace(raw), "\n")
+	if len(lines) == 0 {
+		return 0, "", false
+	}
+	d, err := strconv.ParseInt(strings.TrimSpace(lines[0]), 10, 64)
+	if err != nil {
+		return 0, "", false
+	}
+	if len(lines) > 1 {
+		name = strings.TrimSpace(lines[1])
+	}
+	return d, name, true
+}
+
+// readMirrorWatchdog 读回未了结的看门狗（没有或内容损坏时 ok=false）。
+func readMirrorWatchdog(name string) (deadline int64, ok bool) {
+	raw, err := osReadFile(mirrorWDFile(name))
+	if err != nil {
+		return 0, false
+	}
+	deadline, _, ok = parseMirrorWDFile(raw)
+	return deadline, ok
+}
+
+// fireMirrorWatchdog 是到期的动作：已确认则跳过，否则整套撤销；两种情况
+// 都清掉持久化文件（到期后文件只剩历史价值，留着会让下次重启重复撤销）。
+func fireMirrorWatchdog(name string) {
 	defer func() { _ = osRemove(mirrorWDFile(name)) }()
-	if _, err := osStat("/run/kc-mirror-confirm-" + name); err == nil {
+	if _, err := osStat(mirrorConfirmPath(name)); err == nil {
 		return
 	}
 	ctx2, cancel2 := contextWithTimeout(5 * timeSecond)
 	defer cancel2()
-	detachMirror(ctx2, mirrorName)
+	cleanupMirror(ctx2, name)
 }
 
 // rearmMirrorWatchdogs 在 agent 启动时恢复未了结的看门狗（已到期即刻补撤销）。
 func rearmMirrorWatchdogs() {
-	files, _ := filepath.Glob("/run/kc-mirror-wd-*")
-	now := timeNowSec()
+	files, _ := filepath.Glob(mirrorRunDir + "/kc-mirror-wd-*")
 	for _, f := range files {
-		b, err := osReadFile(f)
+		raw, err := osReadFile(f)
 		if err != nil {
 			continue
 		}
-		deadline, perr := strconv.ParseInt(strings.TrimSpace(b), 10, 64)
-		if perr != nil {
+		deadline, name, ok := parseMirrorWDFile(raw)
+		if !ok {
 			_ = osRemove(f) // 内容损坏：文件已不可信，撤销由控制面对账兜底
 			continue
 		}
-		name := strings.TrimPrefix(filepath.Base(f), "kc-mirror-wd-")
-		remaining := deadline - now
-		if remaining < 0 {
-			remaining = 0 // 已过期：立刻补撤销（agent 停机期间错过的窗口）
+		if name == "" {
+			// 旧格式只有到期时刻：名字退回用文件名（规范化后的名字）。
+			name = strings.TrimPrefix(filepath.Base(f), "kc-mirror-wd-")
 		}
-		schedule(int(remaining), func() { fireMirrorWatchdog(name, "kc-mir-"+name) })
+		restoreMirrorWatchdog(name, deadline)
 	}
 }
 
@@ -918,21 +1446,35 @@ func detachMirror(ctx context.Context, name string) {
 }
 
 func portMirrorConfirm(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
-	_ = osWriteFile("/run/kc-mirror-confirm-"+op.Target, []byte("ok"), 0o644)
+	name := mirrorOperationName(op)
+	_ = osWriteFile(mirrorConfirmPath(name), []byte("ok"), 0o644)
 	// 确认即取消看门狗——持久化文件也一并清掉，agent 重启后不得重臂。
-	_ = osRemove(mirrorWDFile(op.Target))
+	_ = osRemove(mirrorWDFile(name))
 	return &agent.Result{Success: true, Data: map[string]any{
 		agent.PortMirrorDataKey: agent.PortMirrorInfo{Applied: 1, Message: "看门狗已取消，镜像将保持生效"},
 	}}, nil
 }
 
+// mirrorOperationName 取本次操作对应的镜像名（控制面把镜像名放在 Target
+// 与 params.name 两处；两者都缺失时返回空串，由调用方如实失败/空操作）。
+func mirrorOperationName(op agent.Operation) string {
+	if n := strings.TrimSpace(strParam(op.Params, "name")); n != "" {
+		return n
+	}
+	return strings.TrimSpace(op.Target)
+}
+
 func portMirrorDisable(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	report(Stage{Key: "disable", Name: "撤销镜像", Index: 1, Total: 1})
-	// 只摘本镜像（弱引用 GC 会随后删掉孤儿行），同桥其它镜像不受影响。
-	detachMirror(ctx, "kc-mir-"+op.Target)
-	_ = osRemove("/run/kc-mirror-confirm-" + op.Target)
+	name := mirrorOperationName(op)
+	if name == "" {
+		return failResult("缺少镜像名称，无法撤销"), nil
+	}
+	// 统一走 cleanupMirror：摘本名前缀下的全部 Mirror 行（同桥其它镜像不受
+	// 影响）→ 从桥上摘掉记录在案的端口 → 删 veth → 清运行态文件。
+	cleanupMirror(ctx, name)
 	return &agent.Result{Success: true, Data: map[string]any{
-		agent.PortMirrorDataKey: agent.PortMirrorInfo{Applied: 0, Message: "镜像已撤销"},
+		agent.PortMirrorDataKey: agent.PortMirrorInfo{Applied: 0, Message: "镜像已撤销并清理运行态"},
 	}}, nil
 }
 

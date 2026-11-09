@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -191,6 +192,17 @@ func (s *Service) updateOne(
 		}
 	}
 
+	// 首尾空白在**校验之前**裁掉，且只裁首尾（不去动中间的空格）。
+	//
+	// 不做这一步时，"K Cockpit     " 这样的值会被原样入库：界面回显成带一串
+	// 空格的样子（用户看不出是几个），下次保存又把它带上，而它还会流进
+	// 发件人名称这种「看得见」的地方。真正的问题是**校验与实际生效的值不是
+	// 同一个东西**——超长、非整数这类判断都应该看用户真正写下的内容。
+	//
+	// 裁掉之后 value 就是后续所有步骤（校验、写入、应用钩子、审计）唯一的
+	// 输入，避免出现「审计里是带空格的、实际生效是不带的」这种对不上的记录。
+	value = strings.TrimSpace(value)
+
 	if msg := validate(spec, value); msg != "" {
 		return UpdateResult{Key: key, Status: StatusFailed, Message: msg}
 	}
@@ -200,6 +212,9 @@ func (s *Service) updateOne(
 	// 界面拿不到明文（R-009），因此整张表单回传时密码那一栏必然是空的。
 	// 若按普通字段处理，「改一个端口」就会顺手把密码清空，而用户要等下次
 	// 发信失败才发现——那已经是很久以后的事了。
+	//
+	// 判断依据是**裁掉空白之后**的值：只有空格的一栏在用户眼里就是「没填」，
+	// 把它当成一个由若干空格组成的新密码既没有意义，也改坏了他原本的配置。
 	if spec.Secret && value == "" {
 		return UpdateResult{Key: key, Status: StatusApplied, Message: "留空，保持原有值不变"}
 	}

@@ -116,6 +116,7 @@ func TestConfig_Validate(t *testing.T) {
 			mutate: func(c *Config) {
 				c.Env = EnvProduction
 				c.Session.Secret = ""
+				c.Session.SecureCookie = true
 			},
 			wantErr: "SESSION_SECRET",
 		},
@@ -127,9 +128,21 @@ func TestConfig_Validate(t *testing.T) {
 			mutate: func(c *Config) {
 				c.Env = EnvProduction
 				c.Session.Secret = "fixed-secret-for-test"
+				c.Session.SecureCookie = true
 				c.Security.DevBypassCode = "123456"
 			},
 			wantErr: "SECURITY_DEV_BYPASS_CODE",
+		},
+		{
+			// 生产环境关闭 Secure Cookie：HTTPS 下浏览器不会回传，登录必失败；
+			// 明文链路下会话令牌可被截获。必须拒绝启动而不是静默接受。
+			name: "生产环境关闭 Secure Cookie",
+			mutate: func(c *Config) {
+				c.Env = EnvProduction
+				c.Session.Secret = "fixed-secret-for-test"
+				c.Session.SecureCookie = false
+			},
+			wantErr: "SESSION_SECURE_COOKIE",
 		},
 		{
 			// 开发环境配置它是允许的——这是它唯一被允许存在的地方。

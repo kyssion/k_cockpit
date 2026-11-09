@@ -2,6 +2,7 @@ package ops
 
 import (
 	"context"
+	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
 
@@ -96,8 +97,65 @@ func (h *Schedule) Create(ctx context.Context, c *app.RequestContext) {
 	api.OK(c, row)
 }
 
+// setScheduleEnabledRequest 是 PATCH 的请求体。
+//
+// 除 enabled 之外的字段**全部用指针接收**，而且一个都不能省略声明：本接口
+// 只做启停，但调用方（尤其是把整张表单回传的界面）很容易顺带把执行时间、
+// 动作一起发过来。如果这里不声明这些字段，多余字段会被**静默丢弃**——
+// 接口返回 200，用户以为执行时间改了，实际只改了开关。把所有已知可编辑的
+// 字段都显式接住，就能把「静默丢弃」变成一次明确的报错（见 SetEnabled）。
 type setScheduleEnabledRequest struct {
 	Enabled *bool `json:"enabled"`
+
+	// --- 以下均为「已知可编辑、但本接口不支持」的字段（与 Create 取同一套全集）---
+
+	Action        *string `json:"action"`
+	SnapshotName  *string `json:"snapshot_name"`
+	IncludeMemory *bool   `json:"include_memory"`
+	ScheduleType  *string `json:"schedule_type"`
+	Weekdays      *[]int  `json:"weekdays"`
+	TimeOfDay     *string `json:"time_of_day"`
+	Date          *string `json:"date"`
+	// Cron / Name 不在 Create 的字段里，但界面上有过按 cron 表达式或名字
+	// 提交的写法（旧客户端的残留），一并接住以免它们再次落入静默丢弃。
+	Cron *string `json:"cron"`
+	Name *string `json:"name"`
+}
+
+// unsupportedFields 返回请求里出现的、PATCH 不支持修改的字段名。
+//
+// 判据是**是否出现**而不是取值是否为空：传了 `"time_of_day": ""` 的调用方
+// 同样以为自己改了什么，照样要告诉他改不了。
+func (r setScheduleEnabledRequest) unsupportedFields() []string {
+	var out []string
+	if r.Action != nil {
+		out = append(out, "action")
+	}
+	if r.SnapshotName != nil {
+		out = append(out, "snapshot_name")
+	}
+	if r.IncludeMemory != nil {
+		out = append(out, "include_memory")
+	}
+	if r.ScheduleType != nil {
+		out = append(out, "schedule_type")
+	}
+	if r.Weekdays != nil {
+		out = append(out, "weekdays")
+	}
+	if r.TimeOfDay != nil {
+		out = append(out, "time_of_day")
+	}
+	if r.Date != nil {
+		out = append(out, "date")
+	}
+	if r.Cron != nil {
+		out = append(out, "cron")
+	}
+	if r.Name != nil {
+		out = append(out, "name")
+	}
+	return out
 }
 
 // SetEnabled 启用或停用定时任务（API-050）。
@@ -125,6 +183,19 @@ func (h *Schedule) SetEnabled(ctx context.Context, c *app.RequestContext) {
 	// 无法区分，而后者是用户明确要关闭任务，不能当成参数缺失忽略掉。
 	if req.Enabled == nil {
 		api.Fail(c, api.InvalidParameter("缺少 enabled 字段"))
+		return
+	}
+
+	// 带了本接口改不了的字段就**拒绝**，而不是收下 enabled、把其余的丢掉。
+	//
+	// 静默丢弃比报错更糟：请求返回 200，用户据此以为执行时间已经改了，直到
+	// 某天发现任务还在老时间跑——那时他已经想不起是哪一步没生效。目前只有
+	// GET/POST/PATCH/DELETE 四条路由，没有整条更新的接口，所以文案指向的
+	// 补救办法是「删除后重建」，而不是一个并不存在的 PUT。
+	if extra := req.unsupportedFields(); len(extra) > 0 {
+		api.Fail(c, api.InvalidParameter(
+			"PATCH 仅支持启停（enabled）；请求里还带了 "+strings.Join(extra, "、")+
+				" —— 修改执行时间/动作请删除该任务后重新创建"))
 		return
 	}
 

@@ -226,23 +226,45 @@ func TestSystemNetworkIsCreatedOnce(t *testing.T) {
 	svc, db := newTestEnv(t, client)
 	ctx := context.Background()
 
-	first, err := svc.Networks(ctx, 1)
-	if err != nil {
+	// 读接口只**受理开通任务**，记录由执行器在节点操作成功后写入
+	//（旧实现直接往库里插一条没有网段、桥名写死 kbr0 的记录——宿主上
+	// 根本没有那座桥，面板却一直说网络可用）。
+	if _, err := svc.Networks(ctx, 1); err != nil {
 		t.Fatalf("查询失败: %v", err)
 	}
-	if len(first) != 1 {
-		t.Fatalf("网络数量 = %d, 期望 1", len(first))
+
+	var sys model.VpcSwitch
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := db.Where("node_id = ? AND is_system = ?", 1, true).First(&sys).Error; err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	if !first[0].IsSystem {
+	if sys.ID == 0 {
+		t.Fatal("开通任务没有落地系统网络记录")
+	}
+	if sys.Name != model.NetworkDefaultName {
+		t.Errorf("系统网络名 = %q, 期望 %q", sys.Name, model.NetworkDefaultName)
+	}
+	if !sys.IsSystem {
 		t.Error("系统基础网络未标记 is_system")
 	}
+	// 关键回归点：系统网络必须带**能真的建出来**的参数。没有网段的记录
+	// 既建不出网桥，也无法给虚拟机发地址。
+	if sys.CIDR == nil || *sys.CIDR == "" {
+		t.Error("系统网络缺少网段，无法开通")
+	}
+	if sys.BridgeName == "" || sys.BridgeName == "kbr0" {
+		t.Errorf("网桥名应由节点与名字推导，实际 %q", sys.BridgeName)
+	}
 
-	// 幂等（R-008）：重复执行不得产生重复网桥。
+	// 幂等（R-008）：已有记录时再次读取不得产生第二个开通任务。
 	second, err := svc.Networks(ctx, 1)
 	if err != nil {
 		t.Fatalf("二次查询失败: %v", err)
 	}
-	if len(second) != 1 || second[0].ID != first[0].ID {
+	if len(second) != 1 || second[0].ID != sys.ID {
 		t.Errorf("重复查询产生了新记录: %+v", second)
 	}
 
@@ -250,6 +272,11 @@ func TestSystemNetworkIsCreatedOnce(t *testing.T) {
 	db.Model(&model.VpcSwitch{}).Where("node_id = ?", 1).Count(&count)
 	if count != 1 {
 		t.Errorf("库中记录数 = %d, 期望 1", count)
+	}
+	var tasks int64
+	db.Model(&model.Task{}).Where("type = ?", model.TaskVPCSwitchChange).Count(&tasks)
+	if tasks != 1 {
+		t.Errorf("开通任务数 = %d, 期望 1（幂等键应去重）", tasks)
 	}
 }
 

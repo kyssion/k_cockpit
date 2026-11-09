@@ -20,6 +20,7 @@ import (
 	"k_cockpit/internal/platform/database"
 	"k_cockpit/internal/service/compute/vm"
 	"k_cockpit/internal/service/ops/task"
+	"k_cockpit/internal/service/platform/settings"
 )
 
 func newTestEnv(t *testing.T) (*vm.Service, *task.Queue, *gorm.DB) {
@@ -33,6 +34,19 @@ func newTestEnv(t *testing.T) (*vm.Service, *task.Queue, *gorm.DB) {
 // 这条分支用固定 mock 覆盖不到。测试需要可控的替身，而不是去改 mock ——
 // mock 的职责是让生产代码跑通，不是让测试好写。
 func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task.Queue, *gorm.DB) {
+	t.Helper()
+	return newTestEnvWithSettings(t, client, nil)
+}
+
+// newTestEnvWithSettings 允许替换设置源。
+//
+// 需要一个可注入设置源的入口：设置模块在生产是可选的（nil = 内置默认值），
+// 而「救援 ISO 已配置」这类分支只能靠一个非 nil 的 Provider 覆盖——它是
+// 一个三方法的接口，构造一份测试替身比为此装配整个设置服务（还要先建表、
+// 再写一行设置记录）直接得多。
+func newTestEnvWithSettings(
+	t *testing.T, client agent.Client, provider settings.Provider,
+) (*vm.Service, *task.Queue, *gorm.DB) {
 	t.Helper()
 
 	db, err := database.Open(config.DB{
@@ -128,8 +142,8 @@ func newTestEnvWithClient(t *testing.T, client agent.Client) (*vm.Service, *task
 		queue.Stop()
 	})
 
-	// settings 传 nil：本包不依赖设置模块，阈值走内置默认值。
-	svc := vm.NewService(db, queue, recorder, client, nil, nil)
+	// settings 由调用方决定：nil 表示「不配置任何设置项」，阈值走内置默认值。
+	svc := vm.NewService(db, queue, recorder, client, provider, nil)
 	if testCredentialKey != nil {
 		svc.SetEncryptionKey(testCredentialKey)
 	}

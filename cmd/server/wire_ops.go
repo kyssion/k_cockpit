@@ -106,4 +106,11 @@ func (a *app) setupCrossWiring() {
 	// 公网地址与端口转发的数量同样受计算配额约束：它们都是稀缺资源，
 	// 而"先到先得"通常不是管理员想要的分配策略。
 	a.network.publicIP.SetComputeQuota(a.compute.computeQuota)
+
+	// 节点纳管后开通系统基础网络（F-4-01 R-006）：纳管是生命周期事件，
+	// 在这里接上而不是让读接口在背后建网桥——读接口只负责读。
+	//
+	// 走接口而不是让 node 直接依赖 vswitch：node 是被多数域引用的底层包，
+	// 反向依赖会绕成环（同 authz 的 APIKeyAuth 处理方式）。
+	a.node.nodeSvc.WithBaseNetwork(a.network.networkSvc)
 }

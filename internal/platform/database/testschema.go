@@ -92,6 +92,13 @@ var conditionalIndexes = []conditionalIndex{
 	// 已删行 → 删掉同名模板后重新导入必然撞约束，而预览（GORM 自动过滤
 	// 软删行）却说"可以导入"。两处判定必须落在同一个口径上。
 	{model: &model.Template{}, name: "uniq_template_node_name"},
+	// 存储池「节点 + 设备」唯一索引：池是软删除，旧索引不排除已删行 →
+	// 删掉池后在同一块盘上重建必然撞唯一约束（实机测试抓出），设备
+	// 明明空闲却报「已被存储池占用」。
+	{model: &model.StoragePool{}, name: "uniq_storage_pool_node_device"},
+	// 节点同名唯一索引（实机 DEF：删掉待接入节点后无法用同名重新接入）。
+	// 与上面几条同型：软删除的表配无条件唯一索引，删除即自锁。
+	{model: &model.Node{}, name: "uniq_node_name"},
 }
 
 // rebuildConditionalIndexes 删掉再按模型建回这些索引；不存在时跳过。

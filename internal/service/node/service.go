@@ -57,6 +57,25 @@ type Service struct {
 	// 允许为 nil（单测与轻量部署）：此时 Stats 明确返回「不支持」，而不是
 	// 给出一堆 0——0% 的 CPU 看起来是「机器很闲」，而实际是「没读到」。
 	client agent.Client
+	// baseNet 在节点纳管成功后开通系统基础网络（F-4-01 R-006）。
+	//
+	// 声明成接口而不是直接依赖 vswitch 服务：node 是被多数域引用的底层包，
+	// 反过来依赖网络域会把依赖图绕成环（与本包 authz 的接口同理）。
+	baseNet BaseNetworkProvisioner
+}
+
+// BaseNetworkProvisioner 在节点纳管后为其开通系统基础网络。
+//
+// 实现在 network/vswitch：它按交换机开通任务下发到节点，宿主上建好网桥与
+// DHCP 之后才写记录——"记录存在"必然意味着"网桥真的在"。
+type BaseNetworkProvisioner interface {
+	EnsureSystemNetwork(ctx context.Context, nodeID int64) error
+}
+
+// WithBaseNetwork 装配系统基础网络的开通入口（nil 时跳过开通）。
+func (s *Service) WithBaseNetwork(p BaseNetworkProvisioner) *Service {
+	s.baseNet = p
+	return s
 }
 
 // NewService 构造节点服务。stats 为 nil 时指标接口返回「不支持」。
@@ -255,6 +274,17 @@ func (s *Service) Register(ctx context.Context, token, agentID, agentVersion str
 
 	node.EnrollState = model.NodeEnrollEnrolled
 	node.AgentID = &agentID
+
+	// 纳管成功即开通系统基础网络（幂等，走交换机开通任务）。
+	//
+	// 失败只记日志：节点已经进来了，"网络还没开通"是可以补的状态；把注册
+	// 判为失败会让 agent 反复重试注册，而令牌已经用掉——那是死循环。
+	if s.baseNet != nil {
+		if err := s.baseNet.EnsureSystemNetwork(ctx, node.ID); err != nil {
+			log.Printf("[node] 受理系统基础网络开通失败 node=%d: %v", node.ID, err)
+		}
+	}
+
 	view := s.toView(ctx, node)
 	return &view, nil
 }

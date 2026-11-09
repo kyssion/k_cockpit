@@ -9,12 +9,32 @@ import (
 
 	"gorm.io/gorm"
 
+	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/service/ops/task"
 )
+
+// redefineDomain 让节点按回收站留存的域 XML 重建域（vm.restore）。
+//
+// 这是"恢复"与"重新创建"的分界线：重建用的是删除当时的域定义，因此
+// 网卡 MAC、固件、机型、直通等配置都原样回来，不需要用户再填一遍。
+func (s *Service) redefineDomain(ctx context.Context, vm *model.VM) error {
+	result, err := s.agent.Execute(ctx, agent.Operation{
+		Kind:   agent.OpVMRestore,
+		NodeID: vm.NodeID,
+		Target: vm.Name,
+	})
+	if err != nil {
+		return api.Unavailable("节点不可达，恢复未送达")
+	}
+	if !result.Success {
+		return api.ValidationFailed(result.Message)
+	}
+	return nil
+}
 
 // TrashItem 是回收站里的一台虚拟机。
 type TrashItem struct {
@@ -102,8 +122,44 @@ func (s *Service) Restore(
 			"该节点上已经有一台同名且在线的「" + vm.Name + "」，请先改名或彻底删除其中一台")
 	}
 
+	// 恢复前确认域**还在节点上**。
+	//
+	// 移入回收站的任务会删除域定义（只保留磁盘），因此"恢复记录"并不等于
+	// "机器回来了"。节点侧在移入回收站时留了一份域 XML，所以这里可以
+	// **按那份 XML 重建域**——磁盘还在原处，重建出来就是原来那台机器。
+	//
+	// 只有在节点侧没有留存时（旧版本删除的记录、或删除方式为 transfer）
+	// 才如实拒绝：宁可明确说"恢复不了"，也不给一台状态永远 unknown、
+	// 开机必然失败的幽灵机器（实机抓出）。
+	status, err := s.probeStatus(ctx, &vm)
+	if err != nil {
+		// 节点不可达是另一回事：不能说成"域不存在"，那会把一次网络问题
+		// 指成一次数据丢失。原样上抛，由调用方看到 503。
+		var apiErr *api.Error
+		if errors.As(err, &apiErr) && apiErr.Code == api.CodeServiceUnavailable {
+			return err
+		}
+		status = model.VMStatusUnknown
+	}
+	if status == model.VMStatusUnknown {
+		if err := s.redefineDomain(ctx, &vm); err != nil {
+			return err
+		}
+		// 重建后重新探测：恢复后的第一眼就该是真状态。
+		status, err = s.probeStatus(ctx, &vm)
+		if err != nil || status == model.VMStatusUnknown {
+			return api.ValidationFailed(
+				"已在节点上重建域定义，但无法确认其状态，请稍后在详情页刷新；" +
+					"若仍显示未知，可彻底删除后重建")
+		}
+	}
+
 	if err := s.db.WithContext(ctx).Model(&model.VM{}).Where("id = ?", id).
-		Updates(map[string]any{"present": true, "deleted_at": nil}).Error; err != nil {
+		Updates(map[string]any{
+			"present": true, "deleted_at": nil,
+			// 顺手把运行态校正成真实值：恢复后的第一眼就该是真状态。
+			"status": status, "last_synced_at": time.Now(),
+		}).Error; err != nil {
 		log.Printf("[vm] 恢复虚拟机失败 id=%d: %v", id, err)
 		return api.Internal()
 	}

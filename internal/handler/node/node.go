@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -12,7 +14,21 @@ import (
 	"k_cockpit/internal/service/node"
 	"k_cockpit/internal/service/platform/auth"
 	"k_cockpit/internal/service/platform/risk"
+	"k_cockpit/internal/service/platform/settings"
 )
+
+// Options 是节点接口的可选装配项。
+type Options struct {
+	// AgentAddr 是控制面 agent 网关的监听地址（AGENT_LISTEN_ADDR）。
+	//
+	// 注册命令里的端口从这里取，而不是写死 8443：AGENT_LISTEN_ADDR
+	// 本来就是可配置项，写死会让「改成 18443 部署」的环境拿到一条
+	// 连不上的安装命令——而这条命令是用来复制粘贴的，错了只能靠人猜。
+	AgentAddr string
+	// Settings 用于读取「站点对外地址」：从反向代理或本机访问面板时，
+	// 请求的 Host 未必是 agent 能连到的地址。
+	Settings *settings.Service
+}
 
 // Node 提供节点管理接口（F-6-01 / F-6-02）。
 //
@@ -21,11 +37,12 @@ import (
 type Node struct {
 	svc  *node.Service
 	risk *risk.Guard
+	opts Options
 }
 
 // NewNode 构造节点接口。
-func NewNode(svc *node.Service, guard *risk.Guard) *Node {
-	return &Node{svc: svc, risk: guard}
+func NewNode(svc *node.Service, guard *risk.Guard, opts Options) *Node {
+	return &Node{svc: svc, risk: guard, opts: opts}
 }
 
 // List 返回节点列表（含运行态）。
@@ -214,11 +231,42 @@ func (h *Node) CreateEnrollToken(ctx context.Context, c *app.RequestContext) {
 	}
 
 	resp.InstallCommand = fmt.Sprintf(
-		"k_cockpit-agent enroll -server %s:8443 -token %s",
-		hostOnly(string(c.Request.Host())), result.Token,
+		"k_cockpit-agent enroll -server %s -token %s",
+		h.enrollAddr(string(c.Request.Host())), result.Token,
 	)
 
 	api.Created(c, resp)
+}
+
+// enrollAddr 拼出 agent 实际可连的网关地址 host:port。
+//
+// 取址优先级：
+//  1. 系统设置里的「站点对外地址」（basic.site_url）——反向代理或本机
+//     访问时请求 Host 不等于 agent 能连到的地址，显式配置最可靠；
+//  2. 请求的 Host（去掉端口）——浏览器从内网地址打开面板的常见情形；
+//  3. 都拿不到时退回 127.0.0.1（仅本机 agent 可用，至少不是一条语法错误的命令）。
+//
+// 端口一律取 AGENT_LISTEN_ADDR 的实际端口，不写死。
+func (h *Node) enrollAddr(requestHost string) string {
+	port := "8443"
+	if _, p, err := net.SplitHostPort(h.opts.AgentAddr); err == nil && p != "" {
+		port = p
+	}
+
+	host := hostOnly(requestHost)
+	if h.opts.Settings != nil {
+		if site := strings.TrimSpace(h.opts.Settings.String(settings.KeySiteURL, "")); site != "" {
+			if u, err := url.Parse(site); err == nil && u.Hostname() != "" {
+				// 只取主机名：站点地址是**面板**地址，它的端口属于 HTTP 面，
+				// 与 agent 网关端口是两个东西，混用会拼出一条连不上的命令。
+				host = u.Hostname()
+			}
+		}
+	}
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port)
 }
 
 // hostOnly 去掉 Host 头里的端口，用于拼接 agent 网关地址。

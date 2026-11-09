@@ -188,7 +188,14 @@ func (h *PublicIP) Preview(ctx context.Context, c *app.RequestContext) {
 		api.Fail(c, err)
 		return
 	}
-	api.OK(c, preview)
+	// 显式映射成小写字段：agent.PublicIPPreview 是**领域契约**（控制面与
+	// 节点之间逐字传输），不能给它加 json tag —— 那会让新旧 agent 之间的
+	// 字段名不一致（协议承诺 N-1 兼容）。对外契约的形状在这里单独定义。
+	api.OK(c, struct {
+		Added    []string `json:"added"`
+		Removed  []string `json:"removed"`
+		Warnings []string `json:"warnings"`
+	}{preview.Added, preview.Removed, preview.Warnings})
 }
 
 // BatchUnbind 批量解绑（API-300）。

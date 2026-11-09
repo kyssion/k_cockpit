@@ -26,6 +26,24 @@ import (
 //
 // 目录不存在时不注册任何东西——开发期前端跑在 vite dev server 上，控制面
 // 只提供 API 是常态，不该因此启动失败。
+// registerFallbacks 给「未匹配的路由 / 方法」装上统一错误封包。
+//
+// Hertz 默认返回 text/plain 的 "Not Found"：客户端按 JSON 解析会直接报
+// 解析错误，也拿不到错误码与 request_id（实机探针抓出）。API-only 部署
+// （没有前端产物、静态托管因此不启用）时这条兜底尤其重要。
+//
+// 必须在 registerStatic 之前调用：静态托管会用自己的 NoRoute 覆盖这里
+// 的 404 处理（Hertz 的 NoRoute 是替换而非追加），而它的实现里同样对
+// `/api/` 前缀返回 JSON 404。
+func registerFallbacks(h *server.Hertz) {
+	h.NoRoute(func(_ context.Context, c *app.RequestContext) {
+		api.Fail(c, api.NotFound("接口不存在"))
+	})
+	h.NoMethod(func(_ context.Context, c *app.RequestContext) {
+		api.Fail(c, api.MethodNotAllowed("该路径不支持 "+string(c.Method())+" 方法"))
+	})
+}
+
 func registerStatic(h *server.Hertz, dir string) {
 	if strings.TrimSpace(dir) == "" {
 		return

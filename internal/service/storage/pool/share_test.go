@@ -26,7 +26,24 @@ type shareEnv struct {
 	vm  *model.VM
 }
 
+// shareSetup 描述环境里那一条用户存储记录与节点上的存储池。
+//
+// 拆出来是为了覆盖「root_path 为 NULL」这类**真实数据**形态：用户在库里
+// 明明有记录、有文件，只是那一列从来没被写过（见 storageRoot 的说明）。
+type shareSetup struct {
+	// rootPath 是 user_storage.root_path；nil 表示该列为 NULL。
+	rootPath *string
+	// defaultPoolMount 非空时建一个默认存储池，挂载点即该值——
+	// 用户存储根的期望值由它算出来（UserdataRootOf）。
+	defaultPoolMount string
+}
+
 func newShareEnv(t *testing.T, root string) *shareEnv {
+	t.Helper()
+	return newShareEnvWith(t, shareSetup{rootPath: &root})
+}
+
+func newShareEnvWith(t *testing.T, setup shareSetup) *shareEnv {
 	t.Helper()
 
 	db, err := database.Open(config.DB{
@@ -56,6 +73,15 @@ func newShareEnv(t *testing.T, root string) *shareEnv {
 	}).Error; err != nil {
 		t.Fatalf("创建节点失败: %v", err)
 	}
+	if setup.defaultPoolMount != "" {
+		mount := setup.defaultPoolMount
+		if err := db.Create(&model.StoragePool{
+			NodeID: 1, DeviceID: "pool-1", DevicePath: strPtr("/dev/sdb"),
+			MountPath: &mount, IsDefault: true, Status: model.StoragePoolReady,
+		}).Error; err != nil {
+			t.Fatalf("创建默认存储池失败: %v", err)
+		}
+	}
 
 	owner := int64(7)
 	vm := model.VM{NodeID: 1, Name: "vm-share", Status: model.VMStatusStopped,
@@ -64,8 +90,9 @@ func newShareEnv(t *testing.T, root string) *shareEnv {
 		t.Fatalf("创建虚拟机失败: %v", err)
 	}
 
-	// 只有配了存储根的用户才能共享目录。
-	us := model.UserStorage{UserID: owner, NodeID: 1, Enabled: true, RootPath: &root}
+	// 只有开通了存储空间的用户才能共享目录。root_path 允许为 NULL——
+	// 那正是实机上的形态（这一列没有任何写入方）。
+	us := model.UserStorage{UserID: owner, NodeID: 1, Enabled: true, RootPath: setup.rootPath}
 	if err := db.Create(&us).Error; err != nil {
 		t.Fatalf("创建用户存储失败: %v", err)
 	}
@@ -345,7 +372,93 @@ func TestUnmountRemovesRecord(t *testing.T) {
 	waitForShareCount(t, env, 0)
 }
 
+// TestMountFallsBackToDefaultPoolRoot 覆盖「9p 共享对所有用户不可用」。
+//
+// 实机现象：用户明明已经有文件、节点侧的用户存储根也早已收敛到默认池，
+// POST /vms/:id/shares 却恒返回 422「你的存储空间尚未初始化」。
+//
+// 根因是 root_path 这一列**全仓库没有任何写入方**——新建的用户存储行里它
+// 是 NULL。而默认池的期望根本包算得出来（UserdataRootOf，与 agent 侧的
+// SyncUserdataRoot 同源）。因此这里要求：
+//  1. NULL + 有默认池 → 用算出来的根成功受理，拼出的路径落在 <池>/userdata 下；
+//  2. 顺手把根回写进 user_storage，下一个请求不必再算。
+func TestMountFallsBackToDefaultPoolRoot(t *testing.T) {
+	env := newShareEnvWith(t, shareSetup{defaultPoolMount: "/srv/pool0"})
+	ctx := context.Background()
+
+	task, err := env.svc.MountShare(ctx, pool.MountShareRequest{
+		VMID: env.vm.ID, RelPath: "data",
+	}, ownerViewer(), "alice", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("root_path 为 NULL 且有默认池时应受理: %v", err)
+	}
+	waitForShareActive(t, env, task.ID)
+
+	items, err := env.svc.ListShares(ctx, env.vm.ID, ownerViewer())
+	if err != nil {
+		t.Fatalf("查询共享失败: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("共享数 = %d, 期望 1", len(items))
+	}
+	// 期望根 = 默认池挂载点下的 userdata 子目录（与节点侧同一套约定）。
+	const wantRoot = "/srv/pool0/userdata"
+	if items[0].HostPath != wantRoot+"/data" {
+		t.Errorf("共享路径 = %q, 期望 %q", items[0].HostPath, wantRoot+"/data")
+	}
+	if items[0].RelPath != "data" {
+		t.Errorf("相对路径 = %q, 期望 data（存储根算对才反推得回来）", items[0].RelPath)
+	}
+
+	// 回写：root_path 必须被补上，且值就是算出来的根。
+	var us model.UserStorage
+	if err := env.db.Where("user_id = ? AND node_id = ?", 7, 1).First(&us).Error; err != nil {
+		t.Fatalf("读取用户存储失败: %v", err)
+	}
+	if us.RootPath == nil || *us.RootPath != wantRoot {
+		t.Errorf("root_path = %v, 期望回写为 %q", us.RootPath, wantRoot)
+	}
+}
+
+// TestMountWithoutDefaultPoolFailsClearly 覆盖回退也拿不到根的情况。
+//
+// 没有默认池时**不能退化成「拼在 / 下」**：那会让相对路径校验失去意义，
+// 用户填 "etc" 就指向了 /etc。此时必须给出明确的、可执行的拒绝。
+func TestMountWithoutDefaultPoolFailsClearly(t *testing.T) {
+	env := newShareEnvWith(t, shareSetup{})
+	ctx := context.Background()
+
+	_, err := env.svc.MountShare(ctx, pool.MountShareRequest{
+		VMID: env.vm.ID, RelPath: "data",
+	}, ownerViewer(), "alice", "10.0.0.1")
+	assertStatus(t, err, 422)
+
+	var apiErr *api.Error
+	if errors.As(err, &apiErr) && !strings.Contains(apiErr.Message, "存储空间") {
+		t.Errorf("拒绝原因未指向存储空间: %q", apiErr.Message)
+	}
+
+	// 失败时不留任何记录：留住一条 pending 的共享会让用户被「tag 已存在」
+	// 卡住，而那条记录永远不会有对应的挂载。
+	var count int64
+	env.db.Model(&model.ShareMount{}).Count(&count)
+	if count != 0 {
+		t.Errorf("被拒绝的请求留下了 %d 条共享记录", count)
+	}
+	// 也不回写 root_path：没有根可写，写一个空串会把「没配」与「配错了」
+	// 混成同一种状态。
+	var us model.UserStorage
+	if err := env.db.Where("user_id = ? AND node_id = ?", 7, 1).First(&us).Error; err != nil {
+		t.Fatalf("读取用户存储失败: %v", err)
+	}
+	if us.RootPath != nil {
+		t.Errorf("无默认池时被写入 root_path = %q", *us.RootPath)
+	}
+}
+
 // --- 辅助 ---
+
+func strPtr(s string) *string { return &s }
 
 func waitForShareActive(t *testing.T, env *shareEnv, taskID int64) {
 	t.Helper()

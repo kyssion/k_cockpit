@@ -169,6 +169,15 @@ func (h *VpcACL) Apply(ctx context.Context, c *app.RequestContext) {
 	if req.NodeID <= 0 {
 		req.NodeID = int64(api.QueryInt(c, "node_id"))
 	}
+	// 两处都没给就是**参数缺失**，不是"节点不可达"。
+	//
+	// 不拦的话它会被带到 Preview → agent.Execute(NodeID=0) → 失败 →
+	// 回落成 503「节点不支持 ACL 预览」：调用方会去查节点健康，而实际
+	// 只是忘了一个字段（实机探针抓出，与 List/Preview 的 400 口径不一致）。
+	if req.NodeID <= 0 {
+		api.Fail(c, api.InvalidParameter("必须指定 node_id"))
+		return
+	}
 	user := auth.CurrentUser(c)
 	info := auth.ClientInfoOf(c)
 

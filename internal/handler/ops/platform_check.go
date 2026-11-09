@@ -116,5 +116,5 @@ func (h *PlatformCheck) Repair(ctx context.Context, c *app.RequestContext) {
 		api.Fail(c, err)
 		return
 	}
-	api.OK(c, map[string]any{"task": t})
+	api.OK(c, api.WithTask(nil, t.ID, t.Status))
 }

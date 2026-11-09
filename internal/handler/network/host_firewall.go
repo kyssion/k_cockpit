@@ -172,7 +172,7 @@ func (h *HostFirewall) Apply(ctx context.Context, c *app.RequestContext) {
 		api.Fail(c, err)
 		return
 	}
-	api.OK(c, map[string]any{"task": t})
+	api.OK(c, api.WithTask(nil, t.ID, t.Status))
 }
 
 // Rollback 紧急回滚（API-316）。
@@ -194,7 +194,7 @@ func (h *HostFirewall) Rollback(ctx context.Context, c *app.RequestContext) {
 		api.Fail(c, err)
 		return
 	}
-	api.OK(c, map[string]any{"task": t})
+	api.OK(c, api.WithTask(nil, t.ID, t.Status))
 }
 
 // Connections 返回当前连接（API-317）。

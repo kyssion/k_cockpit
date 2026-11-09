@@ -17,6 +17,7 @@ import (
 	"errors"
 	"log"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -39,10 +40,14 @@ type Service struct {
 }
 
 // NewService 构造导入服务。quota 允许为 nil。
+//
+// 构造期顺带做一次**启动自愈**：把上一个进程遗留的在途导入记录收敛为失败
+// （理由见 recoverInterruptedImports）。
 func NewService(
 	db *gorm.DB, queue *task.Queue, client agent.Client,
 	recorder *audit.Recorder, quotaChecker vm.QuotaChecker,
 ) *Service {
+	recoverInterruptedImports(db)
 	return &Service{db: db, queue: queue, agent: client, audit: recorder, quota: quotaChecker}
 }
 
@@ -489,4 +494,48 @@ func toView(row *model.ImageImport) View {
 		}
 	}
 	return view
+}
+
+// interruptedImportMessage 是「重启中断」的唯一文案。
+//
+// 措辞与导出那两处刻意不同：导入的下一步不是"重试同一个包"，而是重新走一遍
+// 上传/选择的受理流程（记录里已经指不出一个可重放的来源），所以是"重新导入"。
+const interruptedImportMessage = "控制面重启，导入中断，请重新导入"
+
+// recoverInterruptedImports 在构造期把重启前遗留的在途导入记录收敛为失败。
+//
+// **要解决的问题**：image_import 行在**入队之前**就创建（Create 里
+// Status=ImportPending），随后由 executor.go 改成 ImportRunning，终态
+// success/failed 同样由执行器写回。进程被强杀时执行器不会跑，而启动恢复
+// （ops/task 的 recoverStale）只处理 task 表——于是记录会永久停在
+// pending/running：界面一直显示"导入中"，用户既拿不到产物模板也无法重试，
+// 连记录都删不掉（Delete 会以"仍在进行中"拒绝）。
+//
+// **为什么可以无条件收敛所有 pending/running，而不必按时间阈值判断**：控制面
+// 是单实例的（internal/platform/database/instancelock.go 用 PostgreSQL 会话级
+// advisory lock 保证同一个库只有一处写入；SQLite 形态本身就是单进程写者），
+// 而且那把锁在 cmd/server 装配服务**之前**就已经拿到，因此进程启动的这一瞬间**不可能**存在另一个实例在途的导入任务——凡是仍为
+// pending/running 的行，其执行器一定随上一个进程一起消失了。按时间给宽限期
+// 反而留下"重启后仍然显示导入中"的窗口，而那正是本函数要消灭的现象。
+//
+// **只改状态与 error，不动节点侧文件**：进程被强杀时节点上的格式转换可能仍在
+// 收尾，控制面无法可靠判断产物是否完整；置 failed 后用户可以重新导入，而残留
+// 文件的清理由存储侧的删除路径负责。
+//
+// 失败只记日志：这是启动期的自愈，不该因为一条展示用的记录而阻断启动。
+func recoverInterruptedImports(db *gorm.DB) {
+	res := db.Model(&model.ImageImport{}).
+		Where("status IN ?", []string{model.ImportPending, model.ImportRunning}).
+		Updates(map[string]any{
+			"status":      model.ImportFailed,
+			"error":       interruptedImportMessage,
+			"finished_at": time.Now(),
+		})
+	if res.Error != nil {
+		log.Printf("[import] 收敛重启前遗留的在途导入记录失败: %v", res.Error)
+		return
+	}
+	if res.RowsAffected > 0 {
+		log.Printf("[import] 已把 %d 条重启前遗留的导入记录标记为失败", res.RowsAffected)
+	}
 }

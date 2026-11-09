@@ -2,8 +2,10 @@ package settings_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gorm.io/gorm"
@@ -461,5 +463,121 @@ func TestProviderReadsEffectiveValue(t *testing.T) {
 	svc.Update(ctx, map[string]string{"vm.stale_threshold_seconds": "60"}, 1, "admin", "10.0.0.1")
 	if got := svc.Int("not.a.real.key", 7); got != 7 {
 		t.Errorf("未知键应返回 fallback, 实际 %d", got)
+	}
+}
+
+// --- 首尾空白 ---
+
+// lastAuditAfter 读回某个设置项最近一次审计里的 AfterState。
+func lastAuditAfter(t *testing.T, db *gorm.DB, key string) map[string]any {
+	t.Helper()
+
+	var row model.AuditLog
+	if err := db.Where("resource_type = ? AND resource_name = ?", "setting", key).
+		Order("id DESC").First(&row).Error; err != nil {
+		t.Fatalf("读取 %s 的审计记录失败: %v", key, err)
+	}
+	if row.AfterState == nil {
+		t.Fatalf("%s 的审计记录没有 after_state", key)
+	}
+	var after map[string]any
+	if err := json.Unmarshal([]byte(*row.AfterState), &after); err != nil {
+		t.Fatalf("解析 after_state 失败: %v", err)
+	}
+	return after
+}
+
+// TestUpdateTrimsWhitespace 覆盖「首尾空格被原样入库」。
+//
+// 实测库里 `notification.smtp_from_name` 存成 `"K Cockpit     "`（5 个尾随
+// 空格）：界面上用户看不出结尾有几个空格，下次保存又把它带上，而它还会
+// 流进发件人名称这种**看得见**的地方。
+//
+// 只裁首尾、不动中间：`"K  Cockpit"` 里那两个空格是有意的排版。
+func TestUpdateTrimsWhitespace(t *testing.T) {
+	svc, db := newTestEnv(t)
+	ctx := context.Background()
+
+	results, err := svc.Update(ctx, map[string]string{
+		"notification.smtp_from_name": "  k-cockpit  ",
+	}, 1, "admin", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("调用失败: %v", err)
+	}
+	if results[0].Status != settings.StatusApplied {
+		t.Fatalf("状态 = %q（%s）", results[0].Status, results[0].Message)
+	}
+
+	item, err := svc.Get(ctx, "notification.smtp_from_name")
+	if err != nil {
+		t.Fatalf("查询失败: %v", err)
+	}
+	if item.Value != "k-cockpit" {
+		t.Errorf("生效值 = %q, 期望 trim 后的 k-cockpit", item.Value)
+	}
+
+	// 审计里记的必须是**实际生效的那个值**：审计说带空格、实际不带，
+	// 就等于事后无法从审计还原系统当时的行为。
+	after := lastAuditAfter(t, db, "notification.smtp_from_name")
+	if got := after["value"]; got != "k-cockpit" {
+		t.Errorf("审计中的新值 = %v, 期望 trim 后的 k-cockpit", got)
+	}
+
+	// 中间的空格不受影响。
+	if _, err := svc.Update(ctx, map[string]string{
+		"notification.smtp_from_name": " K  Cockpit ",
+	}, 1, "admin", "10.0.0.1"); err != nil {
+		t.Fatalf("调用失败: %v", err)
+	}
+	item, _ = svc.Get(ctx, "notification.smtp_from_name")
+	if item.Value != "K  Cockpit" {
+		t.Errorf("生效值 = %q, 期望只裁首尾的 K  Cockpit", item.Value)
+	}
+}
+
+// TestUpdateBlankSecretKeepsPrevious 覆盖「只有空格的密码」。
+//
+// trim 之前，"   " 不等于空串，于是它会被当成「用户要把密码改成三个空格」，
+// 既改坏了配置，又让界面在下次回显时显示「已设置」。用户眼里那一栏就是
+// 没填——那就该走「留空保持原值」同一条分支。
+func TestUpdateBlankSecretKeepsPrevious(t *testing.T) {
+	svc, db := newTestEnv(t)
+	ctx := context.Background()
+
+	if _, err := svc.Update(ctx, map[string]string{
+		"notification.smtp_password": "s3cret",
+	}, 1, "admin", "10.0.0.1"); err != nil {
+		t.Fatalf("设置密码失败: %v", err)
+	}
+
+	results, err := svc.Update(ctx, map[string]string{
+		"notification.smtp_password": "   ",
+	}, 1, "admin", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("调用失败: %v", err)
+	}
+	if results[0].Status != settings.StatusApplied {
+		t.Fatalf("状态 = %q（%s）", results[0].Status, results[0].Message)
+	}
+	if !strings.Contains(results[0].Message, "保持原有值") {
+		t.Errorf("文案 = %q, 应说明「留空，保持原有值不变」", results[0].Message)
+	}
+
+	// 库里的值必须**一个字都没动**。
+	var row model.SystemSetting
+	if err := db.Where("key = ?", "notification.smtp_password").First(&row).Error; err != nil {
+		t.Fatalf("读取设置失败: %v", err)
+	}
+	if row.Value == nil || *row.Value != "s3cret" {
+		t.Errorf("库里的密码 = %v, 期望保持 s3cret", row.Value)
+	}
+
+	// 真正生效的配置也没变。
+	cfg, err := svc.MailConfig(ctx)
+	if err != nil {
+		t.Fatalf("读取邮件配置失败: %v", err)
+	}
+	if cfg.Password != "s3cret" {
+		t.Errorf("生效密码 = %q, 期望 s3cret", cfg.Password)
 	}
 }

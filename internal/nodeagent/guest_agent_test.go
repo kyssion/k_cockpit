@@ -173,3 +173,35 @@ func TestGuestAgentChannelSameInAllPaths(t *testing.T) {
 		}
 	}
 }
+
+// 网卡必须落到所选网桥上；OVS 桥还要带 virtualport。
+//
+// 实机抓出的两个缺陷都在这一段：
+//  1. 创建时网卡恒为 type='user'（SLIRP），选的交换机只写进了数据库——
+//     端口转发 / 安全组 / DHCP 对新建虚拟机全部不生效；
+//  2. 接 OVS 桥但不声明 virtualport 时，libvirt 按 Linux 桥处理，
+//     开机报 "Unable to add bridge kbrX port vnet0: Operation not supported"。
+func TestBuildDomainXMLNetworkAttachment(t *testing.T) {
+	spec := minimalSpec()
+
+	spec.NicBridge = "kbr0"
+	out := spec.BuildDomainXML()
+	if !strings.Contains(out, "<interface type='bridge'>") || !strings.Contains(out, "<source bridge='kbr0'/>") {
+		t.Fatalf("Linux 桥未写进域定义:\n%s", out)
+	}
+	if strings.Contains(out, "virtualport") {
+		t.Errorf("Linux 桥不应带 virtualport:\n%s", out)
+	}
+
+	spec.NicBridgeOVS = true
+	out = spec.BuildDomainXML()
+	if !strings.Contains(out, "<virtualport type='openvswitch'/>") {
+		t.Fatalf("OVS 桥缺少 virtualport（开机会失败）:\n%s", out)
+	}
+
+	spec.NicBridge = ""
+	spec.NicBridgeOVS = false
+	if out = spec.BuildDomainXML(); !strings.Contains(out, "<interface type='user'>") {
+		t.Errorf("无网桥时应退回用户态网络:\n%s", out)
+	}
+}

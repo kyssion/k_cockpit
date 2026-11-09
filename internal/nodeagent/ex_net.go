@@ -181,12 +181,14 @@ func platformCheck(ctx context.Context, op agent.Operation, report Reporter) (*a
 				r.Actual = "OVS 上没有该端口"
 			}
 		case "port_mirror":
-			name := "kc-mir-" + e.Target
-			if mirrorRowExists(ctx, name) {
+			// 多目标镜像一个目标一条 Mirror 行（kc-mir-<name>-<i>），因此
+			// 不能只按旧版单行名判定——那样已生效的镜像会被报成「配置丢了」，
+			// 自检就变成了恒定的假偏差。
+			if row, ok := mirrorPresentRow(ctx, e.Target); ok {
 				r.Present = true
-				r.Actual = "OVS 上存在镜像行 " + name
+				r.Actual = "OVS 上存在镜像行 " + row
 			} else {
-				r.Actual = "OVS 上没有镜像行 " + name
+				r.Actual = "OVS 上没有镜像行 " + mirrorRowPrefix(e.Target)
 			}
 		case "public_ip":
 			r.Unverifiable = true

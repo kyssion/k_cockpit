@@ -89,10 +89,14 @@ func (s *Service) SetComputeQuota(c ComputeQuotaChecker) {
 }
 
 // NewService 构造虚拟机服务。
+//
+// 构造期顺带做一次**启动自愈**：把上一个进程遗留的在途导出记录收敛为失败
+// （理由见 recoverInterruptedExports）。
 func NewService(
 	db *gorm.DB, queue *task.Queue, recorder *audit.Recorder, client agent.Client,
 	provider settings.Provider, quotaChecker QuotaChecker,
 ) *Service {
+	recoverInterruptedExports(db)
 	return &Service{
 		db: db, queue: queue, audit: recorder, agent: client,
 		settings: provider, quota: quotaChecker,
@@ -702,6 +706,10 @@ func (s *Service) CreateBatch(
 	if f, ok := editFieldByKey("memory_mb"); ok && f.Max > 0 && req.MemoryMB > f.Max {
 		return nil, api.InvalidParameter("内存超出上限 " + strconv.Itoa(f.Max) + " MB")
 	}
+	// 架构相关的默认值按节点自报的宿主架构补齐（只在请求空缺时生效）：
+	// 创建向导与直接调用 API 两条路径共用同一份解析，避免「表单给对了、
+	// 提交又被默认成 x86_64」。
+	req = s.applyNodeArchDefaults(ctx, req)
 	if err := validateCreateConfig(req); err != nil {
 		return nil, err
 	}

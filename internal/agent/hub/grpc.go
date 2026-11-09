@@ -12,6 +12,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
@@ -181,13 +182,78 @@ func (h *Hub) Serve(ln net.Listener) error {
 	return gs.Serve(ln)
 }
 
-// Stop 优雅停止网关：停止接收新连接，等待在途 RPC 收尾。
+// gatewayStopGrace 是「等 agent 连接自己收尾」的上限。
+//
+// 取 3s 而不是 main 里 HTTP 那 5s 的原因：这里要等的对象只有 agent 的
+// **长连接双向流**，它们的正常寿命是整个进程；再怎么等也不会自己结束，
+// 超过几秒只会让运维看到「收到 SIGTERM 了但进程还活着」。3s 足够让正在
+// 发送中的下行消息写出去，又短到不会让人以为停机卡死。
+const gatewayStopGrace = 3 * time.Second
+
+// Stop 停止网关并关闭全部节点连接。
+//
+// 为什么不能只调 GracefulStop：grpc.Server.GracefulStop 会等所有在途 RPC
+// **自然结束**，而 agent 的 Channel（见本文件 Channel 方法）是长连接双向
+// 流——只要节点在线，它的 Recv 就永远阻塞着。于是「等它结束」等于「等到
+// 世界末日」：实机上进程收到 SIGTERM 后存活 22 分钟不退出，继续持有
+// 192.168.64.x:18443 的 ESTABLISHED 连接，并且还在把心跳写进共享库，
+// 造成「节点列表显示在线、新实例的连接表却是空的、所有指令送不达」。
+//
+// 所以这里做的是「有限等待 + 强制停止」：给在途传输一点收尾窗口，超时就
+// 断连接。断连接会依次触发 Channel 的 Recv 返回错误 → defer detach →
+// conn.closeAll，把每个在途 Execute 以「结果未知」收场（见 closeAll 注释）。
 func (h *Hub) Stop() {
 	h.mu.Lock()
 	gs := h.gs
+	// 连接数只用于日志，取一次快照即可；强制停止过程中它必然在变。
+	online := len(h.conns)
 	h.mu.Unlock()
-	if gs != nil {
+	if gs == nil {
+		return
+	}
+	if stopGateway(gs, gatewayStopGrace) {
+		log.Printf("[agent-hub] 优雅停止超时（%s），强制关闭 %d 条节点连接："+
+			"agent 的 Channel 是长连接，GracefulStop 会一直等它自然结束", gatewayStopGrace, online)
+	}
+}
+
+// grpcStopper 只取 grpc.Server 与测试替身共有的两个停止方法。
+//
+// 收窄到这两方法是为了让「超时后强制停止」这条路径能在单测里被抓住：
+// 直接依赖 *grpc.Server 的话，唯一可行的验证方式是起真实 mTLS 服务并
+// 伪造一条永不结束的流——太重，于是没人写，缺陷也就一直留着。
+type grpcStopper interface {
+	GracefulStop()
+	Stop()
+}
+
+// stopGateway 先尝试优雅停止，超时后强制停止。返回值表示是否走了强制停止。
+//
+// 并发安全的前提（grpc-go v1.84 server.go 的 stop 实现，已核对）：
+//   - GracefulStop 与 Stop 都只 Fire 同一个 quit/done 事件，Fire 是 CAS 的，
+//     重复与并发调用都安全；
+//   - GracefulStop 在 "等待连接数归零" 处阻塞时用的是条件变量（已释放
+//     s.mu），因此并发的 Stop 能拿到锁、关闭所有传输、把连接数打到 0，
+//     从而让那条 GracefulStop 也随之返回。
+//
+// gs 不能为 nil（nil 判断在调用方）：helper 只负责按时序决策，不替调用方
+// 兜空值，避免「传空就静默成功」这种最难查的假象。
+func stopGateway(gs grpcStopper, grace time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
 		gs.GracefulStop()
+	}()
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return false
+	case <-timer.C:
+		// 在途 RPC 里有永不结束的长连接流：Stop 会立刻关闭监听与全部
+		// 连接，使 Serve 返回、Channel 的 Recv 报错退出。
+		gs.Stop()
+		return true
 	}
 }
 

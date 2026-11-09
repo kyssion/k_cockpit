@@ -119,8 +119,8 @@ func TestGrowSucceeds(t *testing.T) {
 	if res.OldGB != 100 || res.NewGB != 200 {
 		t.Errorf("容量记录不对: %d → %d", res.OldGB, res.NewGB)
 	}
-	if res.Task == nil {
-		t.Error("应产生任务")
+	if res.TaskID == 0 || res.Status == "" {
+		t.Errorf("应产生任务: task_id=%d status=%q", res.TaskID, res.Status)
 	}
 	if !res.GuestGrowNeeded {
 		t.Error("必须标出「来宾里还要扩分区」——不提醒的话用户会以为扩容失败")

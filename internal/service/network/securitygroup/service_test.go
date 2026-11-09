@@ -402,6 +402,46 @@ func TestCrossNodeSwitchRejected(t *testing.T) {
 	assertStatus(t, err, 422)
 }
 
+// TestSoftDeletedSwitchRejected 覆盖「把规则挂到已删除的交换机上」。
+//
+// 交换机删除是软删（deleted_at 是自定义列，GORM 不会自动过滤），而宿主机上
+// 的网桥随删除一起消失。放行这种目标会得到一条**看起来生效、实际没有任何
+// 流量会命中**的规则——用户以为放行了，排查时却找不到任何报错。
+func TestSoftDeletedSwitchRejected(t *testing.T) {
+	svc, db := newTestEnv(t)
+	ctx := context.Background()
+	group := seedGroup(t, svc, "已删交换机组")
+
+	now := time.Now()
+	gone := model.VpcSwitch{
+		NodeID: 1, Name: "sw-gone", BridgeName: "br-gone", DeletedAt: &now,
+	}
+	if err := db.Create(&gone).Error; err != nil {
+		t.Fatalf("创建已删交换机失败: %v", err)
+	}
+	live := model.VpcSwitch{NodeID: 1, Name: "sw-live", BridgeName: "br-live"}
+	if err := db.Create(&live).Error; err != nil {
+		t.Fatalf("创建交换机失败: %v", err)
+	}
+
+	switchRule := func(switchID int64) securitygroup.RuleRequest {
+		return securitygroup.RuleRequest{
+			Direction: model.DirectionIngress, Protocol: model.ProtocolTCP,
+			PortStart: port(22), TargetType: model.TargetSwitch,
+			TargetValue: strconv.FormatInt(switchID, 10),
+		}
+	}
+
+	_, err := svc.CreateRule(ctx, group, switchRule(gone.ID), admin(), "admin", "")
+	assertStatus(t, err, 422)
+
+	// 未被删除的交换机必须照旧可用——只测拒绝的用例拦不住一个「全都拒绝」
+	// 的实现，而那种实现会让安全组功能彻底不可用。
+	if _, err := svc.CreateRule(ctx, group, switchRule(live.ID), admin(), "admin", ""); err != nil {
+		t.Fatalf("未删除的交换机应可挂规则: %v", err)
+	}
+}
+
 func TestTenantCannotSeeOthersGroup(t *testing.T) {
 	svc, db := newTestEnv(t)
 	ctx := context.Background()

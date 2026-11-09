@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -253,6 +254,13 @@ func (s *Service) RemoveCDROM(
 // **几乎一定需要重启**：热插拔的总线支持各不相同（sata 通常可以，ide 与
 // scsi 多数不行）。因此这里不假装是即时生效的——结果里会带上 RebootNeeded，
 // 而界面据此提示。
+//
+// 记录**不在受理时改**：换总线在节点上是一次 detach + attach，任一步失败
+// 域里就还是旧设备。先改库会让控制面与域定义分叉——实机复现过「界面显示
+// ide、节点仍是 sata、而任务其实是 failed」，之后所有基于记录的判断（设备
+// 名、重启提示、导出的清单一类）都错在一个无人察觉的地方。
+//
+// 因此真正的切换与回写都交给执行器：只有节点回报成功，`vm_cdrom.bus` 才变。
 func (s *Service) SetCDROMBus(
 	ctx context.Context, vmID, cdromID int64, bus string,
 	v authz.Viewer, operatorName, clientIP string,
@@ -267,12 +275,20 @@ func (s *Service) SetCDROMBus(
 	if row.Bus == bus {
 		return nil, api.ValidationFailed("总线类型没有变化")
 	}
-	if err := s.db.WithContext(ctx).Model(&model.VMCDROM{}).
-		Where("id = ?", row.ID).Update("bus", bus).Error; err != nil {
-		return nil, api.Internal()
+	// 机型兼容性先在受理阶段拦一次（节点侧还有一道，那是最终防线）：
+	// virt 机型（aarch64 常用）没有 IDE 控制器，写进定义不会报错，要到
+	// **开机**才报 `IDE controllers are unsupported for this QEMU binary or
+	// machine type`——那等于把机器变成开不了机的状态。
+	//
+	// 记录里的机型可能为空（旧数据）：那时不预判，交给节点按真实定义判断。
+	if bus == model.CDROMBusIDE && strings.HasPrefix(strings.ToLower(vm.MachineType), "virt") {
+		return nil, api.ValidationFailed(
+			"当前机型 " + vm.MachineType + " 不支持 IDE 控制器，请选择 sata 或 scsi")
 	}
 
-	t, err := s.enqueueCDROM(ctx, vm, *row, "bus", v)
+	// 下发的目标总线是新值，同时带上旧总线：节点要按旧总线算旧设备名
+	//（hdc / sda 取决于总线），否则它无从知道该摘掉哪一个设备。
+	t, err := s.enqueueCDROMBus(ctx, vm, *row, bus, v)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +299,7 @@ func (s *Service) SetCDROMBus(
 		Action: "vm.cdrom.bus",
 		Params: map[string]any{
 			"order_no": row.OrderNo, "from": row.Bus, "to": bus,
-			"note": "换总线类型通常需要重启虚拟机才生效",
+			"note": "换总线类型通常需要重启虚拟机才生效；记录在任务成功后才更新",
 		},
 		Success: true, ClientIP: clientIP,
 	})
@@ -337,6 +353,28 @@ func (s *Service) loadCDROM(
 func (s *Service) enqueueCDROM(
 	ctx context.Context, vm *model.VM, row model.VMCDROM, action string, v authz.Viewer,
 ) (*model.Task, error) {
+	return s.enqueueCDROMTask(ctx, vm, row, action, row.Bus, 0, v)
+}
+
+// enqueueCDROMBus 入队一次「换总线」。
+//
+// 与其它动作的差别有两处参数：目标是**新**总线（`bus`），旧总线单独放在
+// `from_bus` —— 节点必须同时知道两者才能摘掉旧设备、挂上新设备；以及
+// `cdrom_id`，执行器靠它在成功之后把新总线写回记录（失败则保持旧值）。
+func (s *Service) enqueueCDROMBus(
+	ctx context.Context, vm *model.VM, row model.VMCDROM, targetBus string, v authz.Viewer,
+) (*model.Task, error) {
+	return s.enqueueCDROMTask(ctx, vm, row, "bus", targetBus, row.ID, v)
+}
+
+// enqueueCDROMTask 是各动作共用的入队实现。
+//
+// fromBus 取自记录里的当前总线（`row.Bus`），targetBus 是本次要落到的总线；
+// 除了换总线，两者相同。cdromID 为 0 时不带该参数（其它动作不需要回写）。
+func (s *Service) enqueueCDROMTask(
+	ctx context.Context, vm *model.VM, row model.VMCDROM, action, targetBus string,
+	cdromID int64, v authz.Viewer,
+) (*model.Task, error) {
 	isoPath := ""
 	if row.ISOFileID != nil {
 		var f model.StorageFile
@@ -344,6 +382,17 @@ func (s *Service) enqueueCDROM(
 			First(&f, *row.ISOFileID).Error; err == nil {
 			isoPath = f.RelPath
 		}
+	}
+	params := map[string]any{
+		"action": action, "vm_id": vm.ID, "vm_name": vm.Name,
+		"order_no": row.OrderNo, "bus": targetBus,
+		"iso_file_id": row.ISOFileID, "iso_path": isoPath,
+	}
+	if action == "bus" {
+		// 旧总线：节点用它算旧设备名（ide 是 hd*，sata/scsi 是 sd*）。
+		// 少了它节点只能猜一个设备名去摘，而摘错设备的后果是域里少一块盘。
+		params["from_bus"] = row.Bus
+		params["cdrom_id"] = cdromID
 	}
 	t, err := s.queue.Enqueue(ctx, task.Spec{
 		Type:         model.TaskVMCDROMApply,
@@ -353,11 +402,7 @@ func (s *Service) enqueueCDROM(
 		ResourceName: vm.Name,
 		OwnerID:      derefOwner(vm.OwnerID),
 		CreatedBy:    v.UserID,
-		Params: map[string]any{
-			"action": action, "vm_id": vm.ID, "vm_name": vm.Name,
-			"order_no": row.OrderNo, "bus": row.Bus,
-			"iso_file_id": row.ISOFileID, "iso_path": isoPath,
-		},
+		Params:       params,
 	})
 	if err != nil {
 		return nil, err

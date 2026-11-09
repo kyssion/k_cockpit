@@ -33,7 +33,13 @@ type Node struct {
 	ID int64 `gorm:"primaryKey"`
 	// Name 带唯一索引：节点名是用户识别机器的唯一凭据，重名会让「哪台是哪台」
 	// 无法回答。索引名与迁移中的 uniq_node_name 对应。
-	Name string `gorm:"size:64;not null;uniqueIndex:uniq_node_name"`
+	//
+	// 索引带 `where:deleted_at IS NULL`：节点是**软删除**，移除一台机器后
+	// 用同一个名字重新接入是常规操作（换机、重装）。无条件唯一索引会让
+	// 那条记录永远占着名字——服务层的重名检查查不到已删行（GORM 默认过滤
+	// deleted_at），入库却撞唯一约束，表现为「名字不存在但建不出来」。
+	// 与 uniq_template_node_name / uniq_storage_pool_node_device 同一类修正。
+	Name string `gorm:"size:64;not null;uniqueIndex:uniq_node_name,where:deleted_at IS NULL"`
 	// ⚠️ **GORM 陷阱**（同 model/schedule.go 的 Enabled）：`default:true` 时
 	// 值为 `false` 会被当作零值省略，数据库填入 `true`。
 	//

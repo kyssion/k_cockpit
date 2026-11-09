@@ -30,11 +30,15 @@ import (
 )
 
 const (
-	// templatePackageRoot 是模板包在节点上的根（相对用户存储根）。
-	templatePackageRoot = userdataRoot + "/templates"
 	// templatePackageChunk 是单次取回的最大分片（与 VM 导出一致，8 MiB）。
 	templatePackageChunk = 8 << 20
 )
+
+// templatePackageRoot 是模板包在节点上的根（用户存储根之下）。
+//
+// 它是函数而不是常量：用户存储根可以被控制面改写到存储池里，模板包必须
+// 跟着一起走——留一份写在系统盘上的常量会得到两个互相看不见的目录。
+func templatePackageRoot() string { return userdataRoot() + "/templates" }
 
 // templatePackageManifest 是 manifest.json 的线上形状。
 //
@@ -80,8 +84,9 @@ func resolveUserdataPath(rel string) (string, error) {
 	if filepath.IsAbs(rel) {
 		return "", fmt.Errorf("必须是相对于用户存储根的路径")
 	}
-	p := filepath.Join(userdataRoot, rel)
-	if p != userdataRoot && !strings.HasPrefix(p, userdataRoot+"/") {
+	// 切换存储根之前上传的文件仍在历史根里，读取类调用必须能找到它们。
+	p := resolveExistingUserdataPath(rel)
+	if !underUserdataRoot(p) {
 		return "", fmt.Errorf("路径越出用户存储根: %s", rel)
 	}
 	return p, nil
@@ -176,11 +181,11 @@ func vmTemplateExport(ctx context.Context, op agent.Operation, report Reporter) 
 		return failResult("序列化清单失败: " + err.Error()), nil
 	}
 
-	if err := osMkdirAllErr(templatePackageRoot); err != nil {
+	if err := osMkdirAllErr(templatePackageRoot()); err != nil {
 		return failResult("创建模板包目录失败: " + err.Error()), nil
 	}
 	pkgName := sanitizeFileName(name) + "-v" + strconv.Itoa(version) + ".tar.gz"
-	pkgPath := filepath.Join(templatePackageRoot, pkgName)
+	pkgPath := filepath.Join(templatePackageRoot(), pkgName)
 	_ = os.Remove(pkgPath)
 
 	report(Stage{Key: "archive_pack", Name: "打包为 tar.gz", Index: 3, Total: 3})
@@ -286,7 +291,7 @@ func vmTemplateExportFetch(ctx context.Context, op agent.Operation, report Repor
 	if err != nil {
 		return failResult(err.Error()), nil
 	}
-	if err := requireUnder(templatePackageRoot, p); err != nil {
+	if err := requireUnder(templatePackageRoot(), p); err != nil {
 		return failResult("不是模板包路径: " + rel), nil
 	}
 	f, err := os.Open(p)
@@ -348,7 +353,7 @@ func vmTemplateExportDelete(ctx context.Context, op agent.Operation, report Repo
 	if err != nil {
 		return failResult(err.Error()), nil
 	}
-	if err := requireUnder(templatePackageRoot, p); err != nil {
+	if err := requireUnder(templatePackageRoot(), p); err != nil {
 		return failResult("拒绝删除模板包目录之外的路径: " + p), nil
 	}
 	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
@@ -553,7 +558,7 @@ func resolveImportPackage(op agent.Operation) (string, error) {
 	}
 	// 导入来源是「我的存储」里的任意模板包（用户上传位置不固定），
 	// 只要在用户存储根内即可；导出产物才是固定落在 templates/ 下。
-	if err := requireUnder(userdataRoot, p); err != nil {
+	if err := requireUnder(userdataRoot(), p); err != nil {
 		return "", fmt.Errorf("不是用户存储路径: %s", rel)
 	}
 	if _, err := os.Stat(p); err != nil {

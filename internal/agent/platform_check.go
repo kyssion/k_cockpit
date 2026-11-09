@@ -59,93 +59,93 @@ const PlatformCheckKey = "platform_check"
 // OVSStatus 是 Open vSwitch 的运行状态。
 type OVSStatus struct {
 	// Available 为 false 时 Reason 说明原因。
-	Available bool
-	Reason    string
+	Available bool   `json:"available"`
+	Reason    string `json:"reason"`
 	// Version 是 OVS 版本。
-	Version string
+	Version string `json:"version"`
 	// ServiceActive 表示 ovs-vswitchd 服务在跑。
 	//
 	// **与 Available 分开**：装好了但服务挂了是最容易被忽略的一种状态——
 	// 探测说"可用"，而所有依赖它的功能都不生效。
-	ServiceActive bool
+	ServiceActive bool `json:"service_active"`
 	// OpenFlow13 表示支持 OpenFlow 1.3（端口安全与镜像依赖它）。
-	OpenFlow13 bool
+	OpenFlow13 bool `json:"openflow13"`
 	// MeterAvailable 表示 meter 表可用（包速率限制依赖它）。
-	MeterAvailable bool
+	MeterAvailable bool `json:"meter_available"`
 	// BridgeCount / PortCount / FlowCount 是规模概览。
-	BridgeCount int
-	PortCount   int
-	FlowCount   int
+	BridgeCount int `json:"bridge_count"`
+	PortCount   int `json:"port_count"`
+	FlowCount   int `json:"flow_count"`
 	// Fix 给出不可用时要做什么。
-	Fix string
+	Fix string `json:"fix"`
 }
 
 // OVSPort 是 OVS 上的一个端口。
 type OVSPort struct {
-	Name   string
-	Bridge string
+	Name   string `json:"name"`
+	Bridge string `json:"bridge"`
 	// Type 是端口类型（internal / system / vnet）。
-	Type string
+	Type string `json:"type"`
 	// Tag 是 VLAN tag（0 表示未打标）。
-	Tag int
+	Tag int `json:"tag"`
 	// VMName 是该端口对应的虚拟机（控制面填），空表示不是虚拟机的口。
 	//
 	// 节点只能看到 vnet 这样的口名，而"这个口属于哪台机器"要靠控制面
 	// 对上——没有它，用户在一列 vnet0/vnet1 里找不出自己要找的那台。
-	VMName string
+	VMName string `json:"vm_name"`
 }
 
 // DHCPLease 是一条租约。
 type DHCPLease struct {
 	// ExpiresAt 是到期时刻（RFC3339，空表示永不过期）。
-	ExpiresAt string
-	MAC       string
-	IP        string
-	Hostname  string
+	ExpiresAt string `json:"expires_at"`
+	MAC       string `json:"mac"`
+	IP        string `json:"ip"`
+	Hostname  string `json:"hostname"`
 	// ClientID 是客户端标识，排查"同一个 MAC 拿了两个地址"时要用。
-	ClientID string
+	ClientID string `json:"client_id"`
 }
 
 // PlatformCheck 是一次自检的结果。
 type PlatformCheck struct {
 	// Items 是逐项检查结果。
-	Items []CheckItem
+	Items []CheckItem `json:"items"`
 	// Drifts 是**偏差数量**（配置与实际不一致的项数）。
 	//
 	// 它是自检最核心的一个数字：环境缺什么是"装没装"的问题，而偏差是
 	// "我们以为它在，其实它不在"——后者不报警、不被发现，直到用户自己撞上。
-	Drifts int
+	Drifts int `json:"drifts"`
 	// Unverified 是节点**无法核对**的期望项数量。
 	//
 	// 与偏差分开：节点拿不到可定位的标识时，回答"不存在"会制造恒定假偏差，
 	// 回答"存在"则是假成功。这类项既不计入 Drifts，也不装作检查通过。
-	Unverified int
+	Unverified int `json:"unverified"`
 }
 
 // CheckItem 是一项检查结果。
 type CheckItem struct {
 	// Category 是分类（网络底座 / 端口安全 / 公网地址 / 端口镜像 ...）。
-	Category string
+	Category string `json:"category"`
 	// Target 是被检查的具体对象。
-	Target string
+	Target string `json:"target"`
 	// Expected 是控制面的期望状态。
-	Expected string
+	Expected string `json:"expected"`
 	// Actual 是节点上的实际状态。
-	Actual string
+	Actual string `json:"actual"`
 	// OK 为 false 表示这是一处**偏差**。
-	OK bool
+	OK bool `json:"ok"`
 	// Severity 取 info / warning / critical。
 	//
 	// 分级而不是一律"有问题"：一个不影响连通性的偏差（如少了一条计数规则）
 	// 与"整个 VPC 隔离失效"不该得到同样的注意力。
-	Severity string
+	Severity string `json:"severity"`
 	// Fix 说明这一项要做什么。
-	Fix string
+	Fix string `json:"fix"`
 	// Repairable 表示能不能通过重新下发修复。
 	//
 	// **不能修的要说出来**：缺 OVS 装不上、内核模块加载不了——把它们混在
 	// "可修复"里，用户会点那个按钮、等一会、然后发现什么都没变。
-	Repairable bool
+	Repairable bool `json:"repairable"`
 }
 
 // PlatformRepairInfo 是修复结果。
