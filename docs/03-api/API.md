@@ -473,12 +473,38 @@
 | API-067 | PATCH | `/api/v1/vms/:id/lock` | 加锁 / 解锁业务软锁（F-2-12）。**同步生效、不入队**——锁只存在于控制面，虚拟化层不知道它的存在。**加锁不需验证，解锁需要**：锁的全部意义就是让删除必须先经过一道明确的动作，解锁若只是一次普通点击，它就只是减速带 | 是（仅解锁） | 已实现 | F-2-12 |
 | API-068 | GET | `/api/v1/vms/:id/stats` | 实时运行指标（Hero 资源卡）。只读探测，**不入队、不写投影**——指标是瞬时的，存下来只会在下一次读取时给出过期的答案。响应含 `at`（采集时刻），界面据此标注新鲜度：轮询失败时不能把上一组数字当成当前的 | 是 | 已实现 | F-2-01 |
 | API-069 | GET | `/api/v1/vms/:id/console/frame` | 控制台预览截帧（Hero 预览卡）。返回 **image/png 字节**而非 JSON——画面是二进制，塞进 JSON 只是多绕一圈。`display=none` 的虚拟机返回 422（判据与 `has_console` 一致：两处各判各的会出现「卡片上有预览、点进去没有控制台」） | 是 | 已实现 | F-2-01 |
+| API-393 | GET | `/api/v1/invites/preview` | 按邀请令牌预览邀请信息（昵称、到期时间），**不需要登录**——被邀请人此刻还没有账号。令牌无效 / 过期 / 已使用时不区分原因，避免用来枚举邀请 | 否（公开） | 已实现 | F-1-05 |
+| API-394 | POST | `/api/v1/invites/accept` | 接受邀请并创建账号。凭据是邀请令牌本身（一次性、有到期时间），因此这是**唯一一条未登录也能进的写操作入口**；创建后仍需走首次改密 | 否（公开） | 已实现 | F-1-05 |
+| API-395 | DELETE | `/api/v1/request-logs` | 见文末「机械对账补登」注记 | 是（管理员） | 已实现 | — |
+| API-396 | DELETE | `/api/v1/storage-partitions` | 见文末「机械对账补登」注记 | 是（管理员） | 已实现 | — |
+| API-397 | DELETE | `/api/v1/vpc-acl/:id` | 见文末「机械对账补登」注记 | 是（管理员） | 已实现 | — |
+| API-398 | GET | `/api/v1/invites` | 见文末「机械对账补登」注记 | 是（管理员） | 已实现 | — |
+| API-399 | GET | `/api/v1/request-logs` | 见文末「机械对账补登」注记 | 是（管理员） | 已实现 | — |
+| API-400 | GET | `/api/v1/security/password-audit` | 见文末「机械对账补登」注记 | 是（管理员） | 已实现 | — |
+| API-401 | GET | `/api/v1/storage-partitions` | 见文末「机械对账补登」注记 | 是（管理员） | 已实现 | — |
+| API-402 | GET | `/api/v1/vpc-acl` | 见文末「机械对账补登」注记 | 是（管理员） | 已实现 | — |
+| API-403 | GET | `/api/v1/vpc-acl/preview` | 见文末「机械对账补登」注记 | 是（管理员） | 已实现 | — |
+| API-404 | POST | `/api/v1/invites` | 见文末「机械对账补登」注记 | 是（管理员） | 已实现 | — |
+| API-405 | POST | `/api/v1/invites/:id/resend` | 见文末「机械对账补登」注记 | 是（管理员） | 已实现 | — |
+| API-406 | POST | `/api/v1/invites/:id/revoke` | 见文末「机械对账补登」注记 | 是（管理员） | 已实现 | — |
+| API-407 | POST | `/api/v1/security/password-audit` | 见文末「机械对账补登」注记 | 是（管理员） | 已实现 | — |
+| API-408 | POST | `/api/v1/storage-partitions` | 见文末「机械对账补登」注记 | 是（管理员） | 已实现 | — |
+| API-409 | POST | `/api/v1/storage/trim` | 见文末「机械对账补登」注记 | 是（管理员） | 已实现 | — |
+| API-410 | POST | `/api/v1/vpc-acl` | 见文末「机械对账补登」注记 | 是（管理员） | 已实现 | — |
+| API-411 | POST | `/api/v1/vpc-acl/apply` | 见文末「机械对账补登」注记 | 是（管理员） | 已实现 | — |
+| API-412 | PUT | `/api/v1/vpc-acl/:id` | 见文末「机械对账补登」注记 | 是（管理员） | 已实现 | — |
 
-> **公开接口共 13 个**：`/health`、`/api/v1/setup/*`（2 个）、`/api/v1/auth/login`，以及登录后续阶段的 9 个接口（`/auth/login/verify`、`/auth/login/password`、`/auth/bootstrap/*` 5 个、`/auth/forgot/*` 3 个）。
+> **公开接口共 16 个**（以 `internal/router/routes_*.go` 的注册为准，与 `internal/handler/platform/apidocs_meta.go` 的 `publicAPIRoutes` 逐条一致）：`/health`、`/api/v1/setup/*`（2 个）、`/api/v1/auth/login`、登录后续阶段的 9 个接口（`/auth/login/verify`、`/auth/login/password`、`/auth/bootstrap/*` 5 个、`/auth/forgot/*` 3 个），以及邀请注册的 `/invites/preview`、`/invites/accept` 2 个。
 >
 > 前三者的公开理由是「系统尚无可用凭据时的自举需要」：初始化接口靠**只能从服务端日志获取**的一次性令牌保护（[ADR-0008](../06-decisions/0008-first-admin-bootstrap.md)），登录接口是获取凭据的入口本身。
 >
-> 后 9 个的公开理由是「**处于这个状态的人拿不出任何凭据**」：要求登录才能改初始密码、找回密码或走完引导，等于没有这些功能。它们的凭据是**请求体里的 `login_token`**（五分钟、单次、不下发 Cookie），而找回密码全程只有邮箱验证码与一次性重置票据。新增公开接口必须在此说明理由。
+> 中间 9 个的公开理由是「**处于这个状态的人拿不出任何凭据**」：要求登录才能改初始密码、找回密码或走完引导，等于没有这些功能。它们的凭据是**请求体里的 `login_token`**（五分钟、单次、不下发 Cookie），而找回密码全程只有邮箱验证码与一次性重置票据。
+>
+> 最后 2 个的公开理由是「**被邀请人还没有账号**」：预览与接受邀请是账号创建之前唯一的入口，凭据是邀请令牌本身（一次性、有到期时间）；接受邀请后账号仍须走首次改密才可用。这两条此前漏登，2026-11-10 交付测试 `TP-23 TC-23-2` 机械对账时发现并补齐。
+>
+> 新增公开接口必须在此说明理由，并同步 `publicAPIRoutes` 与本注记的计数；`TestPublicAPIRoutesMatchRouter` 会守这个一致性。
+>
+> **机械对账补登（2026-11-10，交付测试 `TP-23 TC-23-1`）**：API-395 ~ API-412 共 18 条端点此前已在 `internal/router/routes_*.go` 注册、但本节契约清单漏登。逐条核对后判定为**文档滞后，不是实现缺漏**（守卫列按代码 `g.requireAuth` / `g.adminOnly` 逐条填写）。它们集中在请求日志、存储分区、VPC ACL、邀请管理与口令审计五组，说明列暂以本注记代替，后续按域补写语义。本节清单并未逐条覆盖全部 340 条运行时域路由，新增路由时必须同时登记；`TestGuardMatrixRouteCountAndMethods` 守路由总数与方法分布，`TestPublicAPIRoutesMatchRouter` / `TestAdminAPIRoutesMatchRouter` 守权限声明一致性。
 
 **状态口径**：
 

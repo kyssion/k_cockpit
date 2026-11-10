@@ -18,6 +18,18 @@
 ## [Unreleased]
 
 ### Added
+- **交付测试计划与执行报告（2026-11-10）**：新增 [`DELIVERY_TEST_PLAN.md`](docs/04-engineering/DELIVERY_TEST_PLAN.md)（能力基线、TP-00 ~ TP-23 共 24 套件、六视角追溯矩阵、五道阶段门与出口准则）与执行报告；`docs/README.md` 索引同步登记。
+- **路由守卫矩阵的 CI 用例（G-14）**：新增 `internal/handler/platform/guard_matrix_test.go`，从 `routes_*.go` 逐条解析 340 条域路由，校验总数与 GET/POST/PUT/PATCH/DELETE 方法分布、public 15 / admin 160 / user 165 三档互斥且覆盖全集、`publicAPIRoutes` 与源码逐条一致、adminOnly 必须同时挂 requireAuth。新增路由漏标权限时 CI 直接失败。
+- **跨资源检索的单测（G-14 / TC-19-7）**：新增 `internal/service/ops/search/service_test.go`（6 例），覆盖空/单字符关键字、LIKE 通配符按字面匹配、租户 VM 归属隔离、模板可见性、节点仅管理员可见、每类 5 条上限。
+- **接口契约补登（G-08）**：`docs/03-api/API.md` 补登邀请注册 2 条公开接口（API-393/394）与机械对账发现的 18 条漏登端点（API-395 ~ 412），公开接口注记由「13 个」修订为 **16 个**并写明逐条理由与一致性守护测试。
+
+### Fixed
+- **跨资源检索的 LIKE 通配符未转义**：`search.Service` 此前把用户输入直接拼进 `LIKE '%q%'`，搜 `%` 会命中全部资源（`auditlog` 已有转义，此处漏了）。现按同一口径转义 `%` / `_` / `\`，并给三条查询全部加上 `ESCAPE '\'` 子句——SQLite 没有默认转义符，不写 ESCAPE 时该修复会在测试库上静默失效。
+
+### Security
+- **实机走查 spec 的硬编码凭据**：`web/e2e-live/live.spec.ts` 不再把测试管理员口令写死在源码里，改为 `E2E_ADMIN_USER` / `E2E_ADMIN_PASSWORD` 环境变量注入，缺少口令时明确报错退出。
+
+### Added
 - **第三批收口（2026-11-05）**：`vmtag` 域迁入 `internal/repository/vmtag`（service 不再持有 `*gorm.DB`，权限判定留服务层、事务留 repo）；删除 `settings/spec.go` 中 11 个从未接线的设置项及随之变空的会话分组，并同步替换测试样本；打通 SPICE 能力链路（节点侧保守探测 `virsh domcapabilities` → 心跳能力标记 → 控制面按节点同步 `vm.spice_supported`），覆盖存量 VM 与能力消失的回退，真机判定列入验收清单。
 - **第二批收口（2026-11-05）**：新增 PostgreSQL 会话级单实例锁（`instancelock.go`，SQLite 开发形态明确降级并记录约束）；新增 tag 触发的 `release.yml`（linux amd64/arm64 制品 + `SHA256SUMS`，**只出制品不部署**）；新增 [ADR-0014（Proposed）](docs/06-decisions/0014-node-channel-and-agent-lifecycle.md) 登记 live 热迁移 / relay / 证书续期 / agent 自动升级 / GeoIP 的候选方案与前置条件；GeoIP 未实现能力改为诚实阻断：端口转发 `allowed_regions` 从对外契约移除并拒绝旧字段、防火墙三个写入 `geoip_regions` 的入口明确拒绝（节点侧无消费方）、前端移除无效的地区输入。
 - **本地开发建库入口（2026-11-05）**：新增 `go run ./cmd/dev-init`，按 GORM 模型幂等建出本地 SQLite 全套表。此前 `AGENTS.md` 的「`cp .env.example .env && go run ./cmd/server`」会得到一个没有任何表的库（服务启动不做自动迁移，唯一建表入口 `cmd/e2e-init` 是 E2E 专用且拒绝已存在库）；`AGENTS.md`、`DATA_MODEL.md`、`DEVELOPMENT.md` 已同步。
