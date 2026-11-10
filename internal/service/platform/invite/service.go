@@ -73,6 +73,10 @@ type CreateRequest struct {
 // 足够大多数人点开。过期可以重发，代价很低。
 const defaultTTLHours = 72
 
+// maxTTLHours 是邀请有效期上限（30 天）。与注册令牌同理：没有上限时
+// ttl_hours 传大会让 time.Duration 乘法溢出，过期时间反而落到过去。
+const maxTTLHours = 30 * 24
+
 // minPasswordLen 是受邀人自设密码的下限。
 const minPasswordLen = 12
 
@@ -105,6 +109,9 @@ func (s *Service) Create(
 	}
 	if role != model.RoleTenant && role != model.RoleAdmin {
 		return nil, api.InvalidParameter("角色必须是 tenant 或 admin")
+	}
+	if req.TTLHours < 0 || req.TTLHours > maxTTLHours {
+		return nil, api.InvalidParameter("邀请有效期需在 1-720 小时之间（不填为 72 小时）")
 	}
 
 	// 已存在的账号不能再邀请：那不是"邀请"，是改角色。
@@ -219,6 +226,11 @@ func (s *Service) Resend(
 	if row.AcceptedAt != nil {
 		return nil, api.Conflict("该邀请已被使用")
 	}
+	// 撤销是「收回入口」而不是「暂停」：重发若把 revoked_at 清掉，管理员
+	// 刚撤销的链接会重新变成可用，撤销动作等于没做。要再邀请就新建一条。
+	if row.RevokedAt != nil {
+		return nil, api.Conflict("该邀请已撤销，不能重发——请重新创建邀请")
+	}
 	token, err := randomToken()
 	if err != nil {
 		return nil, err
@@ -230,14 +242,12 @@ func (s *Service) Resend(
 		Updates(map[string]any{
 			"token_hash": hashToken(token),
 			"expires_at": expires,
-			"revoked_at": nil,
 		}).Error; err != nil {
 		log.Printf("[invite] 重发邀请失败: %v", err)
 		return nil, api.Internal()
 	}
 	row.TokenHash = hashToken(token)
 	row.ExpiresAt = expires
-	row.RevokedAt = nil
 
 	link := s.linkFor(ctx, token)
 	if s.mail != nil {

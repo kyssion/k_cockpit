@@ -171,6 +171,13 @@ func (s *Service) Set(
 		return nil
 	}
 
+	// 配额挂在 (节点, 用户) 上。给不存在的对象写一条，会产生界面上无主、
+	// 又不随任何资源删除的孤儿记录；用户被删后它还占着列表。删除路径
+	// 不校验，是为了仍能把历史遗留的孤儿记录清掉。
+	if err := s.ensureQuotaTargets(ctx, nodeID, userID); err != nil {
+		return err
+	}
+
 	assign := model.ComputeQuota{
 		NodeID: nodeID, UserID: userID,
 		VCPU: limits.VCPU, MemoryMB: limits.MemoryMB, VMCount: limits.VMCount,
@@ -198,6 +205,29 @@ func (s *Service) Set(
 		},
 		Success: true, ClientIP: clientIP,
 	})
+	return nil
+}
+
+// ensureQuotaTargets 确认配额的两个归属对象都真实存在。
+func (s *Service) ensureQuotaTargets(ctx context.Context, nodeID, userID int64) error {
+	var nodes int64
+	if err := s.db.WithContext(ctx).Model(&model.Node{}).
+		Where("id = ?", nodeID).Count(&nodes).Error; err != nil {
+		log.Printf("[computequota] 查询节点失败 node=%d: %v", nodeID, err)
+		return api.Internal()
+	}
+	if nodes == 0 {
+		return api.NotFound("节点不存在")
+	}
+	var users int64
+	if err := s.db.WithContext(ctx).Model(&model.User{}).
+		Where("id = ?", userID).Count(&users).Error; err != nil {
+		log.Printf("[computequota] 查询用户失败 user=%d: %v", userID, err)
+		return api.Internal()
+	}
+	if users == 0 {
+		return api.NotFound("用户不存在")
+	}
 	return nil
 }
 

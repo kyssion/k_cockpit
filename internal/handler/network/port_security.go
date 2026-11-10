@@ -97,7 +97,12 @@ func (h *PortSecurity) Apply(ctx context.Context, c *app.RequestContext) {
 		api.Fail(c, err)
 		return
 	}
-	api.OK(c, map[string]any{"precheck": check, "policy": policy, "task_id": taskID})
+	var policyView any
+	if policy != nil {
+		v := portsecurity.ToView(policy)
+		policyView = &v
+	}
+	api.OK(c, map[string]any{"precheck": check, "policy": policyView, "task_id": taskID})
 }
 
 // Disable 停用（API-253）。

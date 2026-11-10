@@ -118,8 +118,12 @@ func (s *Service) Counts(ctx context.Context) (active int, danger int, err error
 	return int(a), int(d), nil
 }
 
-// Ack 确认一条告警。
+// Ack 确认一条告警。确认是全平台可见的状态变更，只允许管理员执行：
+// 路由层已挂 adminOnly，这里再做一次判断，避免将来新增入口时漏配。
 func (s *Service) Ack(ctx context.Context, id int64, v authz.Viewer) error {
+	if !v.IsAdmin {
+		return api.PermissionDenied("只有管理员可以确认告警")
+	}
 	now := time.Now()
 	res := s.db.WithContext(ctx).Model(&model.Alert{}).
 		Where("id = ? AND status != ?", id, model.AlertCleared).
@@ -138,8 +142,11 @@ func (s *Service) Ack(ctx context.Context, id int64, v authz.Viewer) error {
 	return nil
 }
 
-// AckAll 确认当前全部未确认告警。
+// AckAll 确认当前全部未确认告警（同样只允许管理员）。
 func (s *Service) AckAll(ctx context.Context, v authz.Viewer) (int, error) {
+	if !v.IsAdmin {
+		return 0, api.PermissionDenied("只有管理员可以确认告警")
+	}
 	now := time.Now()
 	res := s.db.WithContext(ctx).Model(&model.Alert{}).
 		Where("status = ?", model.AlertActive).

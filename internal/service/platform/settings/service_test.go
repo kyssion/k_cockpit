@@ -444,13 +444,13 @@ func TestProviderReadsEffectiveValue(t *testing.T) {
 	ctx := context.Background()
 
 	// 默认值。
-	if got := svc.Int(settings.KeyVMStaleThreshold, 999); got != 60 {
-		t.Errorf("默认阈值 = %d, 期望 60", got)
+	if got := svc.Int(settings.KeyVMStaleThreshold, 999); got != 120 {
+		t.Errorf("默认阈值 = %d, 期望 120", got)
 	}
 
-	svc.Update(ctx, map[string]string{settings.KeyVMStaleThreshold: "120"}, 1, "admin", "10.0.0.1")
-	if got := svc.Int(settings.KeyVMStaleThreshold, 999); got != 120 {
-		t.Errorf("更新后的阈值 = %d, 期望 120", got)
+	svc.Update(ctx, map[string]string{settings.KeyVMStaleThreshold: "180"}, 1, "admin", "10.0.0.1")
+	if got := svc.Int(settings.KeyVMStaleThreshold, 999); got != 180 {
+		t.Errorf("更新后的阈值 = %d, 期望 180", got)
 	}
 
 	// 环境变量优先级更高。

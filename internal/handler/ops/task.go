@@ -244,11 +244,22 @@ func (h *Task) ClearTasks(ctx context.Context, c *app.RequestContext) {
 	var req struct {
 		KeepDays int `json:"keep_days"`
 	}
-	_ = c.Bind(&req)
+	// 空 body = 默认保留 7 天；非空但解析不了（例如 keep_days 写成字符串）
+	// 不能静默回落到默认值——那是「按 7 天清掉历史任务」的破坏性动作。
+	if len(c.Request.Body()) > 0 {
+		if err := c.Bind(&req); err != nil {
+			api.Fail(c, api.InvalidParameter("请求参数不合法"))
+			return
+		}
+	}
 
 	days := req.KeepDays
-	if days <= 0 {
+	if days == 0 {
 		days = 7
+	}
+	if days < 0 {
+		api.Fail(c, api.InvalidParameter("保留天数不能为负数"))
+		return
 	}
 	if days > 3650 {
 		// **必须给出响应**：静默 return 会让客户端一直等一个永远不来的答复，

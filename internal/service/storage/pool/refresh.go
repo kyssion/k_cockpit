@@ -90,13 +90,17 @@ func (l *CapacityRefreshLoop) Stop() {
 
 // RunOnce 执行一轮刷新（导出供测试驱动）。
 //
-// 只碰 ready 且未删除的池；离线节点一次失败的往返就跳过整节点的池，
-// 下一轮再试。失败才记调度事件——正常轮次没有可说的，每三分钟一条
-// 「刷新成功」只会把有价值的事件埋掉。
+// 只碰 ready / unmounted 且未删除的池；离线节点一次失败的往返就跳过整
+// 节点的池，下一轮再试。失败才记调度事件——正常轮次没有可说的，每三分钟
+// 一条「刷新成功」只会把有价值的事件埋掉。
+//
+// unmounted 也要继续轮询：它是「设备暂时不在」的降级态，挂载恢复后要能
+// 自动回到 ready；只查 ready 会让池一旦降级就永远出不来。
 func (l *CapacityRefreshLoop) RunOnce(ctx context.Context) error {
 	var pools []model.StoragePool
 	if err := l.db.WithContext(ctx).
-		Where("status = ? AND deleted_at IS NULL", model.StoragePoolReady).
+		Where("status IN ? AND deleted_at IS NULL",
+			[]string{model.StoragePoolReady, model.StoragePoolUnmounted}).
 		Find(&pools).Error; err != nil {
 		return err
 	}
@@ -182,6 +186,12 @@ func refreshNodePools(
 	}
 
 	stats, _ := result.Data[agent.PoolStatListKey].([]agent.PoolStat)
+	if len(stats) == 0 {
+		// 节点一条都没上报：可能是旧版 agent，也可能是这一轮探测整体失败。
+		// 既不能据此刷新时间戳（那会说谎），也不能据此断定池未挂载
+		// （那会把每个旧 agent 节点的池全部降级）。保持原状，下轮再试。
+		return nil
+	}
 	byPath := make(map[string]agent.PoolStat, len(stats))
 	for _, st := range stats {
 		byPath[st.Path] = st
@@ -190,12 +200,27 @@ func refreshNodePools(
 	now := time.Now()
 	for i := range list {
 		mountPath := derefStr(list[i].MountPath)
-		// stale 不是存储列——toPoolView 按 last_reported_at 现算，
-		// 刷新它即可让列表页的新鲜度标记恢复正确。
-		updates := map[string]any{"last_reported_at": now}
-		if st, ok := byPath[mountPath]; ok {
+		st, found := byPath[mountPath]
+		// stale 不是存储列——toPoolView 按 last_reported_at 现算。
+		// 只有节点确认「这是真挂载点」时才刷新时间戳与容量：否则宁可让
+		// 数据自然变陈旧，也不能把根分区的容量刷成「刚刚上报的池容量」。
+		updates := map[string]any{}
+		switch {
+		case found && st.Mounted:
+			updates["last_reported_at"] = now
 			updates["total_bytes"] = st.TotalBytes
 			updates["usable_bytes"] = st.FreeBytes
+			if list[i].Status == model.StoragePoolUnmounted {
+				updates["status"] = model.StoragePoolReady
+			}
+		case list[i].Status == model.StoragePoolReady:
+			// 节点说这个挂载点不在挂载表里（或压根没返回）：设备多半在
+			// 重启后丢了。降级为 unmounted，界面给出「需要先挂载」。
+			updates["status"] = model.StoragePoolUnmounted
+			log.Printf("[storage] 池 %d 挂载点 %s 已不是独立挂载，状态降级为 unmounted",
+				list[i].ID, mountPath)
+		default:
+			continue
 		}
 		if err := db.WithContext(ctx).Model(&model.StoragePool{}).
 			Where("id = ?", list[i].ID).Updates(updates).Error; err != nil {

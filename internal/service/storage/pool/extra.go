@@ -203,7 +203,9 @@ func (s *Service) UpdatePoolConfig(
 		updates["auto_mount"] = *req.AutoMount
 	}
 	if req.Remark != nil {
-		updates["remark"] = req.Remark
+		// 明确解引用：往 Updates 的 map 里塞指针，写入值依赖 GORM 的
+		// 反射解引用，回读容易拿到空值或指针文本。
+		updates["remark"] = *req.Remark
 	}
 	if err := s.db.WithContext(ctx).Model(&model.StoragePool{}).
 		Where("id = ?", id).Updates(updates).Error; err != nil {

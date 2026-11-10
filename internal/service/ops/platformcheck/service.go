@@ -439,6 +439,16 @@ func (s *Service) Repair(
 	if len(kinds) == 0 {
 		kinds = []string{"port_security", "public_ip", "port_mirror"}
 	}
+	// 未知类型不能「建一条空任务然后报成功」：repairItems 只挑认识的类型，
+	// 多出来的那个会被无声丢掉，用户看到的却是任务成功（第 12 轮真机复现）。
+	for _, k := range kinds {
+		switch k {
+		case "port_security", "public_ip", "port_mirror":
+		default:
+			return nil, api.InvalidParameter(
+				"未知的修复类型 " + k + "；可选 port_security / public_ip / port_mirror")
+		}
+	}
 	items, err := s.repairItems(ctx, nodeID, kinds)
 	if err != nil {
 		return nil, err

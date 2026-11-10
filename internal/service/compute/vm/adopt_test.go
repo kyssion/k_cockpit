@@ -2,9 +2,12 @@ package vm_test
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"testing"
 
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/service/compute/vm"
 )
@@ -81,6 +84,19 @@ func TestForceDeleteRespectsLock(t *testing.T) {
 
 // TestUnmanagedDomainsFiltersKnown 扫描结果要过滤掉已有记录的域名：
 // 不过滤的话，每台已纳管的机器都会出现在「未纳管」列表里。
+// TestUnmanagedDomainsRejectsMissingNode 查一个不存在的节点应报 404，
+// 而不是落到 agent.Execute 失败后的 503「节点不可达」。后者会把参数错误
+// 伪装成服务故障，真机第 12 轮的全端点扫描就是这样扫出来的。
+func TestUnmanagedDomainsRejectsMissingNode(t *testing.T) {
+	svc, _, _ := newTestEnv(t)
+	_, err := svc.UnmanagedDomains(context.Background(), 999,
+		authz.Viewer{UserID: 1, IsAdmin: true})
+	var apiErr *api.Error
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound {
+		t.Fatalf("期望 404 节点不存在，实际 %v", err)
+	}
+}
+
 func TestUnmanagedDomainsFiltersKnown(t *testing.T) {
 	svc, _, db := newTestEnv(t)
 	if err := db.Create(&model.VM{

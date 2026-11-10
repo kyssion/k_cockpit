@@ -28,6 +28,9 @@ type PortForwardRef struct {
 // PortForwardBatchResult 是批量删除的结果。
 type PortForwardBatchResult struct {
 	Removed []PortForwardRef `json:"removed"`
+	// TaskIDs 对应每条已受理的删除任务。响应里说「已提交 N 条删除任务」
+	// 却不给任务号，调用方就无法跟踪它们跑到哪一步了。
+	TaskIDs []int64 `json:"task_ids"`
 	Failed  []struct {
 		Ref    PortForwardRef `json:"ref"`
 		Reason string         `json:"reason"`
@@ -55,13 +58,15 @@ func (s *Service) RemovePortForwards(
 
 	out := &PortForwardBatchResult{
 		Removed: []PortForwardRef{},
+		TaskIDs: []int64{},
 		Failed: []struct {
 			Ref    PortForwardRef `json:"ref"`
 			Reason string         `json:"reason"`
 		}{},
 	}
 	for _, ref := range refs {
-		if _, err := s.RemovePortForward(ctx, ref.VMID, ref.ID, v, operatorName, clientIP); err != nil {
+		task, err := s.RemovePortForward(ctx, ref.VMID, ref.ID, v, operatorName, clientIP)
+		if err != nil {
 			out.Failed = append(out.Failed, struct {
 				Ref    PortForwardRef `json:"ref"`
 				Reason string         `json:"reason"`
@@ -69,6 +74,9 @@ func (s *Service) RemovePortForwards(
 			continue
 		}
 		out.Removed = append(out.Removed, ref)
+		if task != nil {
+			out.TaskIDs = append(out.TaskIDs, task.ID)
+		}
 	}
 
 	switch {

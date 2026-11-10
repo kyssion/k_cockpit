@@ -320,3 +320,39 @@ func TestNoticesAdminOnly(t *testing.T) {
 		}
 	}
 }
+
+// TestSoftDeletedVMIsNotMissing 第 13 轮真机对账：回收站里的 VM 被采集器
+// 同步成 present=false 后，旧查询把它算成「在虚拟化层已不存在」，于是
+// 列表 5 台全 present=true，概览却报 missing=1 并挂出误导性告警。
+func TestSoftDeletedVMIsNotMissing(t *testing.T) {
+	db, svc := newEnv(t, fakeRuntime{hb: map[int64]time.Time{}})
+	seedNode(t, db, 1, "node-1", model.NodeEnrollEnrolled)
+
+	// 一台真正丢失的（在管、节点上没了）。
+	gone := seedVM(t, db, "gone-real", model.VMStatusRunning, 7, true)
+	if err := db.Model(&model.VM{}).Where("id = ?", gone.ID).
+		Update("present", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	// 一台进回收站的：deleted_at 有值，present 被采集器刷成 false。
+	trashed := seedVM(t, db, "in-trash", model.VMStatusUnknown, 7, true)
+	deletedAt := time.Now().Add(-time.Hour)
+	if err := db.Model(&model.VM{}).Where("id = ?", trashed.ID).
+		Updates(map[string]any{"present": false, "deleted_at": deletedAt}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := svc.Summary(context.Background(), admin())
+	if err != nil {
+		t.Fatalf("获取概览失败: %v", err)
+	}
+	if got.VMs.Missing != 1 {
+		t.Errorf("失效数 = %d, 期望 1（回收站记录不该计入）: %+v", got.VMs.Missing, got.VMs)
+	}
+	if got.VMs.Total != 0 {
+		t.Errorf("在管机器数 = %d, 期望 0", got.VMs.Total)
+	}
+	if got.Allocation.VCPU != 0 {
+		t.Errorf("回收站机器占用了已分配资源: %+v", got.Allocation)
+	}
+}

@@ -2,6 +2,8 @@ package platformcheck_test
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,6 +12,7 @@ import (
 
 	"k_cockpit/internal/agent"
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/platform/config"
@@ -264,6 +267,29 @@ func TestClientIPExplainsProxy(t *testing.T) {
 	}
 	if !strings.Contains(note, "等于放行所有") {
 		t.Errorf("必须说清填错的后果: %q", note)
+	}
+}
+
+// TestRepairRejectsUnknownKind 不认识的修复类型不能建一条空任务再报成功。
+// 第 12 轮真机用 kinds=["r12-bogus-kind"] 复现过「任务 success、items 为空」。
+func TestRepairRejectsUnknownKind(t *testing.T) {
+	_, svc := newEnv(t)
+	ctx := context.Background()
+	admin := authz.Viewer{UserID: 1, IsAdmin: true}
+
+	_, err := svc.Repair(ctx, 1, []string{"r12-bogus-kind"}, admin, "admin", "127.0.0.1")
+	var apiErr *api.Error
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusBadRequest {
+		t.Fatalf("未知修复类型应返回 400，实际 %v", err)
+	}
+	if !strings.Contains(apiErr.Message, "未知的修复类型") {
+		t.Errorf("错误信息应点明类型非法: %q", apiErr.Message)
+	}
+	// 合法类型与缺省（nil 走默认三项）不受影响。
+	for _, kinds := range [][]string{{"port_security"}, nil} {
+		if _, err := svc.Repair(ctx, 1, kinds, admin, "admin", "127.0.0.1"); err != nil {
+			t.Errorf("合法修复不应被误拒 kinds=%v: %v", kinds, err)
+		}
 	}
 }
 

@@ -717,32 +717,48 @@ func firstAddrOf(cidr string) string {
 	return strings.Join(parts, ".")
 }
 
-// networkBridgeApply 实现 network.bridge.apply（Linux 基础桥）。
+// networkBridgeApply 实现 network.bridge.apply：按 backend 建 OVS 桥或
+// Linux 基础桥。控制面会把 backend 一起下发给它；过去节点侧一律走
+// `ip link add type bridge`，于是记录里写着 ovs、宿主机上却是 Linux 桥。
 func networkBridgeApply(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
-	report(Stage{Key: "create", Name: "创建基础桥", Index: 1, Total: 1})
+	report(Stage{Key: "create", Name: "创建网桥", Index: 1, Total: 1})
 	name := op.Target
-	if _, err := sys.Run(ctx, "ip", "link", "add", "name", name, "type", "bridge"); err != nil {
-		// 已存在按成功（幂等收敛）。
-		if !strings.Contains(err.Error(), "exist") {
-			return failResult(err.Error()), nil
+	backend := strings.TrimSpace(strParam(op.Params, "backend"))
+	msg := "基础桥已就绪"
+	if backend == "ovs" {
+		if _, err := sys.Run(ctx, "ovs-vsctl", "--may-exist", "add-br", name); err != nil {
+			return failResult("创建 OVS 网桥失败: " + err.Error()), nil
 		}
+		msg = "OVS 网桥已就绪"
+	} else {
+		if _, err := sys.Run(ctx, "ip", "link", "add", "name", name, "type", "bridge"); err != nil {
+			// 已存在按成功（幂等收敛）。
+			if !strings.Contains(err.Error(), "exist") {
+				return failResult(err.Error()), nil
+			}
+		}
+		_, _ = sys.Run(ctx, "ip", "link", "set", name, "up")
 	}
-	_, _ = sys.Run(ctx, "ip", "link", "set", name, "up")
 	return &agent.Result{Success: true, Data: map[string]any{
-		agent.NetworkRepairKey: agent.NetworkRepairInfo{Fixed: []string{name}, Message: "基础桥已就绪"},
+		agent.NetworkRepairKey: agent.NetworkRepairInfo{Fixed: []string{name}, Message: msg},
 	}}, nil
 }
 
-// networkBridgeDelete 实现 network.bridge.delete。
+// networkBridgeDelete 实现 network.bridge.delete。删除请求只带桥名，因此
+// 按宿主机上的实际类型选命令：OVS 桥用 del-br，Linux 桥用 ip link del。
 func networkBridgeDelete(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
-	report(Stage{Key: "delete", Name: "删除基础桥", Index: 1, Total: 1})
-	if _, err := sys.Run(ctx, "ip", "link", "del", op.Target); err != nil {
+	report(Stage{Key: "delete", Name: "删除网桥", Index: 1, Total: 1})
+	if sys.RunOK(ctx, "ovs-vsctl", "br-exists", op.Target) {
+		if _, err := sys.Run(ctx, "ovs-vsctl", "--if-exists", "del-br", op.Target); err != nil {
+			return failResult(err.Error()), nil
+		}
+	} else if _, err := sys.Run(ctx, "ip", "link", "del", op.Target); err != nil {
 		if !strings.Contains(err.Error(), "Cannot find") && !strings.Contains(err.Error(), "not found") {
 			return failResult(err.Error()), nil
 		}
 	}
 	return &agent.Result{Success: true, Data: map[string]any{
-		agent.NetworkRepairKey: agent.NetworkRepairInfo{Message: "基础桥已删除"},
+		agent.NetworkRepairKey: agent.NetworkRepairInfo{Message: "网桥已删除"},
 	}}, nil
 }
 

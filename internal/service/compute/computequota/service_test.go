@@ -2,6 +2,8 @@ package computequota_test
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	"k_cockpit/internal/model"
+	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/platform/config"
 	"k_cockpit/internal/platform/database"
@@ -33,9 +36,21 @@ func newEnv(t *testing.T) (*gorm.DB, *computequota.Service) {
 	})
 	// 数量型维度要连 vm_snapshot / port_forward / public_ip_binding，
 	// 因此这几张表也要建出来——配额统计现在依赖它们。
-	if err := db.AutoMigrate(&model.ComputeQuota{}, &model.VM{}, &model.User{}, &model.AuditLog{},
+	if err := db.AutoMigrate(&model.ComputeQuota{}, &model.VM{}, &model.User{}, &model.Node{},
+		&model.AuditLog{},
 		&model.VMSnapshot{}, &model.PortForward{}, &model.PublicIPBinding{}); err != nil {
 		t.Fatalf("建表失败: %v", err)
+	}
+	// 配额挂在 (节点, 用户) 上，Set 会核对两个归属对象确实存在。测试库统一
+	// 预置它们，避免每个用例都在重复同一段与本用例无关的 fixture。
+	for _, seed := range []any{
+		&model.Node{ID: 1, Name: "test-node"},
+		&model.User{ID: 7, Username: "alice"},
+		&model.User{ID: 8, Username: "bob"},
+	} {
+		if err := db.Create(seed).Error; err != nil {
+			t.Fatalf("预置节点/用户失败: %v", err)
+		}
 	}
 	return db, computequota.NewService(db, nil)
 }
@@ -137,7 +152,8 @@ func TestListIncludesUsersWithoutQuota(t *testing.T) {
 	db, svc := newEnv(t)
 	ctx := context.Background()
 
-	if err := db.Create(&model.User{ID: 7, Username: "alice"}).Error; err != nil {
+	if err := db.FirstOrCreate(&model.User{ID: 7, Username: "alice"},
+		&model.User{ID: 7}).Error; err != nil {
 		t.Fatalf("创建用户失败: %v", err)
 	}
 	seedVM(t, db, "vm-1", 7, 2, 2048)
@@ -197,3 +213,52 @@ func TestUsageIgnoresMissingVMs(t *testing.T) {
 // authz 未直接使用，但保留导入以标明这些校验**在服务端**生效：
 // 界面上的禁用只是体验优化，不构成安全边界（f-1-06 R-004）。
 var _ = authz.Viewer{}
+
+// TestSetRejectsMissingTargets 给不存在的节点或用户写配额必须拒绝：
+// 否则会留下界面上无主、又不随任何资源删除的孤儿记录。真机第 12 轮
+// 用 user_id=999999999 复现过：返回 200 且列表里多出一条空用户名配额。
+func TestSetRejectsMissingTargets(t *testing.T) {
+	db, svc := newEnv(t)
+	ctx := context.Background()
+
+	if err := svc.Set(ctx, 1, 7, limits(2, 1024, 1), 1, "root", "10.0.0.1"); err != nil {
+		t.Fatalf("正常设置配额失败: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		node int64
+		user int64
+	}{
+		{"用户不存在", 1, 999},
+		{"节点不存在", 999, 7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := svc.Set(ctx, tc.node, tc.user, limits(2, 1024, 1), 1, "root", "10.0.0.1")
+			var apiErr *api.Error
+			if !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound {
+				t.Fatalf("期望 404，实际 %v", err)
+			}
+		})
+	}
+	var orphans int64
+	if err := db.Model(&model.ComputeQuota{}).
+		Where("user_id = 999 OR node_id = 999").Count(&orphans).Error; err != nil {
+		t.Fatalf("统计孤儿配额失败: %v", err)
+	}
+	if orphans != 0 {
+		t.Errorf("拒绝后仍写入了 %d 条孤儿配额", orphans)
+	}
+
+	// 删除路径不校验目标存在：历史遗留的孤儿记录要能被清掉。
+	if err := db.Create(&model.ComputeQuota{NodeID: 1, UserID: 888, VCPU: 1}).Error; err != nil {
+		t.Fatalf("插入历史孤儿记录失败: %v", err)
+	}
+	if err := svc.Set(ctx, 1, 888, limits(0, 0, 0), 1, "root", "10.0.0.1"); err != nil {
+		t.Fatalf("清理历史孤儿配额失败: %v", err)
+	}
+	var left int64
+	db.Model(&model.ComputeQuota{}).Where("user_id = 888").Count(&left)
+	if left != 0 {
+		t.Errorf("历史孤儿配额未被清掉，仍有 %d 条", left)
+	}
+}

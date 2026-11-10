@@ -226,7 +226,10 @@ func (s *Service) collect(ctx context.Context) ([]want, error) {
 
 	// --- 失效的虚拟机（虚拟化层已不存在）---
 	var missing []model.VM
-	if err := s.db.WithContext(ctx).Where("present = ?", false).Find(&missing).Error; err != nil {
+	// deleted_at 是普通列，GORM 不会自动过滤：回收站里的记录不该再报
+	// 「在虚拟化层已不存在」（第 13 轮真机对账）。
+	if err := s.db.WithContext(ctx).
+		Where("present = ? AND deleted_at IS NULL", false).Find(&missing).Error; err != nil {
 		log.Printf("[alert] 查询失效虚拟机失败: %v", err)
 		return nil, api.Internal()
 	}

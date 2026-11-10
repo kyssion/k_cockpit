@@ -45,6 +45,11 @@ var publicAPIRoutes = map[string]bool{
 // 同样从 router.Register 机械提取（带 adminOnly 中间件的那些行）。
 // 未列出的已登录路由即租户可用；以 docs/03-api/API.md 为最终权威。
 var adminAPIRoutes = map[string]bool{
+	// 告警中心（F-8-07）：带全平台节点/任务明细，ack 还会改写所有管理员
+	// 看到的状态。第 13 轮实机越权测试后收归管理员。
+	"GET /alerts":                               true,
+	"POST /alerts/:id/ack":                      true,
+	"POST /alerts/ack-all":                      true,
 	"GET /nodes":                                true,
 	"GET /nodes/:id":                            true,
 	"GET /nodes/:id/stats":                      true,

@@ -191,6 +191,12 @@ func vmVPCSwitchMigrate(ctx context.Context, op agent.Operation, report Reporter
 	if !sys.RunOK(ctx, "ip", "link", "show", bridge) {
 		return failResult("目标网桥不存在: " + bridge), nil
 	}
+	// 上行口必须是宿主机上真实存在的网卡。OVS 的 add-port 遇到不存在的
+	// 名字会**新建一个 internal 端口并返回成功**：任务全绿、面板记下一块
+	// 根本不存在的网卡、桥上还多一个幽灵端口（第 12 轮真机复现）。
+	if !sys.RunOK(ctx, "ip", "link", "show", uplink) {
+		return failResult("目标上行网卡不存在: " + uplink), nil
+	}
 
 	report(Stage{Key: "check_uplink", Name: "确认上行网卡", Index: 1, Total: 3})
 	moved := 0

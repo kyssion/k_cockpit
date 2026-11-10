@@ -2,6 +2,8 @@ package nodeagent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -27,6 +29,37 @@ func TestVPACLPreviewRendersAndWarns(t *testing.T) {
 	}
 	if len(p.Warnings) == 0 {
 		t.Error("deny-all 后面还有规则时应给出遮蔽告警")
+	}
+}
+
+// TestVPCSwitchMigrateRejectsMissingUplink OVS 的 add-port 对不存在的网卡
+// 会新建一个 internal 端口并返回成功；不加校验就会「任务全绿、桥上多了个
+// 幽灵端口、面板记下一块不存在的网卡」（第 12 轮真机复现）。
+func TestVPCSwitchMigrateRejectsMissingUplink(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "calls.log")
+	installFakeCommands(t, map[string]string{
+		"ip": "#!/bin/sh\ncase \"$*\" in\n" +
+			"  *\"link show br-test\"*) exit 0 ;;\n" +
+			"  *\"link show ghost-if\"*) exit 1 ;;\n" +
+			"  *) echo \"ip $*\" >> " + logPath + " ; exit 0 ;;\nesac\n",
+		"ovs-vsctl": "#!/bin/sh\necho \"ovs $*\" >> " + logPath + "\nexit 0\n",
+	})
+	res, err := vmVPCSwitchMigrate(context.Background(), agent.Operation{
+		Target: "br-test",
+		Params: map[string]any{"spec": map[string]any{"uplink_if": "ghost-if"}},
+	}, func(Stage) {})
+	if err != nil {
+		t.Fatalf("不应返回 error: %v", err)
+	}
+	if res.Success {
+		t.Fatalf("不存在的上行网卡必须失败，实际成功: %+v", res)
+	}
+	if !strings.Contains(res.Message, "不存在") {
+		t.Errorf("错误信息应指出网卡不存在: %q", res.Message)
+	}
+	buf, _ := os.ReadFile(logPath)
+	if strings.Contains(string(buf), "add-port") {
+		t.Errorf("失败前不应创建 OVS 端口，实际命令: %s", buf)
 	}
 }
 

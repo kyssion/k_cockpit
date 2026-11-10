@@ -213,6 +213,12 @@ func (h *Node) CreateEnrollToken(ctx context.Context, c *app.RequestContext) {
 	user := auth.CurrentUser(c)
 	info := auth.ClientInfoOf(c)
 
+	// 先挡住越界值，再做 Duration 乘法：ttl_hours 极大时乘法会溢出成负数，
+	// 服务端会把它当「未指定」回落到 24 小时，行为与请求完全不符。
+	if req.TTLHours < 0 || time.Duration(req.TTLHours) > node.MaxEnrollTTL/time.Hour {
+		api.Fail(c, api.InvalidParameter("注册令牌有效期需在 1-168 小时之间（不填为 24 小时）"))
+		return
+	}
 	var ttl time.Duration
 	if req.TTLHours > 0 {
 		ttl = time.Duration(req.TTLHours) * time.Hour

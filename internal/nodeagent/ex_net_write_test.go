@@ -1,6 +1,89 @@
 package nodeagent
 
-import "testing"
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"k_cockpit/internal/agent"
+)
+
+// TestNetworkBridgeApplyHonorsBackend 控制面把 backend 下发到节点，节点必须
+// 照着建：记录写 ovs 却在宿主机上建出 Linux 桥，是第 12 轮发现的假选项。
+func TestNetworkBridgeApplyHonorsBackend(t *testing.T) {
+	for _, tc := range []struct {
+		backend  string
+		want     string
+		unwanted string
+	}{
+		{"ovs", "ovs --may-exist add-br br-x", "ip link add name br-x type bridge"},
+		{"bridge", "ip link add name br-x type bridge", "ovs --may-exist add-br"},
+	} {
+		t.Run(tc.backend, func(t *testing.T) {
+			logPath := filepath.Join(t.TempDir(), "calls.log")
+			installFakeCommands(t, map[string]string{
+				"ip":        "#!/bin/sh\necho \"ip $*\" >> " + logPath + "\nexit 0\n",
+				"ovs-vsctl": "#!/bin/sh\necho \"ovs $*\" >> " + logPath + "\nexit 0\n",
+			})
+			res, err := networkBridgeApply(context.Background(), agent.Operation{
+				Target: "br-x", Params: map[string]any{"backend": tc.backend},
+			}, func(Stage) {})
+			if err != nil || !res.Success {
+				t.Fatalf("建桥应成功: err=%v res=%+v", err, res)
+			}
+			buf, _ := os.ReadFile(logPath)
+			if !strings.Contains(string(buf), tc.want) {
+				t.Errorf("backend=%s 应执行 %q，实际命令: %s", tc.backend, tc.want, buf)
+			}
+			if strings.Contains(string(buf), tc.unwanted) {
+				t.Errorf("backend=%s 不应执行 %q，实际命令: %s", tc.backend, tc.unwanted, buf)
+			}
+		})
+	}
+}
+
+// TestNetworkBridgeDeleteByKind 删除请求只带桥名；OVS 桥与 Linux 桥的
+// 拆除命令不同，删错了会留下孤儿桥或误删同名设备。
+func TestNetworkBridgeDeleteByKind(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		brExistsRC int
+		want       string
+		unwanted   string
+	}{
+		{"ovs", 0, "ovs --if-exists del-br br-x", "ip link del br-x"},
+		{"linux", 1, "ip link del br-x", "del-br br-x"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rc := "0"
+			if tc.brExistsRC != 0 {
+				rc = "1"
+			}
+			logPath := filepath.Join(t.TempDir(), "calls.log")
+			installFakeCommands(t, map[string]string{
+				"ip": "#!/bin/sh\necho \"ip $*\" >> " + logPath + "\nexit 0\n",
+				"ovs-vsctl": "#!/bin/sh\n" +
+					"echo \"ovs $*\" >> " + logPath + "\n" +
+					"case \"$*\" in *\"br-exists\"*) exit " + rc + " ;; esac\n" +
+					"exit 0\n",
+			})
+			res, err := networkBridgeDelete(context.Background(),
+				agent.Operation{Target: "br-x"}, func(Stage) {})
+			if err != nil || !res.Success {
+				t.Fatalf("删桥应成功: err=%v res=%+v", err, res)
+			}
+			buf, _ := os.ReadFile(logPath)
+			if !strings.Contains(string(buf), tc.want) {
+				t.Errorf("应执行 %q，实际命令: %s", tc.want, buf)
+			}
+			if strings.Contains(string(buf), tc.unwanted) {
+				t.Errorf("不应执行 %q，实际命令: %s", tc.unwanted, buf)
+			}
+		})
+	}
+}
 
 func TestParseDHCPRange(t *testing.T) {
 	start, end := parseDHCPRange("dhcp-range=10.0.0.100,10.0.0.200,12h")

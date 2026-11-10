@@ -117,6 +117,70 @@ func storagePoolScan(ctx context.Context, op agent.Operation, report Reporter) (
 	return &agent.Result{Success: true, Data: map[string]any{agent.VolumeListKey: volumes}}, nil
 }
 
+// mountInfoPath 可在单测里替换，避免测试依赖宿主机的 /proc。
+var mountInfoPath = "/proc/self/mountinfo"
+
+// parseMountPoints 从 mountinfo 文本取第 5 列（挂载点）。
+//
+// mountinfo 用八进制转义空白与反斜杠，路径里出现空格时必须还原，
+// 否则会被判成「未挂载」而误降级。
+func parseMountPoints(content string) map[string]bool {
+	repl := strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`)
+	out := map[string]bool{}
+	for _, line := range strings.Split(content, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+		out[filepath.Clean(repl.Replace(fields[4]))] = true
+	}
+	return out
+}
+
+func readMountPoints() map[string]bool {
+	data, err := os.ReadFile(mountInfoPath)
+	if err != nil {
+		// 读不到挂载表时返回空集合：安全失败方向是「没有池可用」，
+		// 而不是猜一个容量。
+		return nil
+	}
+	return parseMountPoints(string(data))
+}
+
+type statfsFunc func(path string, st *syscall.Statfs_t) error
+
+// poolStats 只对**真实挂载点**返回容量。
+//
+// 节点重启后 nbd/loop 设备常常消失，但 fstab 条目和挂载目录还在；对这种
+// 空目录做 statfs 会静默返回根文件系统的容量。此前控制面据此把 128G 系统盘
+// 当成池容量写回，且每轮刷新把 last_reported_at 刷成最新，形成
+// 「ready + 数据新鲜 + 有空间」的三重假象（第 13 轮真机对账）。
+func poolStats(paths []string, mounts map[string]bool, statfs statfsFunc) []agent.PoolStat {
+	stats := make([]agent.PoolStat, 0, len(paths))
+	for _, path := range paths {
+		// 越出挂载根的路径直接忽略：控制面参数不能变成任意路径探测面。
+		if path != poolMountRoot && !strings.HasPrefix(path, poolMountRoot+"/") {
+			continue
+		}
+		if !mounts[filepath.Clean(path)] {
+			stats = append(stats, agent.PoolStat{Path: path, Mounted: false})
+			continue
+		}
+		var st syscall.Statfs_t
+		if err := statfs(path, &st); err != nil {
+			stats = append(stats, agent.PoolStat{Path: path, Mounted: false})
+			continue
+		}
+		stats = append(stats, agent.PoolStat{
+			Path:       path,
+			Mounted:    true,
+			TotalBytes: int64(st.Blocks) * int64(st.Bsize),
+			FreeBytes:  int64(st.Bavail) * int64(st.Bsize),
+		})
+	}
+	return stats
+}
+
 // storagePoolStat 实现 storage.pool.stat：对给定挂载点批量 statfs。
 //
 // 路径必须落在存储池挂载根之内——来自控制面的参数不能变成任意路径的
@@ -125,25 +189,13 @@ func storagePoolScan(ctx context.Context, op agent.Operation, report Reporter) (
 func storagePoolStat(ctx context.Context, op agent.Operation, report Reporter) (*agent.Result, error) {
 	report(Stage{Key: "statfs", Name: "读取池容量", Index: 1, Total: 1})
 	raw, _ := op.Params["paths"].([]any)
-	stats := []agent.PoolStat{}
+	paths := make([]string, 0, len(raw))
 	for _, p := range raw {
-		path, ok := p.(string)
-		if !ok || path == "" {
-			continue
+		if s, ok := p.(string); ok && s != "" {
+			paths = append(paths, s)
 		}
-		if path != poolMountRoot && !strings.HasPrefix(path, poolMountRoot+"/") {
-			continue // 越出挂载根的路径直接忽略
-		}
-		var st syscall.Statfs_t
-		if err := syscall.Statfs(path, &st); err != nil {
-			continue
-		}
-		stats = append(stats, agent.PoolStat{
-			Path:       path,
-			TotalBytes: int64(st.Blocks) * int64(st.Bsize),
-			FreeBytes:  int64(st.Bavail) * int64(st.Bsize),
-		})
 	}
+	stats := poolStats(paths, readMountPoints(), syscall.Statfs)
 	return &agent.Result{Success: true, Data: map[string]any{
 		agent.PoolStatListKey: stats,
 	}}, nil
@@ -272,20 +324,38 @@ func storageVolumeApply(ctx context.Context, op agent.Operation, report Reporter
 	switch action {
 	case "create":
 		sizeGB, _ := op.Params["size_gb"].(float64)
-		if devices, ok := op.Params["devices"].([]any); ok && len(devices) > 0 {
-			var devs []string
-			for _, d := range devices {
-				if s, ok := d.(string); ok {
-					devs = append(devs, s)
+		devices, ok := op.Params["devices"].([]any)
+		if !ok || len(devices) == 0 {
+			return failResult("缺少物理设备"), nil
+		}
+		var devs []string
+		for _, d := range devices {
+			if s, ok := d.(string); ok && s != "" {
+				devs = append(devs, s)
+			}
+		}
+		if len(devs) == 0 {
+			return failResult("缺少物理设备"), nil
+		}
+		// vgcreate 只接受**已经是 PV** 的设备。裸盘（以及建过池、留着 ext4
+		// 签名的盘）必须先 pvcreate；过去这里把 vgcreate 的失败整段吞掉，
+		// lvcreate 随后报 "Volume group not found"，创建卷在真机上从未成功。
+		for _, d := range devs {
+			if sys.RunOK(ctx, "pvdisplay", d) {
+				continue
+			}
+			if _, err := sys.Run(ctx, "pvcreate", d); err != nil {
+				// 残留文件系统签名时 pvcreate 会拒；清掉签名再试一次，
+				// 两次都失败就如实报错，不再硬着头皮往下建 LV。
+				_, _ = sys.Run(ctx, "wipefs", "-a", d)
+				if _, err2 := sys.Run(ctx, "pvcreate", d); err2 != nil {
+					return failResult("初始化物理卷失败: " + err2.Error()), nil
 				}
 			}
-			// 多块盘是多个参数（strings.Join 会拼成单个参数——vgcreate
-			// 收到一个名叫 "sdb sdc" 的盘，永远建不成；review 抓出）。
-			// VG 已存在时 vgcreate 失败不阻塞（收敛语义），只管建 LV。
+		}
+		if !sys.RunOK(ctx, "vgdisplay", vg) {
 			if _, err := sys.Run(ctx, "vgcreate", append([]string{vg}, devs...)...); err != nil {
-				if _, err2 := sys.Run(ctx, "vgcreate", append([]string{vg}, devOf(devs))...); err2 != nil {
-					_ = err // 两次都失败：VG 可能已存在，继续建 LV 由它兜底。
-				}
+				return failResult("创建卷组失败: " + err.Error()), nil
 			}
 		}
 		if _, err := sys.Run(ctx, "lvcreate", "-L", fmt.Sprintf("%dG", int(sizeGB)),
@@ -293,20 +363,27 @@ func storageVolumeApply(ctx context.Context, op agent.Operation, report Reporter
 			return failResult("创建逻辑卷失败: " + err.Error()), nil
 		}
 	case "delete":
-		if _, err := sys.Run(ctx, "lvremove", "-f", vg+"/"+lv); err != nil {
-			return failResult("删除逻辑卷失败: " + err.Error()), nil
+		_, lvErr := sys.Run(ctx, "lvremove", "-f", vg+"/"+lv)
+		// 卷组根本不存在 = 卷从来没建起来（例如上一次创建失败留下的孤儿
+		// 记录）。删除是幂等的，按「已经没了」处理；否则那条记录永远删不
+		// 掉、设备也一直被它占着，用户点删除只会一直收到失败。
+		if lvErr != nil && sys.RunOK(ctx, "lvdisplay", vg+"/"+lv) {
+			return failResult("删除逻辑卷失败: " + lvErr.Error()), nil
+		}
+		// 卷组与物理卷都归这个卷所有：只删 LV 会把设备一直占着，
+		// 下一次在这块盘上建卷会拿到「已属于另一个 VG」。
+		_, _ = sys.Run(ctx, "vgremove", "-f", vg)
+		if devices, ok := op.Params["devices"].([]any); ok {
+			for _, d := range devices {
+				if s, ok := d.(string); ok && s != "" {
+					_, _ = sys.Run(ctx, "pvremove", s)
+				}
+			}
 		}
 	}
 	return &agent.Result{Success: true, Data: map[string]any{
 		agent.VolumeDataKey: agent.VolumeInfo{Status: "active", Message: "LVM 卷已更新"},
 	}}, nil
-}
-
-func devOf(devs []string) string {
-	if len(devs) == 0 {
-		return ""
-	}
-	return devs[0]
 }
 
 // storageFilePush 实现 storage.file.push：接收控制面推送的内容分块。

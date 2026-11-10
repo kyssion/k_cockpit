@@ -37,6 +37,11 @@ const OfflineThreshold = 40 * time.Second
 // DefaultEnrollTTL 是注册令牌的默认有效期（f-6-01 Q-003：24 小时）。
 const DefaultEnrollTTL = 24 * time.Hour
 
+// MaxEnrollTTL 是注册令牌允许的最长有效期。一次性凭据的泄露窗口不该
+// 以年计；没有上限时 ttl_hours 传个大会得到 2038 年的过期时间，再大还会
+// 让 time.Duration 乘法溢出成负数，反而变成「永不过期的默认 24 小时」。
+const MaxEnrollTTL = 7 * 24 * time.Hour
+
 // namePattern 限定节点名可用字符。
 var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
 
@@ -171,6 +176,9 @@ func (s *Service) CreateEnrollToken(
 	}
 	if ttl <= 0 {
 		ttl = DefaultEnrollTTL
+	}
+	if ttl > MaxEnrollTTL {
+		return nil, api.InvalidParameter("注册令牌有效期不能超过 7 天")
 	}
 
 	token, err := newEnrollToken()

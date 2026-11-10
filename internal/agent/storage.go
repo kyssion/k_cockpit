@@ -50,8 +50,16 @@ const PoolStatListKey = "pools"
 // PoolStat 是一个存储池挂载点的容量快照（statfs 的对外形状）。
 type PoolStat struct {
 	// Path 是挂载点路径，控制面按它把结果对回池记录。
-	Path       string `json:"path"`
-	TotalBytes int64  `json:"total_bytes"`
+	Path string `json:"path"`
+	// Mounted 表示这个路径**确实是一个独立挂载点**。
+	//
+	// 节点重启后块设备可能消失（nbd/loop 尤为常见），但 fstab 里的静态
+	// 条目和挂载目录还在。此时对目录做 statfs 会静默返回根文件系统的
+	// 容量，控制面便把 128G 系统盘当作池容量、还把时间戳刷成最新——
+	// 「ready + 新鲜 + 有空间」三重假象（第 13 轮真机对账）。未挂载时
+	// 节点必须显式上报 false，控制面据此把池降级为 unmounted。
+	Mounted    bool  `json:"mounted"`
+	TotalBytes int64 `json:"total_bytes"`
 	// FreeBytes 是可用空间（Bavail 口径）：未特权用户真正能写入的量。
 	FreeBytes int64 `json:"free_bytes"`
 }

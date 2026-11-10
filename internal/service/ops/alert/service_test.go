@@ -177,7 +177,7 @@ func TestAckKeepsAlertOpen(t *testing.T) {
 	}
 
 	items, _ := svc.List(ctx, alert.ListOptions{})
-	if err := svc.Ack(ctx, items[0].ID, authz.Viewer{UserID: 9}); err != nil {
+	if err := svc.Ack(ctx, items[0].ID, authz.Viewer{UserID: 9, IsAdmin: true}); err != nil {
 		t.Fatalf("确认失败: %v", err)
 	}
 
@@ -226,5 +226,47 @@ func TestEvaluateReportsFailedTasksPerTask(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("未产生失败任务告警: %+v", items)
+	}
+}
+
+// TestAckRejectsNonAdmin 第 13 轮实机越权测试：租户可以读全平台告警后
+// 直接 ack / ack-all，把管理员的严重告警全部摁掉。确认动作必须在服务层
+// 也挡住非管理员，而不是只依赖路由中间件一次配置。
+func TestAckRejectsNonAdmin(t *testing.T) {
+	db, svc := newEnv(t)
+	ctx := context.Background()
+
+	hb := time.Now().Add(-2 * time.Minute)
+	db.Create(&model.Node{
+		ID: 1, Name: "node-1", EnrollState: model.NodeEnrollEnrolled,
+		Status: model.NodeStatusOffline, LastHeartbeatAt: &hb,
+	})
+	if _, err := svc.Evaluate(ctx); err != nil {
+		t.Fatalf("评估失败: %v", err)
+	}
+	items, _ := svc.List(ctx, alert.ListOptions{})
+	if len(items) == 0 {
+		t.Fatal("没有可用于确认的告警")
+	}
+
+	tenant := authz.Viewer{UserID: 42, IsAdmin: false}
+	if err := svc.Ack(ctx, items[0].ID, tenant); err == nil {
+		t.Error("租户确认单条告警竟然成功")
+	}
+	if n, err := svc.AckAll(ctx, tenant); err == nil || n != 0 {
+		t.Errorf("租户批量确认竟然成功: n=%d err=%v", n, err)
+	}
+
+	active, _, err := svc.Counts(ctx)
+	if err != nil {
+		t.Fatalf("统计失败: %v", err)
+	}
+	if active != len(items) {
+		t.Errorf("越权确认改变了告警状态: active=%d, 期望 %d", active, len(items))
+	}
+
+	// 管理员仍然可以正常确认（别把功能一起关掉）。
+	if err := svc.Ack(ctx, items[0].ID, authz.Viewer{UserID: 1, IsAdmin: true}); err != nil {
+		t.Errorf("管理员确认失败: %v", err)
 	}
 }

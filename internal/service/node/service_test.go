@@ -120,6 +120,36 @@ func TestCreateEnrollToken(t *testing.T) {
 	}
 }
 
+// TestCreateEnrollTokenRejectsOversizeTTL 一次性注册令牌的有效期必须有上限。
+// 真机第 12 轮用 ttl_hours=99999 拿到一张 2038 年才过期的令牌；更大的值
+// 还会让 time.Duration 乘法溢出成负数，被当成「未指定」悄悄回落到 24 小时。
+func TestCreateEnrollTokenRejectsOversizeTTL(t *testing.T) {
+	svc, db := newTestService(t, &fakeRuntime{})
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		ttl  time.Duration
+	}{
+		{"node-ttl-over-a", 8 * 24 * time.Hour},
+		{"node-ttl-over-b", 100000 * time.Hour},
+	} {
+		_, err := svc.CreateEnrollToken(ctx, tc.name, tc.ttl, 1, "admin", "10.0.0.1")
+		assertAPIError(t, err, 400)
+	}
+	// 边界值本身仍可用，且只建出这一条节点记录。
+	if _, err := svc.CreateEnrollToken(ctx, "node-ttl-ok", node.MaxEnrollTTL,
+		1, "admin", "10.0.0.1"); err != nil {
+		t.Fatalf("有效期上限边界应允许: %v", err)
+	}
+	var count int64
+	if err := db.Model(&model.Node{}).Count(&count).Error; err != nil {
+		t.Fatalf("统计节点失败: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("被拒绝的令牌不应创建节点，实际建了 %d 条", count)
+	}
+}
+
 func TestCreateEnrollTokenValidatesName(t *testing.T) {
 	svc, _ := newTestService(t, &fakeRuntime{})
 	ctx := context.Background()

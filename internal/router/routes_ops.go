@@ -57,9 +57,12 @@ func registerOpsRoutes(v1 *route.RouterGroup, deps Deps, g guards) {
 		v1.GET("/dashboard/host-detail", g.requireAuth, dashboardHandler.HostDetail)
 
 		// 告警中心（F-8-07）：与工作台的横幅同源，但这里要能翻、能确认。
-		v1.GET("/alerts", g.requireAuth, alertHandler.List)
-		v1.POST("/alerts/:id/ack", g.requireAuth, alertHandler.Ack)
-		v1.POST("/alerts/ack-all", g.requireAuth, alertHandler.AckAll)
+		// API-024i 标注为管理员接口：告警里带全平台节点/任务/资源明细，
+		// 确认（ack）更是会改写所有管理员看到的状态，租户不应具备。
+		// 第 13 轮实机越权测试抓出这里只挂了 requireAuth。
+		v1.GET("/alerts", g.requireAuth, g.adminOnly, alertHandler.List)
+		v1.POST("/alerts/:id/ack", g.requireAuth, g.adminOnly, alertHandler.Ack)
+		v1.POST("/alerts/ack-all", g.requireAuth, g.adminOnly, alertHandler.AckAll)
 
 		// 资源配额与超限处置（F-4-10）。
 		//

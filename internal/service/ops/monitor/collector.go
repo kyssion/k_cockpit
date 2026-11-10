@@ -147,14 +147,18 @@ func (c *Collector) tick(ctx context.Context) {
 		return
 	}
 	c.runtimeTick++
-	syncRuntime := c.runtimeTick == 1 || c.runtimeTick%5 == 0
+	// 每轮都对齐 VM 运行态。
+	//
+	// 采集周期是 60 秒、陈旧阈值 120 秒；此前这里用 `runtimeTick%5`
+	// 把对账降频到 300 秒，于是两次对账之间的投影必然被判为「陈旧」，
+	// 列表页长期挂着数据可能过期的提示，列表与详情在不同采样时刻还会
+	// 给出相反结论（第 13 轮真机对账）。`virsh list --all` 每分钟一次的
+	// 代价是可接受的——这也正是 syncRuntime 注释原本描述的设计。
 	var hostCount, vmCount int
 	for i := range nodes {
 		// 先对齐 VM 运行态，再采指标：否则一台在面板外被 virsh 关掉的
 		// 机器仍会被当成 running 去读指标，得到一串失败日志。
-		if syncRuntime {
-			c.syncRuntime(ctx, &nodes[i])
-		}
+		c.syncRuntime(ctx, &nodes[i])
 		hostOK, vms := c.collectNode(ctx, &nodes[i])
 		if hostOK {
 			hostCount++
@@ -206,8 +210,11 @@ func (c *Collector) syncRuntime(ctx context.Context, node *model.Node) {
 	}
 
 	var vms []model.VM
+	// 软删除的 VM 已进回收站，不该再被域列表同步：否则它会被写成
+	// present=false 并持续刷新 last_synced_at，进而在概览/告警里冒充
+	// 「在管但已丢失」的机器（第 13 轮真机对账）。
 	if err := c.db.WithContext(ctx).
-		Where("node_id = ?", node.ID).Find(&vms).Error; err != nil {
+		Where("node_id = ? AND deleted_at IS NULL", node.ID).Find(&vms).Error; err != nil {
 		log.Printf("[monitor] 同步运行态查询 VM 失败 node=%d: %v", node.ID, err)
 		return
 	}

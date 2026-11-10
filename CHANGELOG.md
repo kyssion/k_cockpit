@@ -78,6 +78,45 @@
   控制面只保留 gRPC 反向长连接。测试改为每个包自写最小 stub，不再共享全局 mock。
 
 ### Fixed
+- **第 13 轮实机深度回归（2026-11-10，存量对账 / 权限 / 故障注入 / 并发边界）**：
+  换四个新维度审「控制面记下来的状态可不可信」，发现并修复 4 个产品缺陷（1 个 P1），
+  新增 5 个可重复深度批次（`~/.kc_test/r13/`）；最终在 `bin/server-r13c` + agent r13
+  上跑完 14 个既有套件 + 7 个第 12 轮批次 + 5 个新批次，共 26 个套件全部 rc=0、
+  0 失败。逐项证据见 `data/lab2/test-report-r13.md`。
+  - **P1 存储池把根分区容量当成池容量**：节点重启后 `/dev/nbd*` 设备与挂载消失，
+    只剩 fstab 条目和空目录；节点侧 `storagePoolStat` 直接 `statfs` 该目录（返回根文件系统
+    容量），控制面又无条件刷新 `last_reported_at`，形成「ready + 新鲜 + 还有 77G」三重假象。
+    现 `agent.PoolStat` 带 `Mounted`，节点按 `/proc/self/mountinfo` 精确判定挂载点；
+    控制面只写回真实挂载的容量与时间戳，明确未挂载时降级为 `unmounted`，
+    设备回来后自动回升。真机容量从假的 124 GiB 变成真实的 14.7 / 5.8 GiB。
+  - **P2 告警中心越权**：API-024i 标注管理员专属，三条路由却只挂 `requireAuth`，
+    租户可读全平台告警并用 `ack-all` 全部确认。现补 `adminOnly` + 服务层 `IsAdmin` 校验，
+    同步 `adminAPIRoutes` 文档元数据。
+  - **P2 软删除记录污染概览/告警/采集器**：`model.VM.DeletedAt` 是普通列，GORM 不自动
+    过滤；回收站记录被 `syncRuntime` 刷成 `present=false` 后，`dashboard.missing` 与
+    告警把它当成「在虚拟化层已不存在」。五处统一补 `deleted_at IS NULL`。
+  - **P2 VM 投影新鲜度误报**：`syncRuntime` 实际每 300 秒对账一次（`runtimeTick%5`），
+    而 `StaleThreshold` 只有 60 秒，导致面板长期误标「数据可能陈旧」、列表与详情结论相反。
+    现恢复每轮对账，默认阈值改 120 秒（采集周期的 2 倍）。
+- **第 12 轮实机全功能回归（2026-11-09，控制面 + 真实 KVM 节点）**：以 341 条端点和
+  6 个新深度批次覆盖此前从未测过的写路径，发现并修复 15 个产品缺陷（3 个 P1），
+  最终全量回归 0 失败。逐项证据见 `data/lab2/test-report-r12.md`。
+  - **P1 交换机迁移假成功**：目标网卡不存在时 OVS `add-port` 会造出 internal 端口并报成功，
+    任务全绿、面板记下一块不存在的网卡。现先校验网卡真实存在，失败即诚实报错。
+  - **P1 存储卷创建从未成功**：`vgcreate` 前缺 `pvcreate`，且卷组创建失败被吞掉，
+    `lvcreate` 必然报 `Volume group not found`；删除也不幂等，失败记录占着设备形成死锁。
+    现按 PV→VG→LV 顺序建立、失败如实返回、删除按 `lvdisplay` 判定幂等并释放 VG/PV。
+  - **P1 agent 单元缺 LVM 元数据写权限**：`ProtectSystem=full` 下 `/etc/lvm` 只读，
+    `lvcreate` 在 systemd 服务里返回 status 5（普通 shell 正常）。`ReadWritePaths` 增 `-/etc/lvm`。
+  - **P2 假选项 / 假成功**：`backend=ovs` 的网桥实际建成 Linux 桥；OVS 修复对未知 `kinds`
+    建空任务并报成功；任务清理对畸形/负数 `keep_days` 静默按 7 天删历史任务；
+    已撤销邀请可被 `resend` 复活；计算配额给不存在的用户/节点落库产生孤儿记录。
+  - **P2 凭据有效期溢出**：节点注册令牌与邀请的 `ttl_hours` 无上限（99999 小时得到 2038 年
+    过期的令牌，更大值让 `time.Duration` 乘法溢出并静默回落默认值）。现分别限 7 天 / 30 天。
+  - **P3 契约与可观察性**：不存在节点的未纳管域列表改 404（原 503 把参数错误伪装成服务故障）；
+    批量删除端口转发返回 `task_ids`；端口安全 Apply 的 `policy` 改用与列表一致的 snake_case 视图；
+    存储池配置备注明确解引用写入。
+  - 新增单测覆盖上述分支；`gofmt`/`vet`/`go test ./...`/`tsc`/oxlint/Vitest 34/`pnpm build` 全绿。
 - **第 11 轮「假选项」收口（2026-11-09，控制面 + 真实 KVM 节点）**：本轮只处理一类问题——**配置看起来
   生效、实际不生效**：
   - **端口镜像的 `vlan_preserve` 是假选项（P2）**：界面写着「保留 VLAN 标签 —— 默认剥掉」，库里也接受

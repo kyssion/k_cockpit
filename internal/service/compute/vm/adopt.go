@@ -30,6 +30,19 @@ type UnmanagedDomain struct {
 func (s *Service) UnmanagedDomains(
 	ctx context.Context, nodeID int64, v authz.Viewer,
 ) ([]UnmanagedDomain, error) {
+	// 先确认节点真的存在。否则一次「查不存在的节点」会走到 agent.Execute，
+	// 失败后统一报 503「节点不可达」——把参数错误伪装成服务不可用，
+	// 监控与重试都会误判。
+	var nodes int64
+	if err := s.db.WithContext(ctx).Model(&model.Node{}).
+		Where("id = ?", nodeID).Count(&nodes).Error; err != nil {
+		log.Printf("[vm] 查询节点失败 node=%d: %v", nodeID, err)
+		return nil, api.Internal()
+	}
+	if nodes == 0 {
+		return nil, api.NotFound("节点不存在")
+	}
+
 	domains, err := s.scanDomains(ctx, nodeID)
 	if err != nil {
 		return nil, err

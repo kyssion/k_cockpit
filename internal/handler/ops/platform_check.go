@@ -107,7 +107,14 @@ func (h *PlatformCheck) Repair(ctx context.Context, c *app.RequestContext) {
 	var req struct {
 		Kinds []string `json:"kinds"`
 	}
-	_ = c.Bind(&req)
+	// 空 body = 使用默认修复项；非空但解析不了必须报错，否则一个写错的
+	// JSON 会被静默当成「不传」，用户以为修了其实什么都没下发。
+	if len(c.Request.Body()) > 0 {
+		if err := c.Bind(&req); err != nil {
+			api.Fail(c, api.InvalidParameter("请求参数不合法"))
+			return
+		}
+	}
 	user := auth.CurrentUser(c)
 	info := auth.ClientInfoOf(c)
 

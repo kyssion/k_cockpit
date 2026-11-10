@@ -257,7 +257,11 @@ func (s *Service) Summary(ctx context.Context, v authz.Viewer) (*Summary, error)
 // present = false 的机器是「虚拟化层已经没有了」，它们不该出现在任何计数
 // 里——但会以 Missing 的形式单独报出来，因为那本身就是一条要处理的事。
 func vmScope(q *gorm.DB, v authz.Viewer) *gorm.DB {
-	q = q.Where("present = ?", true)
+	// deleted_at 是**普通列**（不是 gorm.DeletedAt），GORM 不会自动加软删除
+	// 条件。回收站里的 VM 会被采集器同步成 present=false，漏了这个条件时
+	// 概览会多出一笔分配、告警会报「虚拟机在虚拟化层已不存在」（第 13 轮
+	// 真机对账抓出：列表 5 台全 present=true，概览却报 missing=1）。
+	q = q.Where("present = ? AND deleted_at IS NULL", true)
 	if !v.IsAdmin {
 		q = q.Where("owner_id = ?", v.UserID)
 	}
@@ -321,7 +325,8 @@ func (s *Service) vms(ctx context.Context, v authz.Viewer) (VMSummary, error) {
 	lock := s.db.WithContext(ctx).Model(&model.VMLock{}).Where("locked = ?", true)
 	if !v.IsAdmin {
 		lock = lock.Where("vm_id IN (?)",
-			s.db.Model(&model.VM{}).Select("id").Where("owner_id = ?", v.UserID))
+			s.db.Model(&model.VM{}).Select("id").
+				Where("owner_id = ? AND deleted_at IS NULL", v.UserID))
 	}
 	var locked int64
 	if err := lock.Count(&locked).Error; err != nil {
@@ -330,7 +335,8 @@ func (s *Service) vms(ctx context.Context, v authz.Viewer) (VMSummary, error) {
 	}
 	out.Locked = int(locked)
 
-	missing := s.db.WithContext(ctx).Model(&model.VM{}).Where("present = ?", false)
+	missing := s.db.WithContext(ctx).Model(&model.VM{}).
+		Where("present = ? AND deleted_at IS NULL", false)
 	if !v.IsAdmin {
 		missing = missing.Where("owner_id = ?", v.UserID)
 	}

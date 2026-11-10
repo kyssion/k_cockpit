@@ -517,6 +517,12 @@ func reasonsOf(check *Precheck) []string {
 	return out
 }
 
+// ToView 供接口层把刚创建的策略转成与列表一致的视图。
+//
+// Apply 过去直接把 model 塞进响应，字段是 PascalCase（ID / PortRef …），
+// 与列表接口的 snake_case 对不上；调用方按列表的字段名解析会拿到空值。
+func ToView(p *model.PortSecurityPolicy) View { return toView(p) }
+
 func toView(p *model.PortSecurityPolicy) View {
 	v := View{
 		ID: p.ID, NodeID: p.NodeID, PortRef: p.PortRef,
