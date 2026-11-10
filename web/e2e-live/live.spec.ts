@@ -2,10 +2,23 @@
  * 实机 UI 走查（临时用例，不属于仓库正式 E2E）：
  * 登录真实控制面后遍历所有管理页面，断言页面不出现「页面不存在 / 加载失败」，
  * 且请求不出现 5xx；再验证 VM 详情与控制台入口。
+ *
+ * 凭据只从环境变量读取，不写进源码（交付测试 TC-23-6 红线）：
+ *   E2E_ADMIN_USER / E2E_ADMIN_PASSWORD=... \
+ *     pnpm exec playwright test --config=playwright.live.config.ts
  */
 import { expect, test, type Page } from '@playwright/test'
 
-const ADMIN = { username: 'admin', password: 'KcTest!2026Passw0rd' }
+const ADMIN = {
+  username: process.env.E2E_ADMIN_USER ?? 'admin',
+  password: process.env.E2E_ADMIN_PASSWORD ?? '',
+}
+
+test.beforeAll(() => {
+  if (!ADMIN.password) {
+    throw new Error('缺少 E2E_ADMIN_PASSWORD 环境变量：实机走查凭据不得写死在源码里')
+  }
+})
 
 const ROUTES = [
   ['/', '工作台'],
