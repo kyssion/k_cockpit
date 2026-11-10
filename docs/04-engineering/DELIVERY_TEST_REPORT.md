@@ -300,7 +300,7 @@ G-15 应精确为「单元层已有完整单测，缺 HTTP 端点级」；
 > 执行日期：2026-11-10
 > 被测对象：`v0.1.0-r21`（Linux/arm64 交叉编译，`/opt/kcockpit/releases/v0.1.0-r21`，systemd `k-cockpit`）
 > 环境：**生产形态**——真实 KVM 节点（aarch64 / QEMU 8.2.2 / OVS 3.3.9）+ nginx TLS 终结 + PostgreSQL 16 + 真实 agent（mTLS `:8443`，禁用 `SECURITY_DEV_BYPASS_CODE`）
-> 范围：仅 U-12（45 条 SKIP 端点 + 四个零测试子包），不重复第 14 轮的 26 套件
+> 范围：U-12（45 条 SKIP 端点 + 四个零测试子包）为主，另顺带收口 U-16 与 U-26 的两项；不重复第 14 轮的 26 套件
 
 ### 10.1 结果总览
 
@@ -309,7 +309,10 @@ G-15 应精确为「单元层已有完整单测，缺 HTTP 端点级」；
 | 认证与多阶段登录 | `~/.kc_test/r21/t_auth_matrix.py` | 60 | **60/60** |
 | 流式 / 导出 / 控制台 | `~/.kc_test/r21/t_skip_streams.py` | 32 | **32/32** |
 | 全局写入类端点 | `~/.kc_test/r21/t_skip_global.py` | 35 | **35/35** |
-| 合计 | | **127** | **127/127 通过** |
+| 节点通道协议级（U-16） | `~/.kc_test/r21/t_u16_channel.py` | 9 | **9/9** |
+| 心跳与离线阈值（U-16） | `~/.kc_test/r21/t_u16_heartbeat.py` | 8 | **8/8** |
+| 诊断导出敏感分类（U-26） | `~/.kc_test/r21/t_u26_diagnostics.py` | 21 | **21/21** |
+| 合计 | | **165** | **165/165 通过** |
 
 `go test ./internal/...` 60 个包全部 `ok`（exit 0），`gofmt -l cmd internal` 无输出。
 
@@ -364,9 +367,51 @@ VM 关机后 `GET /vms/:id/console/ws` 返回 `503 无法建立控制台通道`�
 
 - `authkey` 轮换在**多实例**部署下的密钥分发（单实例无此路径，无法在本环境制造）；
 - 公开 15 条端点的字段级契约仍由功能套件覆盖，U-12 只断言「未登录可达 / 未登录不可达」；
-- U-05 / U-07 / U-13 / U-14 / U-26 等仍按计划未执行，状态不变（见 `DELIVERY_TEST_PLAN.md` §11）。
+- U-05 / U-07 / U-13 / U-14 等仍按计划未执行，状态不变（见 `DELIVERY_TEST_PLAN.md` §11）；U-26 只剩应急 CLI 带外路径与站点维护多节点（后者需第二台节点）。
 
-### 10.6 证据索引（r21）
+### 10.6 顺带收口：U-16 节点通道与 U-26 诊断导出
+
+U-12 收口后按计划继续推进环境具备的 B 档项，两项闭环：
+
+**U-16 节点通道（协议层 9/9 + 心跳 8/8）**。这些事只能在协议层验：`enroll`
+与 `run` 都按当前版本说话，构造不出「旧版本 agent」或「没有证书的客户端」；
+单测里调判断函数验的是判断函数，不是网关行为——真把无证书连接放过去时单测
+不会红。用仓库自带的 `tests/delivery/agentgw_probe`（本轮补了 `-out-cert`，
+把签发的证书落盘以核对 CN）在节点上直连 `:8443`：
+
+| 用例 | 结果 |
+|---|---|
+| 注册声明协议版本 0 / 2 | `FailedPrecondition 协议版本不受支持（当前支持 1~1）`，**不签发证书** |
+| 有效令牌 + 版本 1 | 受理，签发 664 字节证书 |
+| 证书 CN vs 接口返回的 agent_id | `CN = 1616b2e2-…` 与 `agent_id` 完全一致；EKU 仅 `TLS Web Client Authentication` |
+| 同一令牌重放 | `PermissionDenied 注册令牌无效或已被使用`（一次性） |
+| 无客户端证书开 Channel | `Unauthenticated 缺少客户端证书（请先 enroll）` |
+| 同 CA 签发但 CN 不是已注册 agent | `PermissionDenied 未知 agent 身份，请重新注册` |
+| 非本 CA 签发的证书 | TLS 层不认，同样表现为 `Unauthenticated`（`ClientCAs` 生效） |
+
+心跳阈值单独用 `SIGSTOP` 冻结 agent 进程来测——**把「心跳停了」与「连接断了」
+分开**，否则测到的是连接关闭事件而不是 40s 阈值：间隔实测 `10 / 10 / 10` 秒，
+冻结后 34 秒判离线（末次心跳在冻结前 6 秒），停止 20 秒时仍在线，`SIGCONT`
+后 2 秒回到在线且能力 131 项仍在。
+
+顺带验证到一处**接管行为**：用真实 agent 证书再开一条通道时，探针先顶替旧连接，
+1.1 秒后被 agent 自己的重连顶替并收到 `Aborted 该节点已建立新的通道，旧通道关闭`，
+节点全程在线——这正是本轮修掉的 P1（断开事件被 `select` 吞掉）的活体验证。
+
+已知文案瑕疵（未改）：证书不受信与服务端「没收到证书」在 interceptor 里无法
+区分（`VerifyClientCertIfGiven` 会直接丢弃不受信证书），因此两者都提示「缺少
+客户端证书」。要精确区分得改 `ClientAuth` 为强制校验，而那会破坏「无证书也
+能 Register」的两态模型，不值当。
+
+**U-26 诊断导出（21/21）**。诊断包是要外发的东西（用户会贴给厂商），判据不是
+「能不能下」，而是「里面有没有不该有的东西」：只选 `config` 时包里只有
+`config/*` 与清单；`secret` 项只回 `is_set` 不回明文；写入哨兵口令
+`U26-Sentinel-…` 后，全包（含 284 KB 审计日志）逐字节搜不到；首次设置后回滚
+被拒（没有前值，不能把口令悄悄抹成空），有前值时回滚成功；未知分类 400、
+`config,logs` 组合生效；租户 403。清理时删掉了 `system_setting` 里的哨兵行，
+`is_set` 回到 false。
+
+### 10.7 证据索引（r21）
 
 | 证据 | 路径 |
 |---|---|
@@ -375,5 +420,8 @@ VM 关机后 `GET /vms/:id/console/ws` 返回 `503 无法建立控制台通道`�
 | 全局写入结果 | `~/.kc_test/r21/global-matrix.json`（35 条） |
 | 脚本 | `~/.kc_test/r21/{t_auth_matrix,t_skip_streams,t_skip_global}.py` |
 | 单测与覆盖率 | `go test ./internal/...`（60 包 ok）；四个子包 `-cover` 见 §10.3 |
+| 节点通道协议级 | `~/.kc_test/r21/u16-channel.json`（9 条，探针 `tests/delivery/agentgw_probe`） |
+| 心跳与离线阈值 | `~/.kc_test/r21/u16-heartbeat.json`（8 条） |
+| 诊断导出敏感分类 | `~/.kc_test/r21/u26-diagnostics.json`（21 条） |
 | 部署制品 | `/opt/kcockpit/releases/v0.1.0-r21`（`current` 已指向） |
 | 服务端日志 | `journalctl -u k-cockpit`（控制台升级/释放有 `[console]` 行） |

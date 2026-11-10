@@ -43,6 +43,7 @@ func main() {
 	token := flag.String("token", "", "一次性注册令牌（register 用）")
 	protoVer := flag.Int("proto", 1, "注册时声明的协议版本")
 	agentID := flag.String("agent-id", "", "注册时声明的 agent_id（留空由控制面生成）")
+	outCert := flag.String("out-cert", "", "把注册返回的客户端证书写到该路径（用于核对 CN）")
 	timeout := flag.Duration("timeout", 10*time.Second, "单次调用超时")
 	flag.Parse()
 
@@ -87,6 +88,15 @@ func main() {
 		}
 		fmt.Printf("result=accepted proto=%d agent_id=%s cert_bytes=%d\n",
 			*protoVer, resp.GetAgentId(), len(resp.GetClientCert()))
+		// 把证书落盘：mTLS 的身份约定是「证书 CN == agent_id」，而这一点
+		// 只能在证书本体上核对——接口回显的 agent_id 与证书里的 CN 是
+		// 两条独立来源，都一致才算成立。
+		if *outCert != "" {
+			if err := os.WriteFile(*outCert, resp.GetClientCert(), 0o600); err != nil {
+				fail("写证书失败: %v", err)
+			}
+			fmt.Printf("cert_written=%s\n", *outCert)
+		}
 	case "channel":
 		stream, err := client.Channel(ctx)
 		if err != nil {

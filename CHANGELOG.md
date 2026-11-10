@@ -18,7 +18,7 @@
 ## [Unreleased]
 
 ### Added
-- **U-12 全量收口（2026-11-10，r21）**：按当前代码重生成 SKIP 清单后逐条补测 45 条端点，实机 **127/127 断言通过**（认证 60 / 流式·导出·控制台 32 / 全局写入 35）；`authkey`、`mailer`、`passaudit`、`reqlog` 四个零测试子包覆盖率 0% → 85.5% / 87.5% / 90.4% / 90.0%。`DELIVERY_TEST_PLAN.md` 的 TP-19 与 U-12 状态同步回填，`DELIVERY_TEST_REPORT.md` 新增 §10。
+- **U-12 全量收口（2026-11-10，r21）**：按当前代码重生成 SKIP 清单后逐条补测 45 条端点，实机 **127/127 断言通过**（认证 60 / 流式·导出·控制台 32 / 全局写入 35）；`authkey`、`mailer`、`passaudit`、`reqlog` 四个零测试子包覆盖率 0% → 85.5% / 87.5% / 90.4% / 90.0%。另有 **U-16 节点通道 9/9 + 心跳 8/8**（协议版本 0/2 拒绝、证书 CN == agent_id、令牌一次性、无证书/陌生 CN/非本 CA 均被拒、心跳 10s 与离线 40s）与 **U-26 诊断导出 21/21**（secret 项只回 `is_set`、哨兵口令全包扫描不可见、租户 403）。`DELIVERY_TEST_PLAN.md` 的 TP-19 升为已测试、U-12/U-16/U-26 标记收口，`DELIVERY_TEST_REPORT.md` 新增 §10。
 - **交付测试计划与执行报告（2026-11-10）**：新增 [`DELIVERY_TEST_PLAN.md`](docs/04-engineering/DELIVERY_TEST_PLAN.md)（能力基线、TP-00 ~ TP-23 共 24 套件、六视角追溯矩阵、五道阶段门与出口准则）与执行报告；`docs/README.md` 索引同步登记。
 - **交付测试计划的执行状态标记（2026-11-10）**：`DELIVERY_TEST_PLAN.md` 新增 §5.0 逐套件状态总表（13 已测试 / 7 部分验证 / 4 未测试）与 §11 未测试项清单（U-01 ~ U-31，A/B/C 三档）；§7.1 补五道门实绩与出口准则逐条状态。明确区分「跑过」与「测完」，避免把 26/26 全绿误读为可交付。
 - **路由守卫矩阵的 CI 用例（G-14）**：新增 `internal/handler/platform/guard_matrix_test.go`，从 `routes_*.go` 逐条解析 340 条域路由，校验总数与 GET/POST/PUT/PATCH/DELETE 方法分布、public 15 / admin 160 / user 165 三档互斥且覆盖全集、`publicAPIRoutes` 与源码逐条一致、adminOnly 必须同时挂 requireAuth。新增路由漏标权限时 CI 直接失败。
