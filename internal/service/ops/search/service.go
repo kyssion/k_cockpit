@@ -64,7 +64,12 @@ func (s *Service) Search(ctx context.Context, q string, v authz.Viewer) ([]Match
 	if len([]rune(q)) < 2 {
 		return []Match{}, nil
 	}
-	like := "%" + q + "%"
+	// 关键字里的 % / _ / \ 必须先转义，否则用户搜 "%" 会命中一切，
+	// 看起来像"筛选没生效"。与 auditlog 服务同一口径：光转义还不够，
+	// 每条 LIKE 都必须带 ESCAPE '\' —— SQLite 没有默认转义符，不写
+	// ESCAPE 时 "\%" 会被当成「反斜杠 + 任意字符」，在生产（PG）正确、
+	// 在测试库静默失效。
+	like := "%" + escapeLike(q) + "%"
 
 	out := make([]Match, 0, perKind*3)
 	out = append(out, s.searchVMs(ctx, like, v)...)
@@ -80,7 +85,7 @@ func (s *Service) Search(ctx context.Context, q string, v authz.Viewer) ([]Match
 func (s *Service) searchVMs(ctx context.Context, like string, v authz.Viewer) []Match {
 	query := s.db.WithContext(ctx).Model(&model.VM{}).
 		Where("present = ?", true).
-		Where("name LIKE ? OR ip_summary LIKE ? OR COALESCE(remark, '') LIKE ?", like, like, like)
+		Where("name LIKE ? ESCAPE '\\' OR ip_summary LIKE ? ESCAPE '\\' OR COALESCE(remark, '') LIKE ? ESCAPE '\\'", like, like, like)
 	if !v.IsAdmin {
 		query = query.Where("owner_id = ?", v.UserID)
 	}
@@ -109,7 +114,7 @@ func (s *Service) searchVMs(ctx context.Context, like string, v authz.Viewer) []
 func (s *Service) searchNodes(ctx context.Context, like string) []Match {
 	var rows []model.Node
 	if err := s.db.WithContext(ctx).
-		Where("name LIKE ? OR COALESCE(remark, '') LIKE ?", like, like).
+		Where("name LIKE ? ESCAPE '\\' OR COALESCE(remark, '') LIKE ? ESCAPE '\\'", like, like).
 		Order("name").Limit(perKind).Find(&rows).Error; err != nil {
 		log.Printf("[search] 检索节点失败: %v", err)
 		return nil
@@ -129,7 +134,7 @@ func (s *Service) searchNodes(ctx context.Context, like string) []Match {
 
 func (s *Service) searchTemplates(ctx context.Context, like string, v authz.Viewer) []Match {
 	query := s.db.WithContext(ctx).Model(&model.Template{}).
-		Where("name LIKE ? OR COALESCE(remark, '') LIKE ?", like, like)
+		Where("name LIKE ? ESCAPE '\\' OR COALESCE(remark, '') LIKE ? ESCAPE '\\'", like, like)
 	if !v.IsAdmin {
 		// 与模板列表同一套可见性规则：已发布，或自己创建的私有模板。
 		query = query.Where("published = ? OR created_by = ?", true, v.UserID)
@@ -150,6 +155,14 @@ func (s *Service) searchTemplates(ctx context.Context, like string, v authz.View
 		})
 	}
 	return out
+}
+
+// escapeLike 转义 LIKE 通配符，口径与 auditlog.Service 一致（见该文件
+// 对 SQLite / PostgreSQL 默认转义符差异的说明）。两处都必须带 ESCAPE 子句。
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "%", "\\%")
+	return strings.ReplaceAll(s, "_", "\\_")
 }
 
 func statusText(status string) string {
