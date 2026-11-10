@@ -192,12 +192,16 @@ func TestLoad_FromEnv(t *testing.T) {
 	t.Setenv("DB_MAX_OPEN_CONNS", "10")
 	t.Setenv("DB_MAX_IDLE_CONNS", "2")
 	t.Setenv("DB_CONN_MAX_LIFETIME", "30m")
+	t.Setenv("DATA_DIR", "/var/lib/kcockpit/data")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("加载配置失败: %v", err)
 	}
 
+	if cfg.Data != "/var/lib/kcockpit/data" {
+		t.Errorf("可写数据目录 = %q, 期望 /var/lib/kcockpit/data", cfg.Data)
+	}
 	if cfg.Env != "test" || !cfg.Debug {
 		t.Errorf("应用配置读取有误: env=%q debug=%t", cfg.Env, cfg.Debug)
 	}

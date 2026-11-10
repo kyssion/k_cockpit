@@ -643,6 +643,18 @@ func (s *Service) OpenConsole(ctx context.Context, id int64, viewerID int64, v a
 		if errors.Is(err, agent.ErrStreamUnsupported) {
 			return nil, nil, api.Unavailable("当前节点的 agent 不支持控制台数据流")
 		}
+		// 通道打不开时最常见的原因是虚拟机没在运行——关着的机器没有 VNC
+		// 端口可连。这时回 503 是错的：503 的语义是「服务端暂时不可用，
+		// 稍后重试」，而重试一台关着的机器永远不会成功，界面上还会把它
+		// 显示成一次服务故障（实机 U-12 抓到的正是这条：停机开控制台拿到
+		// 503「无法建立控制台通道」）。
+		//
+		// 这里用状态投影**只解释、不判决**：先让 agent 试，失败了再参考
+		// 状态给出更准确的原因。反过来（先按投影拒绝）会让一个恰好陈旧的
+		// 投影挡住本可成功的连接——vm.Status 的权威在虚拟化层，它只是缓存。
+		if vm.Status != model.VMStatusRunning {
+			return nil, nil, api.Conflict("虚拟机未运行，无法打开控制台")
+		}
 		return nil, nil, api.Unavailable("无法建立控制台通道")
 	}
 

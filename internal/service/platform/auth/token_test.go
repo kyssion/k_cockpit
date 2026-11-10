@@ -165,3 +165,26 @@ func TestInvalidTokenErrorIsOpaque(t *testing.T) {
 		}
 	}
 }
+
+// TestKeyUnavailableIsNotInvalidToken 守住「依赖不可用 ≠ 凭据失效」。
+//
+// 实机缺陷（r19）：PostgreSQL 停 2 秒，全部接口回 401「登录状态已失效」。
+// 根因是 Parse 把「取不到签名密钥」压成了 ErrInvalidToken——而密钥来自数据库
+// （支持轮换），数据库一抖，所有人的会话看起来都失效了。用户被踢到登录页，
+// 可他的 Cookie 完好无损：数据库一恢复，同一个 Cookie 立刻又能用。
+//
+// 401 会让前端清会话，503 只会让它重试。这两件事必须分得开。
+func TestKeyUnavailableIsNotInvalidToken(t *testing.T) {
+	issuer := newIssuer(t)
+	issuer.SetKeyProvider(func() (string, []byte, error) {
+		return "", nil, errors.New("dial tcp 127.0.0.1:5432: connect: connection refused")
+	})
+
+	_, err := issuer.Parse("any.token.here")
+	if !errors.Is(err, auth.ErrKeyUnavailable) {
+		t.Fatalf("密钥不可用应返回 ErrKeyUnavailable，实际 %v", err)
+	}
+	if errors.Is(err, auth.ErrInvalidToken) {
+		t.Fatal("不能把密钥不可用报成令牌无效：前端会据此清掉用户会话")
+	}
+}

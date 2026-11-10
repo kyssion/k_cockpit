@@ -27,8 +27,11 @@ func (a *app) setupStorageServices() {
 
 	// 存储配额（f-9-02）：按用户按节点。
 	a.storage.quota = quota.NewService(db, a.recorder)
-	// 分片暂存区放在数据库同级的 data 目录下——控制面持久化的东西都在那里。
-	chunkStore, err := userstorage.NewChunkStore(filepath.Join(filepath.Dir(a.cfg.DB.Path), "uploads"))
+	// 分片暂存区放在可写数据目录下（DATA_DIR，默认 data）——控制面运行期
+	// 产生的字节都在那里。**不从 DB_PATH 推导**：PostgreSQL 形态下 DB_PATH
+	// 没有意义，而按 DB_PATH 的默认值会拼出相对发布目录的 `data`，用专用
+	// 用户启动时直接 mkdir 失败退出。
+	chunkStore, err := userstorage.NewChunkStore(filepath.Join(a.cfg.Data, "uploads"))
 	if err != nil {
 		log.Fatalf("[server] 初始化上传暂存区失败: %v", err)
 	}

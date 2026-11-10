@@ -26,8 +26,8 @@ docs/
 │   ├── CODING_STANDARDS.md        # 编码规范
 │   ├── DEVELOPMENT.md             # 本地开发指南
 │   ├── TESTING.md                 # 测试规范
-│   ├── DELIVERY_TEST_PLAN.md      # 交付测试计划：全能力覆盖基线、套件矩阵、追溯矩阵与出口准则
-│   ├── DELIVERY_TEST_REPORT.md    # 交付测试执行报告：逐套件结果、缺陷修复、豁免与残留风险
+│   ├── DELIVERY_TEST_PLAN.md      # 交付测试计划：能力基线、24 套件、§5.0 执行状态、§11 未测试项清单与出口准则
+│   ├── DELIVERY_TEST_REPORT.md    # 第 14 轮执行报告：26/26 全绿、缺陷修复、豁免与残留风险
 │   ├── GIT_WORKFLOW.md            # 分支与提交流程
 │   ├── DEPLOYMENT.md              # 部署、升级与回滚（控制面）
 │   ├── SECURITY_REVIEW.md         # 发版前安全自查记录与 M5 复查项
@@ -80,8 +80,8 @@ docs/
 1. [`04-engineering/TROUBLESHOOTING.md`](04-engineering/TROUBLESHOOTING.md) — 排障纪律、定界方法、systemd 检查清单与案例复盘
 2. [`04-engineering/DEPLOYMENT.md`](04-engineering/DEPLOYMENT.md) — 控制面的构建、安装、迁移、升级、回滚与上线检查清单
 3. [`04-engineering/SECURITY_REVIEW.md`](04-engineering/SECURITY_REVIEW.md) — 发版前安全自查记录（0.1.0 起每版一份）
-4. [`04-engineering/DELIVERY_TEST_PLAN.md`](04-engineering/DELIVERY_TEST_PLAN.md) — 正式交付前的全能力测试计划：能力基线、现有证据分级、24 个套件、六视角追溯矩阵、五道门与出口准则
-5. [`04-engineering/DELIVERY_TEST_REPORT.md`](04-engineering/DELIVERY_TEST_REPORT.md) — 交付测试的执行结果、修复复验、豁免单与残留风险
+4. [`04-engineering/DELIVERY_TEST_PLAN.md`](04-engineering/DELIVERY_TEST_PLAN.md) — 正式交付前的全能力测试计划：能力基线、证据分级、24 套件、六视角矩阵、五道门与出口准则；**§5.0 已标注逐套件执行状态、§11 登记 31 项未测试项**
+5. [`04-engineering/DELIVERY_TEST_REPORT.md`](04-engineering/DELIVERY_TEST_REPORT.md) — 第 14 轮执行结果（功能面全绿、**不可签可交付**）、修复复验、豁免单与残留风险
 6. 参考项目对应条目 → [`08-reference/README.md`](08-reference/README.md) 下各项目的 `pitfalls.md`（已踩过的坑）
 
 ---

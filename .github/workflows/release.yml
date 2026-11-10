@@ -59,8 +59,9 @@ jobs:
             cp -r web/dist "$OUT/public"
             cp -r internal/platform/database/migrations "$OUT/migrations"
             cp deploy/agent/k_cockpit-agent.service "$OUT/"
+            cp deploy/controlplane/k-cockpit.service "$OUT/"
             tar -czf "k_cockpit_${VERSION}_linux-${ARCH}.tar.gz" \
-              -C "$OUT" server agent migrate public migrations k_cockpit-agent.service
+              -C "$OUT" server agent migrate public migrations k_cockpit-agent.service k-cockpit.service
           done
           sha256sum k_cockpit_*.tar.gz > SHA256SUMS
 

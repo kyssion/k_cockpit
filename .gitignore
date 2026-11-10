@@ -669,3 +669,6 @@ sandbox/
 # *.mov
 # *.psd
 # *.ai
+
+# 发布产物（`release.yml` 与本机打包脚本的落点，含 100MB+ 二进制与压缩包）
+dist-release/

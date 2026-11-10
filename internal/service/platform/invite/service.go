@@ -24,6 +24,7 @@ import (
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
+	"k_cockpit/internal/platform/policy"
 )
 
 // Service 提供邀请能力。
@@ -77,8 +78,8 @@ const defaultTTLHours = 72
 // ttl_hours 传大会让 time.Duration 乘法溢出，过期时间反而落到过去。
 const maxTTLHours = 30 * 24
 
-// minPasswordLen 是受邀人自设密码的下限。
-const minPasswordLen = 12
+// minPasswordLen 是受邀人自设密码的下限，与其它入口共用同一个常量。
+const minPasswordLen = policy.MinPasswordLength
 
 // View 是邀请的对外视图（**不含令牌**）。
 type View struct {

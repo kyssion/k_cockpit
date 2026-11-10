@@ -292,3 +292,88 @@ G-15 应精确为「单元层已有完整单测，缺 HTTP 端点级」；
 | E2E 冒烟 | `/tmp/kc_exec/e2e_smoke3.log` |
 | 控制面日志 | `data/lab2/server-r14.log`（不入库） |
 | 节点事实 | 节点侧 `virsh list --all`、`ovs-vsctl list-br`、`findmnt`、`qemu-img info`（脱敏输出见各套件日志） |
+
+---
+
+## 10. 第 15 轮（r21）：U-12 全量收口
+
+> 执行日期：2026-11-10
+> 被测对象：`v0.1.0-r21`（Linux/arm64 交叉编译，`/opt/kcockpit/releases/v0.1.0-r21`，systemd `k-cockpit`）
+> 环境：**生产形态**——真实 KVM 节点（aarch64 / QEMU 8.2.2 / OVS 3.3.9）+ nginx TLS 终结 + PostgreSQL 16 + 真实 agent（mTLS `:8443`，禁用 `SECURITY_DEV_BYPASS_CODE`）
+> 范围：仅 U-12（45 条 SKIP 端点 + 四个零测试子包），不重复第 14 轮的 26 套件
+
+### 10.1 结果总览
+
+| 组 | 脚本 | 断言 | 结果 |
+|---|---|---|---|
+| 认证与多阶段登录 | `~/.kc_test/r21/t_auth_matrix.py` | 60 | **60/60** |
+| 流式 / 导出 / 控制台 | `~/.kc_test/r21/t_skip_streams.py` | 32 | **32/32** |
+| 全局写入类端点 | `~/.kc_test/r21/t_skip_global.py` | 35 | **35/35** |
+| 合计 | | **127** | **127/127 通过** |
+
+`go test ./internal/...` 60 个包全部 `ok`（exit 0），`gofmt -l cmd internal` 无输出。
+
+### 10.2 本轮修复的缺陷（6 条，全部为真实缺陷）
+
+**1）`agent/hub` 连接注销被吞掉（P1 回归，上一轮引入）**
+`TestGatewayEndToEnd` 报「节点下线（连接注销）超时」。`git worktree` 对照 HEAD 证明是工作区引入：上一轮为「新连接顶替旧连接」加的读协程里，`recvCh <- err` 与 `<-stream.Context().Done()` 在 `select` 中竞争，客户端断开时约有一半概率选中 Done 分支，**断开事件被丢弃**，`detach` 永不执行——节点在控制面上永久「在线」，指令被投进没人读的 outbox 直到超时。真实表现是：一次带同一证书的探测连接就能把在线节点顶成不可达。
+修法：改用 `close(recvDone)` 传递结束信号（`close` 不会被 `select` 丢弃），错误存 `var recvErr error`（close 建立 happens-before，无需加锁），并抽出 `dispatchInbound` / `drainInbound` 保证已到达消息不丢。验证：全包通过、`-count=5`、`-race` 均绿。
+
+**2）口令审计在开关关闭时记「检查失败」（每次启动一条红事件）**
+`passaudit` 的注释写着「开关关闭不算故障」，但 `tick()` 把 `RunNow` 的 422 校验错误当成真失败，于是每次启动都在调度事件页留一条「口令检查失败：定时口令检查未开启」。
+修法：新增 `Service.Enabled()`，`tick()` 开头早退；`TestLoopStaysSilentWhenDisabled` 作为回归锁。
+
+**3）软删除的用户名永久占名（实机 U-12 抓出）**
+认证矩阵第二遍运行时 `POST /users` 返回 409「用户名已被占用」，而 `/users` 列表里查不到该用户。根因：`uniq_user_username` 是**无条件**唯一索引，而用户是软删除（要保留审计里的 `operator_id` 引用）。与上一轮修的 `uniq_node_name` 完全同型。
+修法：迁移 `0058_user_unique_partial.sql` 改为 `WHERE deleted_at IS NULL` 的部分唯一索引，模型 tag 加条件、`testschema.go` 登记、实机 `DROP/CREATE INDEX` 重建（`\d user` 已确认带 `WHERE`）。`TestRecreateUserAfterDelete` 锁定「删掉的名字可以重新注册」。
+
+**4）密码下限两套标准（安全降级路径）**
+`POST /auth/login/password` 按下限 12 位拒绝，而 `PUT /auth/password` 只要求 8 位且仅挡「与用户名完全相同」。于是可以先用 12 位设密码，再在账号设置里降回 8 位——**下限被从最弱的那条路径绕过**。
+修法：新建 `internal/platform/policy`，`MinPasswordLength = 12` 单点定义，五个入口（登录改密、账号设置、管理员建号、应急口令、邀请注册）全部引用；账号设置同时改为「不得**包含**用户名」并按 `[]rune` 计长。
+
+**5）停机时打开控制台返回 503（本轮实机抓出）**
+VM 关机后 `GET /vms/:id/console/ws` 返回 `503 无法建立控制台通道`。503 的语义是「服务端暂时不可用，稍后重试」，而重试一台关着的机器永远不会成功，界面还会把它显示成一次服务故障。
+修法：`OpenConsole` 在**流打开失败之后**再参考状态投影——停机则返回 `409 虚拟机未运行，无法打开控制台`，其余仍为 503。顺序是刻意的：先让 agent 试，失败后才解释；反过来先按投影拒绝，会让一个恰好陈旧的投影挡住本可成功的连接（`vm.Status` 的权威在虚拟化层）。新增 3 条单测锁住这个边界，其中 `TestOpenConsoleDoesNotTrustStaleStatus` 专门验证「状态写 stopped 但流能开 → 必须成功」。
+
+**6）邀请建号硬编码 12 位（第 4 条的同源漏网处）**
+`useradmin.CreateFromInvite` 里写的是 `len(password) < 12` 与一段手写文案，而同一个文件的 `Create` 已改用 `policy.MinPasswordLength`。改下限时会漏改这一处，且按**字节**计长对中文密码偏严。已统一。
+
+### 10.3 覆盖率变化（U-12 后半）
+
+| 包 | 之前 | 之后 | 用例要点 |
+|---|---|---|---|
+| `service/platform/authkey` | 0% | **85.5%** | 轮换后「在用密钥恰好 1 把」、旧记录保留但停用、密钥 64 位 hex、换 `SESSION_SECRET` 后必须报错而不是用空密钥签名、循环在关闭/到期/失败三态下的事件文案 |
+| `service/platform/mailer` | 0% | **87.5%** | 进程内假 SMTP：头注入（`\r\nBcc:`）必须拒绝、RFC2047 主题与发件人解码、AUTH 失败、RCPT 被拒、**STARTTLS 不被支持时必须失败**（不得静默降级明文） |
+| `service/platform/passaudit` | 0% | **90.4%** | 先清后标、跳过不存在的用户名、只通知命中者本人、审计 `hits` 与 `NodeID`、开关关闭静默（回归用例） |
+| `service/platform/reqlog` | 0% | **90.0%** | 开关即时生效（无需重启）、`limit` 夹到 100、`Clear(0)` 清空 vs `Clear(30)` 只删旧的、库不可用时 List 报错而 Record 不报错（旁路） |
+
+### 10.4 45 条 SKIP 端点：测试自身假设错误（**不是**产品缺陷）
+
+这些先被当成缺陷、定界后改的是测试，产品一行未动。记录在此以免下一轮重复怀疑：
+
+| 现象 | 真因 |
+|---|---|
+| SSE 端点一律 401，而同一 Cookie 的 `/tasks` 是 200 | **会话指纹 R-007 把 IP + User-Agent 一起绑进会话**。测试客户端自造 UA 即被判指纹不符。这不是 Cookie 问题，也不是缺陷——浏览器同源请求天然一致，非浏览器场景有 `action_token` 通道 |
+| SSE 用例用 `kc2.get('/tasks/stream')` 会永久挂住 | 拿到 200 之后它就是一条不会结束的流，服务端每 20 秒心跳，socket 超时被不断重置。改为一读到一个完整事件就返回 |
+| `POST /vms/:id/exports` 返回体里没有 `id` | 导出是异步的：受理返回 `{task_id, status}`，导出记录在任务成功后落库。模板制备、删除导出同理 |
+| 控制台 WS 停机时返回「控制台尚未开启」 | 控制台出厂是关闭的，必须先 `PATCH /vms/:id/console {"enabled":true}`。否则「停机拒绝」会因为错误的原因通过 |
+| 管理员新建的账号立刻登录 401 | 管理员建号默认 `status=pending` + `force_password_change`，必须先 `PUT /users/:id/status` 激活；邀请注册不走这条路（密码本人设，即刻可登录） |
+| 改密后断言「当前会话仍有效」失败 | R-010：安全信息变更让该用户**全部**会话（含当前）立即失效 |
+
+### 10.5 残留
+
+- `authkey` 轮换在**多实例**部署下的密钥分发（单实例无此路径，无法在本环境制造）；
+- 公开 15 条端点的字段级契约仍由功能套件覆盖，U-12 只断言「未登录可达 / 未登录不可达」；
+- U-05 / U-07 / U-13 / U-14 / U-26 等仍按计划未执行，状态不变（见 `DELIVERY_TEST_PLAN.md` §11）。
+
+### 10.6 证据索引（r21）
+
+| 证据 | 路径 |
+|---|---|
+| 认证矩阵结果 | `~/.kc_test/r21/auth-matrix.json`（60 条） |
+| 流式/导出/控制台结果 | `~/.kc_test/r21/stream-matrix.json`（32 条） |
+| 全局写入结果 | `~/.kc_test/r21/global-matrix.json`（35 条） |
+| 脚本 | `~/.kc_test/r21/{t_auth_matrix,t_skip_streams,t_skip_global}.py` |
+| 单测与覆盖率 | `go test ./internal/...`（60 包 ok）；四个子包 `-cover` 见 §10.3 |
+| 部署制品 | `/opt/kcockpit/releases/v0.1.0-r21`（`current` 已指向） |
+| 服务端日志 | `journalctl -u k-cockpit`（控制台升级/释放有 `[console]` 行） |

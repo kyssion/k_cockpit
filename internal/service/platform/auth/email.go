@@ -196,6 +196,9 @@ func (s *Service) VerifyResetCode(ctx context.Context, email, code string, ci Cl
 // 用了"，留着旧会话会让这次重置只对"下次登录"生效。
 func (s *Service) ResetPassword(ctx context.Context, ticket, newPassword string, ci ClientInfo) error {
 	claims, err := s.tokens.Parse(ticket)
+	if errors.Is(err, ErrKeyUnavailable) {
+		return api.Unavailable("认证服务暂时不可用")
+	}
 	if err != nil || claims.TokenType != model.TokenTypeReset {
 		return api.Unauthenticated("重置链接已失效，请重新发起找回密码")
 	}

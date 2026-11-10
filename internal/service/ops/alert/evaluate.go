@@ -112,31 +112,7 @@ func (s *Service) Evaluate(ctx context.Context) (int, error) {
 			// first_at / status / 确认信息——无条件重置会把"这个告警从什么时候
 			// 开始"每轮都冲掉，而那是处理紧迫程度的唯一依据。
 			// （SQL 的 SET 表达式读的是**旧行**，所以后面的 CASE 看到的是旧 status。）
-			if err := s.db.WithContext(ctx).Clauses(clause.OnConflict{
-				Columns: []clause.Column{
-					{Name: "kind"}, {Name: "resource_type"}, {Name: "resource_id"},
-				},
-				DoUpdates: clause.Assignments(map[string]any{
-					"node_id":       w.NodeID,
-					"level":         w.Level,
-					"title":         w.Title,
-					"detail":        w.Detail,
-					"last_at":       now,
-					"resource_name": w.ResourceName,
-					"status": gorm.Expr(
-						"CASE WHEN status = ? THEN ? ELSE status END",
-						model.AlertCleared, model.AlertActive),
-					"first_at": gorm.Expr(
-						"CASE WHEN status = ? THEN ? ELSE first_at END",
-						model.AlertCleared, now),
-					"ack_by": gorm.Expr(
-						"CASE WHEN status = ? THEN NULL ELSE ack_by END", model.AlertCleared),
-					"ack_at": gorm.Expr(
-						"CASE WHEN status = ? THEN NULL ELSE ack_at END", model.AlertCleared),
-					"cleared_at": gorm.Expr(
-						"CASE WHEN status = ? THEN NULL ELSE cleared_at END", model.AlertCleared),
-				}),
-			}).Create(&row).Error; err != nil {
+			if err := s.db.WithContext(ctx).Clauses(alertUpsertClause(now, w)).Create(&row).Error; err != nil {
 				log.Printf("[alert] 写入告警失败 kind=%s: %v", w.Kind, err)
 				continue
 			}
@@ -350,3 +326,43 @@ func formatPercent(v float64) string {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+// alertUpsertClause 是「不存在则插入、已存在则更新」的冲突子句。
+//
+// **CASE 里的列必须写表名限定**（`alert.status` 而不是 `status`）。
+// PostgreSQL 在 `INSERT ... ON CONFLICT DO UPDATE` 的 SET 表达式里解析裸列
+// 名时会同时看到目标表与 `excluded` 行，于是直接报 42702
+// `column reference "status" is ambiguous`；SQLite 不做这个检查，所以这条
+// 缺陷在 sqlite 测试里**完全不可见**。实机表现是：每轮评估的每一条告警都
+// 写不进去（日志里一分钟一条 ERROR），告警中心永远是空的——面板不报错，
+// 因为评估器的错误只进日志。
+//
+// 单独抽成函数是为了能被测试渲染成 SQL（见 evaluate_pg_test.go），否则这段
+// 表达式只存在于一条内联语句里，没有地方能在不连库的情况下检查它。
+func alertUpsertClause(now time.Time, w want) clause.OnConflict {
+	return clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "kind"}, {Name: "resource_type"}, {Name: "resource_id"},
+		},
+		DoUpdates: clause.Assignments(map[string]any{
+			"node_id":       w.NodeID,
+			"level":         w.Level,
+			"title":         w.Title,
+			"detail":        w.Detail,
+			"last_at":       now,
+			"resource_name": w.ResourceName,
+			"status": gorm.Expr(
+				"CASE WHEN alert.status = ? THEN ? ELSE alert.status END",
+				model.AlertCleared, model.AlertActive),
+			"first_at": gorm.Expr(
+				"CASE WHEN alert.status = ? THEN ? ELSE alert.first_at END",
+				model.AlertCleared, now),
+			"ack_by": gorm.Expr(
+				"CASE WHEN alert.status = ? THEN NULL ELSE alert.ack_by END", model.AlertCleared),
+			"ack_at": gorm.Expr(
+				"CASE WHEN alert.status = ? THEN NULL ELSE alert.ack_at END", model.AlertCleared),
+			"cleared_at": gorm.Expr(
+				"CASE WHEN alert.status = ? THEN NULL ELSE alert.cleared_at END", model.AlertCleared),
+		}),
+	}
+}

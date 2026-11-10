@@ -24,6 +24,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -162,6 +163,18 @@ type migration struct {
 	Checksum   string
 }
 
+// migrationFilePattern 限定可执行的迁移文件名：4 位编号 + 下划线 + 名称 + .sql。
+//
+// 目录里出现别的 `*.sql` 是真实会发生的事：从 macOS 打出来的发布包会带
+// AppleDouble 伴生文件（`._0001_init_schema.sql`），编辑器与同步盘也会留备份。
+// 这些文件的**内容不是 SQL**，直接执行的表现是数据库报 `invalid message
+// format` 之类的协议层错误，与「某个迁移写错了」几乎无法区分；更糟的是它们
+// 还会被当成编号 0001，触发一堆「迁移编号重复」的假告警。
+//
+// 因此这里按文件名严格过滤，并把跳过这件事打在日志里——静默跳过会让
+// 「少跑了一个迁移」变成不可见的问题。
+var migrationFilePattern = regexp.MustCompile(`^\d{4}_[A-Za-z0-9_.-]+\.sql$`)
+
 // loadMigrations 读取目录下的 .sql 并按文件名排序。
 //
 // 文件名的数字前缀即执行顺序——排序用文件名而不是修改时间：修改时间在
@@ -172,13 +185,21 @@ func loadMigrations(dir string) ([]migration, error) {
 		return nil, err
 	}
 
-	var names []string
+	var names, skipped []string
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
-			names = append(names, e.Name())
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+			continue
 		}
+		if !migrationFilePattern.MatchString(e.Name()) {
+			skipped = append(skipped, e.Name())
+			continue
+		}
+		names = append(names, e.Name())
 	}
 	sort.Strings(names)
+	for _, name := range skipped {
+		log.Printf("⚠️ 跳过不符合命名规则的 SQL 文件：%s（迁移文件名须为 4 位编号_名称.sql）", name)
+	}
 
 	// 现存 0018 / 0019 各有两份，是历史遗留。此时只告警不报错：已执行的
 	// 迁移文件不能改名（校验和登记在 schema_migration 里），但新增编号

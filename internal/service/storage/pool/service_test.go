@@ -501,3 +501,37 @@ func TestSetDefaultMovesFlag(t *testing.T) {
 		t.Error("新默认池未生效")
 	}
 }
+
+// TestListUnknownNodeNotFound 守住节点维度的同一口径。
+//
+// GET /nodes/999999999/storage-pools 原先返回 200 + 空数组，而 /nodes/:id
+// 与 /nodes/:id/stats 都是 404「节点不存在」。空列表会被读成「这个节点上
+// 一个池都没有」，而真实原因是节点 ID 根本不存在。
+func TestListUnknownNodeNotFound(t *testing.T) {
+	svc, _, _, _ := newTestEnv(t)
+
+	pools, err := svc.List(context.Background(), 424242)
+	assertStatus(t, err, 404)
+	if err == nil {
+		t.Fatalf("不存在的节点必须报错，实际返回 %d 个池", len(pools))
+	}
+	if !strings.Contains(err.Error(), "节点不存在") {
+		t.Errorf("报错应说明节点不存在: %v", err)
+	}
+}
+
+// TestListAllPoolsStillWorks 覆盖 nodeID=0 的语义：不带节点筛选时列出全部。
+//
+// 它必须**不受**上一条存在性校验影响——0 不是「不存在的节点」，而是
+// 「不筛节点」，概览页正是这么调的。
+func TestListAllPoolsStillWorks(t *testing.T) {
+	svc, _, _, _ := newTestEnv(t)
+
+	pools, err := svc.List(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("不带节点筛选的列表不应报错: %v", err)
+	}
+	if len(pools) != 0 {
+		t.Errorf("空库应返回 0 个池，实际 %d", len(pools))
+	}
+}

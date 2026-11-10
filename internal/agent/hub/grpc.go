@@ -103,10 +103,11 @@ func (g *gateway) Channel(stream agentproto.AgentGateway_ChannelServer) error {
 	}
 
 	c := &conn{
-		nodeID:  node.ID,
-		agentID: agentID,
-		outbox:  make(chan *serverToAgent, 32),
-		pending: map[string]*pendingOp{},
+		nodeID:     node.ID,
+		agentID:    agentID,
+		outbox:     make(chan *serverToAgent, 32),
+		pending:    map[string]*pendingOp{},
+		superseded: make(chan struct{}),
 	}
 	g.h.attach(c)
 	defer g.h.detach(c)
@@ -120,6 +121,8 @@ func (g *gateway) Channel(stream agentproto.AgentGateway_ChannelServer) error {
 			select {
 			case <-stream.Context().Done():
 				return
+			case <-c.superseded:
+				return
 			case m := <-c.outbox:
 				if err := stream.Send(m); err != nil {
 					return
@@ -128,29 +131,86 @@ func (g *gateway) Channel(stream agentproto.AgentGateway_ChannelServer) error {
 		}
 	}()
 
-	for {
-		msg, err := stream.Recv()
-		if err != nil {
-			<-writerDone
-			log.Printf("[agent-hub] 节点 %d（%s）通道断开: %v", node.ID, node.Name, err)
-			return nil // 断开是常态（网络抖动/agent 重启），不是错误
-		}
-		switch p := msg.Payload.(type) {
-		case *agentproto.AgentToServer_Heartbeat:
-			g.h.onHeartbeat(stream.Context(), node.ID, p.Heartbeat)
-		case *agentproto.AgentToServer_Stage:
-			g.h.onStage(c, p.Stage)
-		case *agentproto.AgentToServer_Result:
-			g.h.onResult(c, p.Result)
-		case *agentproto.AgentToServer_StreamOpened:
-			c.mu.Lock()
-			ch := c.pendingStreams[p.StreamOpened.StreamId]
-			c.mu.Unlock()
-			if ch != nil {
-				ch <- p.StreamOpened
+	// 上行读取放进独立 goroutine：主循环要能在「被新连接顶替」时退出。
+	// Recv 是阻塞调用，没法 select，只能这样把它变成可取消的。
+	//
+	// 结束信号用 **close(recvDone)**，不是往 channel 里发一个带 err 的结果：
+	// 客户端断开时 stream.Context().Done() 与「把失败结果送出去」会同时就绪，
+	// select 随机选一个——选中 Done 就等于把断开事件吞掉，主循环永远等不到，
+	// 这条连接在 conns 里变成僵尸（Online 一直为真，Execute 把指令投进没人
+	// 读的 outbox，直到超时）。close 不会被 select 丢掉。
+	recvCh := make(chan *agentproto.AgentToServer, 1)
+	recvDone := make(chan struct{})
+	// recvErr 只由读 goroutine 写、在 recvDone 关闭之后由主循环读，
+	// close 建立 happens-before，因此不需要额外加锁。
+	var recvErr error
+	go func() {
+		defer close(recvDone)
+		for {
+			msg, err := stream.Recv()
+			if err != nil {
+				recvErr = err
+				return
 			}
+			select {
+			case recvCh <- msg:
+			case <-stream.Context().Done():
+				recvErr = stream.Context().Err()
+				return
+			}
+		}
+	}()
+
+	for {
+		select {
+		case <-c.superseded:
+			<-writerDone
+			log.Printf("[agent-hub] 节点 %d（%s）通道被新连接顶替，旧通道关闭", node.ID, node.Name)
+			// 返回非 nil 会让 gRPC 立刻结束这条流，agent 侧看到错误后重连，
+			// 从而由**真正活着的那一端**重新登记进 conns。
+			return status.Error(codes.Aborted, "该节点已建立新的通道，旧通道关闭")
+		case <-recvDone:
+			// 先把已到达的消息处理完再退出：它们是已经收到的，丢掉会让
+			// 最后一次结果（例如关机的最终状态）凭空消失。
+			g.drainInbound(stream.Context(), c, recvCh)
+			<-writerDone
+			log.Printf("[agent-hub] 节点 %d（%s）通道断开: %v", node.ID, node.Name, recvErr)
+			return nil // 断开是常态（网络抖动/agent 重启），不是错误
+		case msg := <-recvCh:
+			g.dispatchInbound(stream.Context(), c, msg)
+		}
+	}
+}
+
+// dispatchInbound 把一条上行消息交给对应的处理器。
+func (g *gateway) dispatchInbound(ctx context.Context, c *conn, msg *agentproto.AgentToServer) {
+	switch p := msg.Payload.(type) {
+	case *agentproto.AgentToServer_Heartbeat:
+		g.h.onHeartbeat(ctx, c.nodeID, p.Heartbeat)
+	case *agentproto.AgentToServer_Stage:
+		g.h.onStage(c, p.Stage)
+	case *agentproto.AgentToServer_Result:
+		g.h.onResult(c, p.Result)
+	case *agentproto.AgentToServer_StreamOpened:
+		c.mu.Lock()
+		ch := c.pendingStreams[p.StreamOpened.StreamId]
+		c.mu.Unlock()
+		if ch != nil {
+			ch <- p.StreamOpened
+		}
+	default:
+		// 未知消息忽略不报错：协议承诺「未知字段/消息不破坏兼容」。
+	}
+}
+
+// drainInbound 取走缓冲区里已到达的消息并分发，返回时缓冲区已空。
+func (g *gateway) drainInbound(ctx context.Context, c *conn, ch chan *agentproto.AgentToServer) {
+	for {
+		select {
+		case msg := <-ch:
+			g.dispatchInbound(ctx, c, msg)
 		default:
-			// 未知消息忽略不报错：协议承诺「未知字段/消息不破坏兼容」。
+			return
 		}
 	}
 }

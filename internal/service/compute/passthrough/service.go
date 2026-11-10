@@ -333,7 +333,15 @@ func (s *Service) Detach(
 }
 
 // ListVM 返回某台虚拟机挂载的直通设备。
+//
+// 先确认虚拟机存在：不查这一步的话，一个不存在的 ID 会得到「200 + 空列表」，
+// 界面据此显示「这台机器存在、只是没有直通设备」——而 /vms/:id 下的其它
+// 子资源一律 404「虚拟机不存在」。同一个 ID 在相邻接口上有两种结论，
+// 只会让「ID 打错了」表现成「设备丢了」。
 func (s *Service) ListVM(ctx context.Context, vmID int64) ([]model.VMPassthrough, error) {
+	if _, err := s.loadVM(ctx, vmID); err != nil {
+		return nil, err
+	}
 	var rows []model.VMPassthrough
 	if err := s.db.WithContext(ctx).
 		Where("vm_id = ?", vmID).Order("pci_address ASC").Find(&rows).Error; err != nil {

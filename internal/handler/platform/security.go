@@ -108,6 +108,23 @@ func (h *Security) BeginTOTP(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
+	// **已启用的情况下重新绑定要过一次二次验证**：BeginTOTPSetup 会立刻把
+	// 旧密钥换掉（旧验证器当场失效），不设这道门的话，拿到会话的人可以直
+	// 接把第二因子换成自己的，再畅通无阻地做删除类操作——2FA 就只剩下
+	// 「对没被偷 Cookie 的人有效」。首次绑定不触发（还没有可验证的因子）。
+	//
+	// **pending 状态同样要验证**，这一条是实机测试补的：一次 Begin 之后
+	// totp_enabled 已经是 false（旧因子按设计当场作废），此后任何人拿着
+	// 会话再调一次这个接口都进不了守卫——于是「先用掉受害者的验证码、再
+	// 换成自己的密钥并确认」这条路绕开了上一段的保护。只要账号**曾经**
+	// 绑定过（= 库里还留着恢复码），就必须先证明身份才能重新开始。
+	state := risk.SetupState(user, h.guard.DevBypassEnabled())
+	if state.TOTPEnabled || (state.PendingSetup && state.RecoveryCodesOK) {
+		if !h.guard.Require(c, risk.ActionTOTPRebind) {
+			return
+		}
+	}
+
 	uri, err := h.guard.BeginTOTPSetup(ctx, user)
 	if err != nil {
 		api.Fail(c, err)

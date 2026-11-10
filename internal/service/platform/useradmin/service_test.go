@@ -15,6 +15,7 @@ import (
 	"k_cockpit/internal/platform/authz"
 	"k_cockpit/internal/platform/config"
 	"k_cockpit/internal/platform/database"
+	"k_cockpit/internal/platform/policy"
 	"k_cockpit/internal/service/platform/useradmin"
 )
 
@@ -118,12 +119,12 @@ func TestDuplicateUsernameRejected(t *testing.T) {
 	ctx := context.Background()
 
 	if _, err := svc.Create(ctx, useradmin.CreateRequest{
-		Username: "dup", Password: "password123",
+		Username: "dup", Password: "password12345",
 	}, admin(), "root", ""); err != nil {
 		t.Fatalf("首次创建失败: %v", err)
 	}
 	_, err := svc.Create(ctx, useradmin.CreateRequest{
-		Username: "dup", Password: "password123",
+		Username: "dup", Password: "password12345",
 	}, admin(), "root", "")
 	assertStatus(t, err, 409)
 }
@@ -402,5 +403,79 @@ func assertStatus(t *testing.T, err error, want int) {
 	}
 	if apiErr.Status != want {
 		t.Errorf("状态码 = %d, 期望 %d（%s）", apiErr.Status, want, apiErr.Message)
+	}
+}
+
+// TestRecreateUserAfterDelete 覆盖「删掉账号后同名重建」。
+//
+// 用户是软删除（保留审计与历史引用），而 0001 的 uniq_user_username 是无条件
+// 唯一索引——于是删掉 alice 之后再用 alice 建号会撞约束，界面提示「用户名已
+// 被占用」，可用户列表里根本没有 alice（同名检查走 GORM，自动过滤已删行）。
+// 这正是 r21 U-12 实机复现的形态：认证用例第二遍运行时建不出上一轮的测试账号。
+//
+// 修法与 uniq_node_name（0057）一致：索引加 WHERE deleted_at IS NULL。
+func TestRecreateUserAfterDelete(t *testing.T) {
+	svc, db := newTestEnv(t)
+	ctx := context.Background()
+
+	created, err := svc.Create(ctx, useradmin.CreateRequest{
+		Username: "alice", Password: "KcTest!2026Passw0rd", Role: model.RoleTenant,
+	}, admin(), "ops", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("建号失败: %v", err)
+	}
+	if err := svc.Delete(ctx, created.ID, admin(), "ops", "10.0.0.1"); err != nil {
+		t.Fatalf("删号失败: %v", err)
+	}
+
+	again, err := svc.Create(ctx, useradmin.CreateRequest{
+		Username: "alice", Password: "KcTest!2026Passw0rd", Role: model.RoleTenant,
+	}, admin(), "ops", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("删除后同名重建必须成功: %v", err)
+	}
+	if again.ID == created.ID {
+		t.Error("重建应得到新记录，而不是复活已删除的那条")
+	}
+
+	// 两个同名账号里只有新的是"在用"：按用户名查必须拿到新的那条。
+	var found model.User
+	if err := db.Where("username = ?", "alice").First(&found).Error; err != nil {
+		t.Fatalf("按用户名查询失败: %v", err)
+	}
+	if found.ID != again.ID {
+		t.Errorf("按用户名查到 id=%d, 期望新记录 %d", found.ID, again.ID)
+	}
+
+	// 但「同时存在两个在用 alice」仍然必须被挡住。
+	if _, err := svc.Create(ctx, useradmin.CreateRequest{
+		Username: "alice", Password: "KcTest!2026Passw0rd", Role: model.RoleTenant,
+	}, admin(), "ops", "10.0.0.1"); err == nil {
+		t.Fatal("两个在用账号重名必须被拒绝")
+	}
+}
+
+// TestInitialPasswordUsesSharedMinimum 守住「所有入口同一个密码下限」。
+//
+// 管理员建号曾经只要求 8 位，而首次登录强制改密、找回密码重置、邀请注册都
+// 要求 12 位。于是「设 12 位 → 自助改回 8 位」成了一条降级路径（r21 U-12
+// 实测：改密接口接受 8 位，而重置接口拒绝）。现在下限收敛到
+// platform/policy.MinPasswordLength。
+func TestInitialPasswordUsesSharedMinimum(t *testing.T) {
+	svc, _ := newTestEnv(t)
+	ctx := context.Background()
+
+	tooShort := strings.Repeat("a", policy.MinPasswordLength-1)
+	if _, err := svc.Create(ctx, useradmin.CreateRequest{
+		Username: "shortpw", Password: tooShort,
+	}, admin(), "root", ""); err == nil {
+		t.Fatalf("%d 位密码应被拒绝", len(tooShort))
+	}
+
+	ok := strings.Repeat("a", policy.MinPasswordLength)
+	if _, err := svc.Create(ctx, useradmin.CreateRequest{
+		Username: "okpw", Password: ok,
+	}, admin(), "root", ""); err != nil {
+		t.Fatalf("%d 位密码应被接受: %v", len(ok), err)
 	}
 }

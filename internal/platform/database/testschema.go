@@ -99,6 +99,9 @@ var conditionalIndexes = []conditionalIndex{
 	// 节点同名唯一索引（实机 DEF：删掉待接入节点后无法用同名重新接入）。
 	// 与上面几条同型：软删除的表配无条件唯一索引，删除即自锁。
 	{model: &model.Node{}, name: "uniq_node_name"},
+	// 用户名唯一索引（r21 U-12 实机抓出）：账号是软删除，旧索引不排除已删行
+	// → 删掉账号后同名重建必然撞约束，而用户列表里根本没有这个名字。
+	{model: &model.User{}, name: "uniq_user_username"},
 }
 
 // rebuildConditionalIndexes 删掉再按模型建回这些索引；不存在时跳过。

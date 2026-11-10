@@ -66,9 +66,15 @@ func (l *Loop) Start(ctx context.Context) {
 }
 
 func (l *Loop) tick(ctx context.Context) {
+	// 开关关闭**不是故障**：每天为它记一条失败事件，会在调度事件页上堆出
+	// 一串红色的"口令检查失败"，而实际只是这个可选能力没开——运维会去查
+	// 一个并不存在的问题。RunNow 里同样的判断是给手动触发接口用的。
+	if !l.svc.Enabled() {
+		return
+	}
 	res, err := l.svc.RunNow(ctx)
 	if err != nil {
-		// 开关关闭时的"未开启"不算故障，因此只在真出错时记一条失败事件。
+		// 走到这里的是真错误（节点不可达以外的失败，例如读库失败）。
 		log.Printf("[passaudit] 口令检查失败: %v", err)
 		if l.obs != nil {
 			l.obs.Record(ctx, scheduler.Event{
@@ -79,10 +85,13 @@ func (l *Loop) tick(ctx context.Context) {
 		return
 	}
 	if res == nil || res.Unavailable != "" {
+		msg := "本次未执行检查"
+		if res != nil && res.Unavailable != "" {
+			msg = res.Unavailable
+		}
 		if l.obs != nil {
 			l.obs.Record(ctx, scheduler.Event{
-				Key: l.opts.Key, Status: model.SchedulerFailed,
-				Message: firstNonEmpty(res.Unavailable, "本次未执行检查"),
+				Key: l.opts.Key, Status: model.SchedulerFailed, Message: msg,
 			})
 		}
 		return
@@ -93,15 +102,6 @@ func (l *Loop) tick(ctx context.Context) {
 			Message: "口令检查完成：检查 " + itoa(res.Checked) + " 个账号，命中 " + itoa(len(res.Hits)) + " 个",
 		})
 	}
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 func itoa(n int) string {

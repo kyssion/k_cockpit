@@ -225,6 +225,12 @@ func (s *Service) issueSession(
 func (s *Service) Authenticate(ctx context.Context, token string, ci ClientInfo, activity Activity) (*model.User, *model.Session, error) {
 	claims, err := s.tokens.Parse(token)
 	if err != nil {
+		// 密钥取不到 = 依赖不可用（503），**不能**当成凭据失效：
+		// 前者恢复后会话仍然有效，后者要求用户重新登录。
+		if errors.Is(err, ErrKeyUnavailable) {
+			log.Printf("[auth] 签名密钥不可用: %v", err)
+			return nil, nil, api.Unavailable("认证服务暂时不可用")
+		}
 		return nil, nil, errUnauthenticated
 	}
 

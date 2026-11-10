@@ -15,7 +15,7 @@
 | 控制面二进制 | Linux amd64/arm64；Go 1.27 构建 |
 | 数据库 | 开发/演示：SQLite（纯 Go，无 CGO）；生产：PostgreSQL 14+ |
 | 端口 | 默认 `0.0.0.0:8080`（`APP_HOST` / `APP_PORT`） |
-| 目录 | `data/`（SQLite、上传暂存、日志）；需要可写 |
+| 目录 | `DATA_DIR`（默认 `data`）：分片上传暂存区等运行期字节，需要可写；**生产建议指到 `/var/lib/k-cockpit`**，别留在发布目录里 |
 
 前端构建产物（`web/dist`）由控制面静态托管，**单独部署前端没有意义**。
 
@@ -83,6 +83,9 @@ SESSION_SECRET=< openssl rand -hex 32 的产物 >
 # 站点对外地址（邀请链接等发给站外用户的链接会拼上它）
 SITE_URL=https://panel.example.com
 LOG_DIR=/var/log/k-cockpit
+# 运行期可写数据（分片上传暂存）。发布目录按惯例是 root 拥有且只读，
+# 用专用用户启动时若仍指向相对路径 data，会在启动期 mkdir 失败退出。
+DATA_DIR=/var/lib/k-cockpit
 ```
 
 生产环境的硬性校验（启动即失败，见 `internal/config`）：必须配置 `SESSION_SECRET`；不得配置 `SECURITY_DEV_BYPASS_CODE`。HTTPS 由反向代理终结（Cookie 的 Secure 标记随 `APP_ENV=production` 默认开启，代理必须传递）。

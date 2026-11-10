@@ -35,6 +35,7 @@ import (
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
 	"k_cockpit/internal/platform/authz"
+	"k_cockpit/internal/platform/policy"
 	"k_cockpit/internal/service/platform/auth"
 )
 
@@ -110,10 +111,11 @@ func (s *Service) CreateFromInvite(
 	if err := validateUsername(username); err != nil {
 		return err
 	}
-	// 受邀人自设密码，要求比管理员给的初始密码更长（12 位）：他只设这一次，
-	// 而这次的质量决定这个账号的长期强度。
-	if len(password) < 12 {
-		return api.InvalidParameter("密码至少 12 位")
+	// 受邀人自设密码：他只设这一次，而这次的质量决定这个账号的长期强度，
+	// 因此走与其它入口同一个下限常量（policy.MinPasswordLength），而不是
+	// 在这里写一个数字——那会让"改了下限"变成一次漏改。
+	if len([]rune(password)) < policy.MinPasswordLength {
+		return api.InvalidParameter("密码至少 " + strconv.Itoa(policy.MinPasswordLength) + " 位")
 	}
 	if role != model.RoleTenant && role != model.RoleAdmin {
 		return api.InvalidParameter("角色必须是 tenant 或 admin")
@@ -308,11 +310,12 @@ func (s *Service) Create(
 	if err := validateUsername(username); err != nil {
 		return nil, err
 	}
-	if len(req.Password) < 8 {
-		// 下限是 8 位而不是更长：管理员创建的是**初始密码**，而强制复杂度的
-		// 后果是所有人都在便利贴上写同一个。真正的保护在于那个账号能被
-		// 要求首次登录改密（见 ForcePasswordChange）。
-		return nil, api.InvalidParameter("初始密码至少 8 位")
+	if len([]rune(req.Password)) < policy.MinPasswordLength {
+		// 与其它入口同一个下限（见 platform/policy）：初始密码也是密码，
+		// 而"管理员设的能短一点"给了它一条绕过自助改密规则的路径。真正的
+		// 保护仍然是首次登录强制改密（见 ForcePasswordChange）。
+		return nil, api.InvalidParameter(
+			"初始密码至少 " + strconv.Itoa(policy.MinPasswordLength) + " 位")
 	}
 	role := req.Role
 	if role == "" {

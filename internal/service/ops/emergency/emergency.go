@@ -34,6 +34,7 @@ import (
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
+	"k_cockpit/internal/platform/policy"
 	"k_cockpit/internal/service/platform/auth"
 )
 
@@ -244,8 +245,11 @@ func (t *Tool) record(ctx context.Context, user *model.User, action string, para
 	})
 }
 
-// minPasswordLen 与登录侧的下限保持一致。
-const minPasswordLen = 8
+// minPasswordLen 与登录侧**共用同一个常量**（platform/policy）。
+//
+// 这里曾经写死 8 并注释"与登录侧的下限保持一致"，而登录侧实际是 12——
+// 应急重置因此成了整个系统里唯一能设出 8 位密码的入口。
+const minPasswordLen = policy.MinPasswordLength
 
 // GeneratePassword 生成一个随机临时密码。
 //

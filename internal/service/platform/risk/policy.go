@@ -23,6 +23,17 @@ const (
 	ActionNodeRemove Action = "node.remove"
 	// 撤销会话：被撤销方立即失去访问，同样属于影响可达性。
 	ActionSessionRevoke Action = "session.revoke"
+	// 重新绑定验证器（F-10-01）。
+	//
+	// 绑定本身看起来只是「增加一种验证方式」，但**对已启用的账号再绑一次
+	// 等于换锁**：新密钥一生成，旧密钥立即失效（BeginTOTPSetup 是这么做的，
+	// 而且必须这么做）。不要求先用已绑定的因子验证的话，任何拿到会话 Cookie
+	// 的人都能把二次验证换成自己的验证器——之后删除类操作对他来说就是
+	// 「验证已通过」。第二因子对会话劫持的全部防护会在这两步里失效。
+	//
+	// 因此重绑要走一次 428：验证方式只有已绑定的 TOTP 或恢复码。丢了验证器
+	// 的人用恢复码，这正是恢复码存在的理由。
+	ActionTOTPRebind Action = "account.totp.rebind"
 	// 创建存储池：会**格式化**设备，原有数据无法恢复。
 	ActionStoragePoolCreate Action = "storage.pool.create"
 	// 删除存储池：销毁其中的磁盘。
@@ -214,6 +225,11 @@ var policy = []Entry{
 		Action: ActionVMForceDelete,
 		Label:  "强制删除虚拟机",
 		Reason: "跳过状态校验直接删除域定义并重启节点上的 libvirt，同节点其它虚拟机会经历一次服务重启",
+	},
+	{
+		Action: ActionTOTPRebind,
+		Label:  "重新绑定验证器",
+		Reason: "旧验证器会立即失效；不先验证就意味着拿到会话的人可以把第二因子换成自己的",
 	},
 }
 

@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
+	"k_cockpit/internal/platform/policy"
 	"k_cockpit/internal/service/platform/auth"
 	"k_cockpit/internal/service/platform/risk"
 )
@@ -266,18 +268,25 @@ func (h *Account) RegenerateRecoveryCodes(ctx context.Context, c *app.RequestCon
 
 // validateNewPassword 校验新密码。
 //
-// 规则与管理员创建用户时**共用同一个口径**（见 useradmin）：两处各写一套
-// 迟早会出现「管理员设的密码合规、用户自己改的却不合规」这种矛盾，而用户
-// 只会觉得系统在刁难他。
+// 与登录侧（auth.ValidateNewPassword）**同一口径**：长度下限与「不得包含
+// 用户名」两条都一致。
+//
+// 这里曾经只要求 8 位、且只挡「完全相同」而不挡「包含」——于是用户先按 12 位
+// 设一次（首次登录强制改密 / 找回密码重置都要求 12 位），再在账号设置里把
+// 它降回 8 位；而 auth 侧会把 "alice12345678" 判为不合格，这里却放行。
+// 两处判定必须落在同一个口径上，否则较松的一处就是绕过路径。
 func validateNewPassword(password, username string) error {
-	if len(password) < 8 {
-		return api.ValidationFailed("新密码至少 8 位")
+	if len([]rune(password)) < policy.MinPasswordLength {
+		return api.ValidationFailed(
+			"新密码至少 " + strconv.Itoa(policy.MinPasswordLength) + " 位")
 	}
 	if len(password) > 128 {
 		return api.ValidationFailed("新密码最长 128 位")
 	}
-	if strings.EqualFold(password, username) {
-		return api.ValidationFailed("密码不能与用户名相同")
+	if username != "" && strings.Contains(
+		strings.ToLower(password), strings.ToLower(username),
+	) {
+		return api.ValidationFailed("密码不能包含用户名")
 	}
 	return nil
 }

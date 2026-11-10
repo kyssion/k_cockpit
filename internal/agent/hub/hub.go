@@ -109,7 +109,17 @@ type conn struct {
 	pending map[string]*pendingOp
 	// pendingStreams 是等 StreamOpened 应答的流打开请求（stream.go）。
 	pendingStreams map[string]chan *streamOpenedMsg
-	closed         bool
+	// superseded 在「同一节点建立了更新的通道」时被关闭，用来把旧通道的
+	// 读循环踢出去。
+	//
+	// 为什么必须踢：attach 会把 conns[nodeID] 换成新连接，旧连接的读循环
+	// 却还阻塞在 Recv 上。如果新连接**先**结束（探测脚本、误开的第二个
+	// agent、连接抖动后新流先断），detach 只会删掉自己那条，旧连接不会被
+	// 重新登记回来——节点在控制面上就一直「无连接」，而它的 agent 明明
+	// 还在心跳，直到下一次重连才恢复。真机实测复现过这条路径：一次
+	// 带同一证书的探测连接把在线节点顶成了不可达。
+	superseded chan struct{}
+	closed     bool
 }
 
 // pendingOp 是一次在途的 Execute。
@@ -161,13 +171,28 @@ func (c *conn) closeAll() {
 	c.pending = map[string]*pendingOp{}
 }
 
+// supersede 关闭 superseded，通知旧的读循环退出（幂等）。
+func (c *conn) supersede() {
+	if c.superseded == nil {
+		return
+	}
+	select {
+	case <-c.superseded:
+	default:
+		close(c.superseded)
+	}
+}
+
 // attach / detach 维护在线注册表。同一节点重复连接（旧连接未断又起新连接）
-// 时新连接顶替旧连接：旧连接的 Channel 流会随 detach 关闭。
+// 时新连接顶替旧连接，**并主动把旧连接踢下线**（关 superseded）——只换表
+// 里的指针不够：旧流的读循环还在跑，而它一旦比新流活得久，detach 就会把
+// 「已经不属于自己」的登记删掉，节点从此在控制面上无连接。
 func (h *Hub) attach(c *conn) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if old, ok := h.conns[c.nodeID]; ok && old != c {
 		old.closeAll()
+		old.supersede()
 	}
 	h.conns[c.nodeID] = c
 }

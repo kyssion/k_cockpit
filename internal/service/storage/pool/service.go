@@ -166,6 +166,18 @@ func (s *Service) Disks(ctx context.Context, nodeID int64) ([]DiskView, error) {
 func (s *Service) List(ctx context.Context, nodeID int64) ([]PoolView, error) {
 	query := s.db.WithContext(ctx).Model(&model.StoragePool{}).Where("deleted_at IS NULL")
 	if nodeID > 0 {
+		// 确认节点存在。否则不存在的节点会返回「200 + 空列表」，与
+		// /nodes/:id 及其它子资源（404「节点不存在」）不一致——前端会把
+		// 「节点 ID 不对」读成「这个节点上一个池都没有」。
+		var exists int64
+		if err := s.db.WithContext(ctx).Model(&model.Node{}).
+			Where("id = ?", nodeID).Count(&exists).Error; err != nil {
+			log.Printf("[storage] 校验节点失败: %v", err)
+			return nil, api.Internal()
+		}
+		if exists == 0 {
+			return nil, api.NotFound("节点不存在")
+		}
 		query = query.Where("node_id = ?", nodeID)
 	}
 

@@ -234,3 +234,22 @@ func TestDetachNotAttachedRejected(t *testing.T) {
 	err := svc.Detach(context.Background(), 1, "0000:01:00.0", admin(), "root", "")
 	assertStatus(t, err, 404)
 }
+
+// TestListVMUnknownVMNotFound 守住「不存在的机器不能装作存在」。
+//
+// 之前 ListVM 直接按 vm_id 查表，查不到就是空列表——于是
+// GET /vms/999999999/passthrough 返回 200，而同级的 /disks、/snapshots、
+// /interfaces 都返回 404「虚拟机不存在」。同一个 ID 两种结论，前端会把
+// 「ID 打错了」显示成「这台机器的直通设备丢了」。
+func TestListVMUnknownVMNotFound(t *testing.T) {
+	_, svc := newEnv(t)
+
+	rows, err := svc.ListVM(context.Background(), 424242)
+	assertStatus(t, err, 404)
+	if err == nil {
+		t.Fatalf("不存在的虚拟机必须报错，实际返回 %d 行", len(rows))
+	}
+	if !strings.Contains(err.Error(), "虚拟机不存在") {
+		t.Errorf("报错应说明虚拟机不存在: %v", err)
+	}
+}

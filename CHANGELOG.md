@@ -18,15 +18,22 @@
 ## [Unreleased]
 
 ### Added
+- **U-12 全量收口（2026-11-10，r21）**：按当前代码重生成 SKIP 清单后逐条补测 45 条端点，实机 **127/127 断言通过**（认证 60 / 流式·导出·控制台 32 / 全局写入 35）；`authkey`、`mailer`、`passaudit`、`reqlog` 四个零测试子包覆盖率 0% → 85.5% / 87.5% / 90.4% / 90.0%。`DELIVERY_TEST_PLAN.md` 的 TP-19 与 U-12 状态同步回填，`DELIVERY_TEST_REPORT.md` 新增 §10。
 - **交付测试计划与执行报告（2026-11-10）**：新增 [`DELIVERY_TEST_PLAN.md`](docs/04-engineering/DELIVERY_TEST_PLAN.md)（能力基线、TP-00 ~ TP-23 共 24 套件、六视角追溯矩阵、五道阶段门与出口准则）与执行报告；`docs/README.md` 索引同步登记。
+- **交付测试计划的执行状态标记（2026-11-10）**：`DELIVERY_TEST_PLAN.md` 新增 §5.0 逐套件状态总表（13 已测试 / 7 部分验证 / 4 未测试）与 §11 未测试项清单（U-01 ~ U-31，A/B/C 三档）；§7.1 补五道门实绩与出口准则逐条状态。明确区分「跑过」与「测完」，避免把 26/26 全绿误读为可交付。
 - **路由守卫矩阵的 CI 用例（G-14）**：新增 `internal/handler/platform/guard_matrix_test.go`，从 `routes_*.go` 逐条解析 340 条域路由，校验总数与 GET/POST/PUT/PATCH/DELETE 方法分布、public 15 / admin 160 / user 165 三档互斥且覆盖全集、`publicAPIRoutes` 与源码逐条一致、adminOnly 必须同时挂 requireAuth。新增路由漏标权限时 CI 直接失败。
 - **跨资源检索的单测（G-14 / TC-19-7）**：新增 `internal/service/ops/search/service_test.go`（6 例），覆盖空/单字符关键字、LIKE 通配符按字面匹配、租户 VM 归属隔离、模板可见性、节点仅管理员可见、每类 5 条上限。
 - **接口契约补登（G-08）**：`docs/03-api/API.md` 补登邀请注册 2 条公开接口（API-393/394）与机械对账发现的 18 条漏登端点（API-395 ~ 412），公开接口注记由「13 个」修订为 **16 个**并写明逐条理由与一致性守护测试。
 
 ### Fixed
 - **跨资源检索的 LIKE 通配符未转义**：`search.Service` 此前把用户输入直接拼进 `LIKE '%q%'`，搜 `%` 会命中全部资源（`auditlog` 已有转义，此处漏了）。现按同一口径转义 `%` / `_` / `\`，并给三条查询全部加上 `ESCAPE '\'` 子句——SQLite 没有默认转义符，不写 ESCAPE 时该修复会在测试库上静默失效。
+- **停机时打开控制台返回 503（U-12 实机抓出）**：`GET /vms/:id/console/ws` 在虚拟机关机时返回 `503 无法建立控制台通道`——503 的语义是「稍后重试」，而重试一台关着的机器永远不会成功，界面还会显示成一次服务故障。现改为在**流打开失败之后**再参考状态投影：停机返回 `409 虚拟机未运行，无法打开控制台`，其余仍为 503。顺序刻意如此——先让 agent 试，失败后才解释，避免陈旧的投影挡住本可成功的连接。
+- **软删除的用户名永久占名**：`uniq_user_username` 是无条件唯一索引，而用户是软删除（要保留审计里的 `operator_id` 引用），删掉的用户名再也注册不回来，且报错信息是「已被占用」而列表里查不到人。现改为 `WHERE deleted_at IS NULL` 的部分唯一索引（迁移 `0058`），与上一轮 `uniq_node_name` 的修法同型。
+- **口令审计在开关关闭时记「检查失败」**：`passaudit` 的注释写着「开关关闭不算故障」，但 `tick()` 把 `RunNow` 的 422 校验错误当成真失败，每次启动都在调度事件页留一条红色「口令检查失败：定时口令检查未开启」。新增 `Enabled()` 早退，并留回归用例。
+- **`agent/hub` 连接注销被吞掉（P1）**：为「新连接顶替旧连接」加的读协程里，`recvCh <- err` 与 `<-stream.Context().Done()` 在 `select` 中竞争，客户端断开时约有一半概率选中 Done 分支，**断开事件被丢弃**，节点在控制面上永久「在线」，指令被投进没人读的 outbox 直到超时。改用 `close(recvDone)` 传结束信号，并保证已到达消息不丢。
 
 ### Security
+- **密码下限两套标准（可降级的绕过路径）**：`POST /auth/login/password` 要求 12 位，而 `PUT /auth/password` 只要求 8 位且仅挡「与用户名完全相同」——先用 12 位设好，再在账号设置里降回 8 位即可。现新建 `internal/platform/policy`（`MinPasswordLength = 12`）单点定义，登录改密、账号设置、管理员建号、应急口令、邀请注册五个入口全部引用；账号设置同时改为「不得**包含**用户名」并按 `[]rune` 计长。
 - **实机走查 spec 的硬编码凭据**：`web/e2e-live/live.spec.ts` 不再把测试管理员口令写死在源码里，改为 `E2E_ADMIN_USER` / `E2E_ADMIN_PASSWORD` 环境变量注入，缺少口令时明确报错退出。
 
 ### Added

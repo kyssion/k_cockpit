@@ -1,0 +1,28 @@
+# 控制面 systemd 单元（DEPLOYMENT.md §3 的可执行版本）。
+#
+# 与 §3 的示例相比只有两点差异，都是踩过坑加的：
+#   - After=postgresql.service：PG 未起时启动会直接失败，反复重启只会刷日志；
+#   - WorkingDirectory 指向版本目录：迁移文件与 public/ 与二进制同批发布。
+[Unit]
+Description=K Cockpit control plane
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kcockpit
+Group=kcockpit
+WorkingDirectory=/opt/kcockpit/current
+EnvironmentFile=/etc/kcockpit/env
+ExecStart=/opt/kcockpit/current/server
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65535
+NoNewPrivileges=true
+PrivateTmp=true
+# 日志同时进 journald（stderr 始终有输出，见 internal/platform/logging）
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

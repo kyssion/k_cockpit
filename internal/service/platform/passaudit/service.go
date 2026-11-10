@@ -71,8 +71,16 @@ func (s *Service) firstEnrolledNode(ctx context.Context) int64 {
 	return ids[0]
 }
 
+// Enabled 报告周期检查是否开启。
+//
+// nil 视为开启，与 RunNow 的判断保持一致：调用方没装开关函数时，不应既
+// 允许手动检查又把周期任务当成关闭。
+func (s *Service) Enabled() bool {
+	return s.enabled == nil || s.enabled()
+}
+
 func (s *Service) RunNow(ctx context.Context) (*Result, error) {
-	if s.enabled != nil && !s.enabled() {
+	if !s.Enabled() {
 		return nil, api.ValidationFailed("定时口令检查未开启，如需立即检查请先打开开关")
 	}
 	if s.agent == nil {
@@ -156,19 +164,6 @@ func (s *Service) Status(ctx context.Context) (int64, error) {
 		return 0, api.Internal()
 	}
 	return n, nil
-}
-
-func (s *Service) usernames(ctx context.Context) map[string]int64 {
-	out := map[string]int64{}
-	var users []model.User
-	if err := s.db.WithContext(ctx).Select("id", "username").Find(&users).Error; err != nil {
-		log.Printf("[passaudit] 查询用户失败: %v", err)
-		return out
-	}
-	for i := range users {
-		out[users[i].Username] = users[i].ID
-	}
-	return out
 }
 
 func decodeAudit(data map[string]any) agent.PasswordAuditInfo {

@@ -21,6 +21,16 @@ import (
 // 透露令牌是过期还是被伪造（f-1-01 §4「错误响应不泄漏判定细节」）。
 var ErrInvalidToken = errors.New("令牌无效")
 
+// ErrKeyUnavailable 表示**签名密钥本身取不到**（通常是数据库不可用），
+// 与「令牌无效」是两件完全不同的事。
+//
+// 不分开的后果是实机缺陷（r19）：PostgreSQL 停 2 秒，全部接口返回
+// 401「登录状态已失效」——用户被踢到登录页，而他的会话其实完好无损
+// （数据库恢复后同一个 Cookie 立刻又能用）。401 是「你得出示凭据」，
+// 503 才是「我现在判断不了」。把基础设施故障说成凭据问题，前端的正确
+// 反应（清会话、跳登录页）在这里全都是错的。
+var ErrKeyUnavailable = errors.New("签名密钥暂时不可用")
+
 // Claims 是令牌载荷。
 //
 // 按 f-1-01 R-004，**只包含**会话标识、用户标识、令牌类型与过期时间。
@@ -107,7 +117,8 @@ func (t *TokenIssuer) Issue(sessionID string, userID int64, tokenType string, ex
 func (t *TokenIssuer) Parse(token string) (*Claims, error) {
 	_, secret, err := t.currentKey()
 	if err != nil {
-		return nil, ErrInvalidToken
+		// 密钥取不到不是「令牌无效」，交给调用方按依赖不可用处理。
+		return nil, ErrKeyUnavailable
 	}
 	var claims Claims
 	_, err = jwt.ParseWithClaims(token, &claims,

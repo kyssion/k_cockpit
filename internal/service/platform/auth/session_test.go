@@ -3,6 +3,7 @@ package auth_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"path/filepath"
 	"testing"
 	"time"
@@ -420,4 +421,45 @@ func lastActiveOf(t *testing.T, db *gorm.DB, sessionID string) time.Time {
 		return time.Time{}
 	}
 	return *s.LastActiveAt
+}
+
+// TestAuthenticateReportsUnavailableOnKeyFailure 覆盖 503 这一档。
+//
+// 与 TestKeyUnavailableIsNotInvalidToken 配对：那边守 Parse 的返回值，
+// 这边守服务层把它翻译成什么 HTTP 语义。返回 401 的话，一次 2 秒的数据库
+// 抖动会让全部在线用户被登出。
+func TestAuthenticateReportsUnavailableOnKeyFailure(t *testing.T) {
+	db, err := database.Open(config.DB{
+		Driver:       config.DriverSQLite,
+		Path:         filepath.Join(t.TempDir(), "key-fail.db"),
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	}, false)
+	if err != nil {
+		t.Fatalf("打开测试库失败: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	issuer, err := auth.NewTokenIssuer(testSecret)
+	if err != nil {
+		t.Fatalf("构造签发器失败: %v", err)
+	}
+	// 模拟「密钥在数据库里、而数据库此刻不可用」——这正是 r19 实机故障的形态。
+	issuer.SetKeyProvider(func() (string, []byte, error) {
+		return "", nil, errors.New("dial tcp 127.0.0.1:5432: connect: connection refused")
+	})
+	svc := auth.NewService(db, issuer, audit.NewRecorder(db), auth.Config{})
+
+	_, _, err = svc.Authenticate(context.Background(), "any.token.here", client, auth.Real)
+	var apiErr *api.Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("应返回 *api.Error，实际 %v", err)
+	}
+	if apiErr.Status != http.StatusServiceUnavailable {
+		t.Errorf("状态码 = %d，期望 503（依赖不可用，不是凭据失效）", apiErr.Status)
+	}
 }

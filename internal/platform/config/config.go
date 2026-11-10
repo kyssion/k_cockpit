@@ -32,6 +32,16 @@ type Config struct {
 	Env   string // 运行环境：development / test / production
 	Debug bool   // 调试开关，决定是否输出完整 SQL，生产必须为 false
 
+	// Data 是可写数据目录：分片上传的暂存区等「运行期产生、不属于发布制品」
+	// 的字节都落在这里。
+	//
+	// 它必须是独立一项，而不是从 DB_PATH 推导：生产形态用 PostgreSQL 时
+	// DB_PATH 根本没有意义（默认值是 data/k_cockpit.db），而发布目录按惯例
+	// 由 root 拥有且只读。两者一叠加，用专用用户启动就会在
+	// `mkdir data: permission denied` 上直接退出——这是实测踩到的启动失败，
+	// 不是理论问题。
+	Data string
+
 	HTTP     HTTP
 	DB       DB
 	Session  Session
@@ -225,6 +235,7 @@ func Load() (Config, error) {
 	cfg := Config{
 		Env:   appEnv,
 		Debug: envBool("APP_DEBUG", false),
+		Data:  env("DATA_DIR", "data"),
 		HTTP: HTTP{
 			Host: env("APP_HOST", "0.0.0.0"),
 			Port: envInt("APP_PORT", 8080),

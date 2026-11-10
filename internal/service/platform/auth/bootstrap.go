@@ -16,13 +16,14 @@ import (
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
+	"k_cockpit/internal/platform/policy"
 )
 
-// MinPasswordLength 是新建管理员的最小密码长度。
+// MinPasswordLength 是密码的最小长度（所有入口共用，见 platform/policy）。
 //
 // 管理员密码可完全接管面板，长度下限高于普通用户；更完整的密码策略
 // （强度校验、泄露检测）属 F-10-05，后续接入。
-const MinPasswordLength = 12
+const MinPasswordLength = policy.MinPasswordLength
 
 // usernamePattern 限定用户名可用字符，避免出现难以输入或易混淆的形式。
 var usernamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{3,64}$`)

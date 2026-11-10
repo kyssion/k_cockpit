@@ -31,7 +31,11 @@ type User struct {
 	ID int64 `gorm:"primaryKey"`
 	// 索引与迁移一致（uniq_user_username）。用户名唯一是登录的前提：
 	// 没有它，同名用户可以存在两个，「用用户名找用户」就会拿到不确定的一个。
-	Username            string  `gorm:"size:64;not null;uniqueIndex:uniq_user_username"`
+	//
+	// 条件 `where:deleted_at IS NULL` 不能省：用户是软删除，无条件唯一索引
+	// 会让删掉的账号永久占住名字（同名重建时服务层查不到、入库却撞约束）。
+	// 与 uniq_node_name / uniq_template_node_name 同型，见 0058 迁移。
+	Username            string  `gorm:"size:64;not null;uniqueIndex:uniq_user_username,where:deleted_at IS NULL"`
 	PasswordHash        string  `gorm:"size:255;not null"`
 	Role                string  `gorm:"size:16;not null;default:tenant"`
 	Status              string  `gorm:"size:16;not null;default:pending"`
