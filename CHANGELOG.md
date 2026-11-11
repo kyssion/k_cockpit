@@ -18,6 +18,13 @@
 ## [Unreleased]
 
 ### Added
+- **未测试项收口 U-32 ~ U-37（2026-11-11，r23）**：按 `DELIVERY_TEST_PLAN.md` §11.2 新登记的六项逐条补测并修复，六项全部关闭并移入 §11.4。Go 侧补齐三条零覆盖路径（`network/reconcile` 0→**100%**、`handler/node` 0→**93.3%**、`vmtag` 74.1→**87.1%**，另 `authz`/`audit` 到 100%），测试包 60→**66** 个全绿；CI 落覆盖率门禁（默认口径 **55.0%**，阈值 **54%**，并写明与 `-coverpkg` 61.0% 两种口径不可混用）；实机验证 `k_cockpit-agent` 二进制自身 enroll **28/28**、邮件真实 TLS 投递 **15/15**（新增交付资产 `tests/delivery/smtptls`，四模式 + 无认证实例）、公开端点字段级契约 **8 例**、敏感设置项静态加密 **20/20**。`DELIVERY_TEST_PLAN.md` 新增 §5.0b 增量证据表，`DELIVERY_TEST_REPORT.md` 新增 §12。
+- **节点状态目录权限在升级路径上生效**：`StateDir.SaveEnrollment` 除 `MkdirAll(0o700)` 外显式 `Chmod`——MkdirAll 对已存在目录不改权限，实机 `/var/lib/k_cockpit-agent` 因此长期是 `0755`（私钥仍为 0600，不泄密，但声明的权限取决于部署历史）。新增 `internal/nodeagent/state_test.go`（6 例）覆盖权限位、写入顺序与失败不留半截身份。
+
+### Fixed
+- **同一 agent 身份重新注册报 500**（f-6-01 R-012）：`node.Register` 只按令牌找到本次新签发的占位节点并强行写入 `agent_id`，撞 `uniq_node_agent_id` 后返回「服务内部错误」。保留 `/var/lib/k_cockpit-agent` 再领新令牌即可稳定复现。现按身份查既有节点并合并：占位行软删、连接信息刷到既有节点、节点 ID 与历史保留，审计记 `reregistered`。同型的索引问题一并修：`uniq_node_agent_id` 改为 `WHERE deleted_at IS NULL`（迁移 `0059`，与 0057/0058 同型），否则「移除节点后同身份重新接入」同样 500。
+- **邀请注册未装配时返回 500**：`createUser` 依赖为 nil 时走 `api.Internal()`，而这条路径重试永远不会成功。改为 `api.Unavailable("邀请注册功能未启用，请联系管理员")`。
+- **`mailer` 的明文通道凭据口径写进注释**：`net/smtp.PlainAuth` 在「未加密且主机名是 localhost/127.0.0.1/::1」时**有意放行**，与「客户端会拒发明文凭据」不是一回事；注释写明 U-37 的三条用例各自覆盖哪一层，避免后人把测试改错。
 - **未测试项复核与状态回填（2026-11-11，r22）**：`DELIVERY_TEST_PLAN.md` 新增 §5.0a 增量证据表与 §11.4 已关闭清单，§11 条目 31 → **37**（新增 U-32 ~ U-37），并给每个 U 项定「未开始 / 部分完成 / 已关闭」三态。关闭 U-11 / U-12 / U-16 / U-19（各带证据路径与日期）；U-06 / U-09 / U-26 / U-28 标为部分完成并写明剩哪几项。新增的 6 项全部由机械手段发现，不是凭印象补的：三条仍在零覆盖的真实代码路径（`network/reconcile` 整个循环、`handler/node` 的 9 个函数、`vmtag` 批量读取）、覆盖率门禁缺失（实测总覆盖 **60.6%**，`ci.yml` 无阈值）、`k_cockpit-agent` 二进制 enroll 未跑、公开端点字段级契约、邮件真实 TLS 投递。`DELIVERY_TEST_REPORT.md` 新增 §11 记录方法与结论。
 - **U-12 全量收口（2026-11-10，r21）**：按当前代码重生成 SKIP 清单后逐条补测 45 条端点，实机 **127/127 断言通过**（认证 60 / 流式·导出·控制台 32 / 全局写入 35）；`authkey`、`mailer`、`passaudit`、`reqlog` 四个零测试子包覆盖率 0% → 85.5% / 87.5% / 90.4% / 90.0%。另有 **U-16 节点通道 9/9 + 心跳 8/8**（协议版本 0/2 拒绝、证书 CN == agent_id、令牌一次性、无证书/陌生 CN/非本 CA 均被拒、心跳 10s 与离线 40s）与 **U-26 诊断导出 21/21**（secret 项只回 `is_set`、哨兵口令全包扫描不可见、租户 403）。`DELIVERY_TEST_PLAN.md` 的 TP-19 升为已测试、U-12/U-16/U-26 标记收口，`DELIVERY_TEST_REPORT.md` 新增 §10。
 - **交付测试计划与执行报告（2026-11-10）**：新增 [`DELIVERY_TEST_PLAN.md`](docs/04-engineering/DELIVERY_TEST_PLAN.md)（能力基线、TP-00 ~ TP-23 共 24 套件、六视角追溯矩阵、五道阶段门与出口准则）与执行报告；`docs/README.md` 索引同步登记。

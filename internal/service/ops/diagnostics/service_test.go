@@ -44,7 +44,7 @@ func newEnv(t *testing.T) (*gorm.DB, *diagnostics.Service) {
 	); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
-	setSvc := settings.NewService(db, audit.NewRecorder(db))
+	setSvc := settings.NewService(db, audit.NewRecorder(db), []byte("settings-test-secret"))
 	return db, diagnostics.NewService(db, setSvc, scheduler.NewRegistry(), audit.NewRecorder(db))
 }
 

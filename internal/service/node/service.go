@@ -256,6 +256,20 @@ func (s *Service) Register(ctx context.Context, token, agentID, agentVersion str
 		return nil, api.PermissionDenied("注册令牌已过期，请重新生成")
 	}
 
+	// R-012（f-6-01）：agent_id 已存在 → 视为**同一节点重新注册**——更新连接
+	// 信息，保留节点 ID 与历史（审计、监控、虚拟机归属都挂在它上面）。
+	//
+	// 之前的实现不看这一步，直接往令牌那一行写 agent_id，撞上
+	// uniq_node_agent_id 后只剩一句「服务内部错误」。r23 实机 U-35 稳定复现
+	// （保留状态目录、用新令牌重新 enroll）：重试永远不会成功，运维也看不出
+	// 该做什么——恰恰是这条规格想避免的「节点重建导致历史断链」。
+	if existing, err := s.repo.GetNodeByAgentID(ctx, agentID); err == nil && existing.ID != node.ID {
+		return s.reregister(ctx, existing, node, agentID, agentVersion, now)
+	} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		log.Printf("[node] 按 agent 身份查询节点失败: %v", err)
+		return nil, api.Internal()
+	}
+
 	updates := map[string]any{
 		"agent_id":          agentID,
 		"agent_version":     agentVersion,
@@ -294,6 +308,77 @@ func (s *Service) Register(ctx context.Context, token, agentID, agentVersion str
 	}
 
 	view := s.toView(ctx, node)
+	return &view, nil
+}
+
+// reregister 处理「同一 agent 身份再次注册」（f-6-01 R-012）。
+//
+// 令牌那一行是本次新签发的**占位节点**：按原路径它会被写入 agent_id，而这个
+// 身份已经属于 existing。合并后占位行不可能再被接入，留着有两个害处：
+//
+//  1. 节点列表里多出一台永远 pending 的机器，看起来像「有台节点连不上」；
+//  2. 它仍持有令牌哈希与未过期时间，等于让这张一次性令牌能再用一次。
+//
+// 因此把占位行软删（保留审计可追溯），连接信息刷到既有节点上，节点 ID 与
+// 历史全部不动。软删同时释放了节点名（uniq_node_name 已是部分唯一索引），
+// 上层随后按 -name 改名才不会撞约束。
+func (s *Service) reregister(
+	ctx context.Context, existing, placeholder *model.Node,
+	agentID, agentVersion string, now time.Time,
+) (*View, error) {
+	if err := s.repo.UpdateNode(ctx, placeholder.ID, map[string]any{
+		"deleted_at":        now,
+		"enabled":           false,
+		"enroll_token_hash": nil,
+		"enroll_expires_at": nil,
+	}); err != nil {
+		log.Printf("[node] 清理重注册占位节点 %d 失败: %v", placeholder.ID, err)
+		return nil, api.Internal()
+	}
+
+	if err := s.repo.UpdateNode(ctx, existing.ID, map[string]any{
+		"agent_version":     agentVersion,
+		"enroll_state":      model.NodeEnrollEnrolled,
+		"enroll_token_hash": nil,
+		"enroll_expires_at": nil,
+		"last_heartbeat_at": now,
+		"last_seen_at":      now,
+		"status":            model.NodeStatusOnline,
+	}); err != nil {
+		log.Printf("[node] 刷新重注册节点 %d 失败: %v", existing.ID, err)
+		return nil, api.Internal()
+	}
+
+	s.record(ctx, audit.Entry{
+		ResourceType: "node",
+		ResourceID:   existing.ID,
+		ResourceName: existing.Name,
+		Action:       "node.register",
+		AfterState: map[string]any{
+			"agent_id":      agentID,
+			"agent_version": agentVersion,
+			// 事后追溯要能区分「首次接入」与「同身份重注册」，否则
+			// 「这台节点为什么换了证书」在审计里看不出来。
+			"reregistered":   true,
+			"placeholder_id": placeholder.ID,
+			"placeholder":    placeholder.Name,
+		},
+		Success: true,
+	})
+
+	existing.AgentVersion = &agentVersion
+	existing.EnrollState = model.NodeEnrollEnrolled
+	existing.Status = model.NodeStatusOnline
+	existing.LastHeartbeatAt = &now
+	existing.LastSeenAt = &now
+
+	if s.baseNet != nil {
+		if err := s.baseNet.EnsureSystemNetwork(ctx, existing.ID); err != nil {
+			log.Printf("[node] 受理系统基础网络开通失败 node=%d: %v", existing.ID, err)
+		}
+	}
+
+	view := s.toView(ctx, existing)
 	return &view, nil
 }
 

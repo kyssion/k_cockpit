@@ -63,10 +63,15 @@ type Node struct {
 	MaintenanceAt     *time.Time
 
 	// agent 注册与信任信息。
-	// 索引与迁移一致（uniq_node_agent_id）：agent 身份唯一，避免同一个
-	// agent 被登记成两个节点。**可为空**，而空值不参与唯一性判定——
+	//
+	// `uniq_node_agent_id` 带 `where:deleted_at IS NULL`（与迁移 0059 一致）：
+	// 节点是**软删除**，无条件唯一索引会让「移除一台机器后再用同一个身份
+	// 接入」永远撞约束——而那正是重装系统后的标准动作。与 uniq_node_name
+	// （0057）、uniq_user_username（0058）完全同型。
+	//
+	// **可为空**，而空值不参与唯一性判定（PostgreSQL 与 SQLite 同口径）：
 	// 尚未接入的节点 AgentID 为空，不该因为「已有另一个空值」而冲突。
-	AgentID         *string `gorm:"size:64;uniqueIndex:uniq_node_agent_id"`
+	AgentID         *string `gorm:"size:64;uniqueIndex:uniq_node_agent_id,where:deleted_at IS NULL"`
 	EnrollTokenHash *string `gorm:"size:128"`
 	EnrollExpiresAt *time.Time
 	CertFingerprint *string `gorm:"size:128"`

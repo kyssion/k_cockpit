@@ -461,15 +461,17 @@ var specs = []Spec{
 		Rollbackable: true,
 	},
 	{
-		Key:          "notification.smtp_password",
-		Group:        GroupNotification,
-		Label:        "SMTP 密码",
-		Description:  "保存后不再回传明文；留空表示保持当前密码不变。",
-		Kind:         KindString,
-		Default:      "",
-		EnvVar:       "SMTP_PASSWORD",
-		Apply:        ApplyImmediate,
-		Rollbackable: true,
+		Key:         "notification.smtp_password",
+		Group:       GroupNotification,
+		Label:       "SMTP 密码",
+		Description: "保存后不再回传明文；留空表示保持当前密码不变。",
+		Kind:        KindString,
+		Default:     "",
+		EnvVar:      "SMTP_PASSWORD",
+		Apply:       ApplyImmediate,
+		// 不回滚：回滚一个已失效的口令没有意义（轮换通常因为泄漏或过期），
+		// 而保留前值意味着上一手明文要永久留在库里。见 service.writeValue。
+		Rollbackable: false,
 		Secret:       true,
 	},
 	{

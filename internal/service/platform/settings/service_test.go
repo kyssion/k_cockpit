@@ -20,6 +20,13 @@ import (
 
 func newTestEnv(t *testing.T) (*settings.Service, *gorm.DB) {
 	t.Helper()
+	return newTestEnvWithSecret(t, "settings-test-secret")
+}
+
+// newTestEnvWithSecret 用指定根密钥构造服务，供加密相关的用例验证
+// 「换了密钥就读不出旧值」这件事。
+func newTestEnvWithSecret(t *testing.T, secret string) (*settings.Service, *gorm.DB) {
+	t.Helper()
 
 	db, err := database.Open(config.DB{
 		Driver:       config.DriverSQLite,
@@ -41,7 +48,7 @@ func newTestEnv(t *testing.T) (*settings.Service, *gorm.DB) {
 		t.Fatalf("建表失败: %v", err)
 	}
 
-	return settings.NewService(db, audit.NewRecorder(db)), db
+	return settings.NewService(db, audit.NewRecorder(db), []byte(secret)), db
 }
 
 func itemOf(t *testing.T, items []settings.Item, key string) settings.Item {
@@ -564,12 +571,19 @@ func TestUpdateBlankSecretKeepsPrevious(t *testing.T) {
 	}
 
 	// 库里的值必须**一个字都没动**。
+	//
+	// 注意这里不能直接比对明文：库里存的是密文（U-33）。要验的语义是
+	// 「密文没被换成新值」——用 service 解回来还是 s3cret 即可，同时断言
+	// 库里确实不是明文，防止加密被悄悄关掉。
 	var row model.SystemSetting
 	if err := db.Where("key = ?", "notification.smtp_password").First(&row).Error; err != nil {
 		t.Fatalf("读取设置失败: %v", err)
 	}
-	if row.Value == nil || *row.Value != "s3cret" {
-		t.Errorf("库里的密码 = %v, 期望保持 s3cret", row.Value)
+	if row.Value == nil {
+		t.Fatal("库里没有密码")
+	}
+	if *row.Value == "s3cret" {
+		t.Errorf("库里是明文密码 —— 敏感项必须加密存储")
 	}
 
 	// 真正生效的配置也没变。

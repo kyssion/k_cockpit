@@ -513,3 +513,107 @@ PATCH ... "KC-Rotate-B-2222"  →  value=KC-Rotate-B-2222, previous_value=KC-Rot
 - **没改任何产品代码**：本轮只做审计与回填。U-33 是设计决策（加密 or 明写边界），应由 owner 定，不该由测试顺手改掉一个存储契约。
 - **没把「部分验证」升成「已测试」**：口径写在 §5.0a 开头——升格要求该套件的**主用例组齐备**，而 r20/r21 关的是其中几条。为了好看而升格，正是这套计划一直在防的事。
 - **没复跑 R3 的 26 套件**：它们不打 `/api/v1` 之外的入口，也不产出覆盖率，与本轮的三个问题无关。
+
+## 12. 第 17 轮（r23）：把 r22 登记的四类缺口测完、修完
+
+r22 只做审计与回填，明确写了「没改任何产品代码」。本轮按 `DELIVERY_TEST_PLAN.md` §11.2 里新登记的 U-32 ~ U-37 逐项补测，**测到问题就修、修完在实机复验**，最终 6 项全部关闭（§11.4）。
+
+### 12.1 结果总览
+
+| 项 | 内容 | 结果 | 关键数字 |
+|---|---|---|---|
+| U-32 | 三条零覆盖的真实代码路径 | ✅ 已关闭 | 66 个测试包全绿（原 60）；`reconcile` 0→**100%**、`handler/node` 0→**93.3%**、`vmtag` 74.1→**87.1%**、`authz` 0→**100%**、`audit` 58.3→**100%** |
+| U-33 | 敏感设置项静态加密 | ✅ 已关闭 | 单测 7 例 + 实机 **20/20**；库里 base64url 密文、轮换 `previous_value=<NULL>`、回滚 422、审计零命中 |
+| U-34 | 覆盖率门禁 | ✅ 已关闭 | 门禁 **54%**，实测默认口径 **55.0%**（`-coverpkg` 口径 61.0%） |
+| U-35 | agent 二进制自身 enroll | ✅ 已关闭 | 实机 **28/28**；身份材料权限 0700/0600/0644 全部核对 |
+| U-36 | 公开端点字段级契约 | ✅ 已关闭 | **8 例**全绿；顺带纠 3 处文档与实现不符 |
+| U-37 | 邮件真实 TLS 投递 | ✅ 已关闭 | 实机 **15/15**；STARTTLS 与隐式 TLS 均 `tls=true`，不受信证书被 `x509` 拒 |
+
+实机环境：`v0.1.0-r23`（`panel_version=v0.1.0-r23`，`revision=6c0add1a…`），aarch64 / Ubuntu 24.04，nginx TLS 终结，PG `kcockpit`。发布脚本 `~/.kc_test/r23/deploy_r23.sh`（构建 → 版本目录 → 切 `current` → **执行迁移** → 重启 → 健康检查）。
+
+### 12.2 本轮修复的真实缺陷（2 条，编号接 §10.2）
+
+**缺陷 7：邀请注册未装配时返回 500（U-36 发现）**
+
+`POST /invites/accept` 在 `createUser` 依赖为 nil 时走 `api.Internal()`，返回「服务内部错误，请稍后重试」。但这条路径**重试永远不会成功**——缺的是装配，不是瞬时故障；而且用户会去反复重试一个不可能成功的操作。
+
+```go
+if s.createUser == nil {
+    // 装配缺失 ≠ 内部错误：500「请稍后重试」而这条路径重试永远不会成功
+    return api.Unavailable("邀请注册功能未启用，请联系管理员")
+}
+```
+
+**缺陷 8：同一 agent 身份重新注册撞唯一索引，返回 500（U-35 发现）**
+
+`node.Register` 只按令牌找到**本次新签发**的占位节点，然后无条件把 `agent_id` 写进去，从不检查这个身份是否已属于某个节点。f-6-01 R-012 要求的是「`agent_id` 已存在 → 视为**同一节点重新注册**，更新连接信息、保留节点 ID 与历史」，实际表现是：
+
+```
+ERROR: duplicate key value violates unique constraint "uniq_node_agent_id" (SQLSTATE 23505)
+[2.330ms] [rows:0] UPDATE "node" SET "agent_id"='aaaa…' … WHERE id = 14
+→ INTERNAL_ERROR: 服务内部错误，请稍后重试
+```
+
+触发条件极常见：**保留 `/var/lib/k_cockpit-agent` 再领一张新令牌**（换证书、改网关地址、重装后想沿用身份）。而「保留历史」正是 f-6-01 Q-004 选 `agent_id` 作为身份锚点的理由（主机名与 IP 都会变），所以这条路径必须能走通。
+
+修法两层：
+
+1. `Register` 先按 `agent_id` 查既有节点，命中且不是同一行 → 走 `reregister`：把**占位行软删**（否则列表里永远挂着一台 pending 机器，而且它还握着可再次使用的令牌哈希），把连接信息刷到既有节点上，审计记 `reregistered: true` + `placeholder_id`。节点 ID、审计、监控、虚拟机归属全部不动。
+2. 顺带修同型的索引问题：`uniq_node_agent_id` 是 0002 建的**无条件**唯一索引，软删行仍占着 `agent_id` → 「移除节点后用同一身份重新接入」也必然 500。新增迁移 `0059_node_agent_id_partial.sql` 改成 `WHERE deleted_at IS NULL`，模型 tag 同步加条件，并在 `testschema.go` 登记重建（否则 SQLite 上 AutoMigrate 只认索引名、不改语义）。这与 0057（`uniq_node_name`）、0058（`uniq_user_username`）完全同型。
+
+实机复验（U-35 用例 10）：`u35c-5a59` 以 A 的身份 enroll 成功，库里 id 17（原节点）保留 `agent_id=aaaa…b7d3`，id 19（占位行）`deleted=t`、`agent_id` 为空、状态 pending。新增单测 `TestRegisterReregistersSameAgentID`、`TestRegisterAfterRemoveReusesAgentID` 锁死这两条路径。
+
+### 12.3 顺带修掉的一处加固（U-35 发现）
+
+`StateDir.SaveEnrollment` 用 `os.MkdirAll(s.Dir, 0o700)`，但 **MkdirAll 对已存在的目录不改权限**。实机 `/var/lib/k_cockpit-agent` 是老安装脚本建的 `0755`，于是「代码声明 0700、实际 0755」在升级路径上永远不纠正。补一次显式 `os.Chmod(s.Dir, 0o700)`，并用 `TestSaveEnrollmentTightensExistingDir` 锁定（先把目录造成 0755，enroll 后必须变 0700；已验证去掉 chmod 该用例会红）。
+
+私钥本身一直是 0600，所以这不是泄密，而是「声明的权限取决于部署历史」——补上更省事。
+
+### 12.4 测试自身的假设错误（**不是**产品缺陷，4 条）
+
+按 §10.4 的先例单独列出来，避免下一轮把它们当成产品问题重修一遍：
+
+1. **`journalctl --since` 用了本地时间**：本机 UTC+8、实机 UTC，`time.localtime()` 拼出的时间点落在 8 小时后，永远 `-- No entries --`。改用 systemd 的 `--since "@<epoch>"` 绝对时间。投递本身一直是成功的（HTTP 200 + `sent:true`）。
+2. **「要求 STARTTLS 而服务端不支持」断言写成 4xx**：实际返回 **503** 才对。`TestMail` 把所有 mailer 错误统一映射成 `api.Unavailable`——这类失败换对服务端就能成功，属「暂时不可用」而非「请求不合法」。
+3. **「明文通道不发送凭据」写错了主语**：`net/smtp` 的 `PlainAuth` 只在「未加密**且**主机名不是 `localhost`/`127.0.0.1`/`::1`」时拒发；主机名正好是 `localhost` 时 Go 有意放行。原用例恰好落在放行分支，抓到的是服务端 `538`，却写成了「客户端拒发」。改成三条：非 localhost 客户端拒发（`unencrypted connection`）、localhost 例外不得静默成功、无认证明文中继能正常投递（对照组，服务端 `tls=false`）。这条已作为注释写进 `mailer.go`，防止后人再把用例改回去。
+4. **测试 SMTP 服务器在 `-user` 非空时要求所有投递先认证**，所以「明文 + 无凭据 + 能投递」在同一个实例上不可能成立。补起 `kc-smtptls-noauth`（2527，`-user` 留空）作为对照组——这也顺带第一次真机验证了「内网中继不做认证」那种部署。
+
+### 12.5 部署流程发现：上一轮发了代码，没跑迁移
+
+`0058_user_unique_partial`（r21 的用户名部分唯一索引）在实机库里一直是**待应用**状态，直到本轮发布时执行 `./migrate` 才应用。也就是说 r21 修好的是代码与迁移文件，而生产库的结构没变——「代码已修、库没修」这种分叉不会报错，只会让缺陷在实机上继续存在。
+
+处置：把 `./migrate -dir migrations` 写进发布脚本 `deploy_r23.sh` 的固定步骤（切 `current` 之后、重启之前），本轮 0058 与 0059 都是这样落库的。**发布 = 二进制 + public + migrations + 迁移执行**，四件缺一不可。
+
+### 12.6 覆盖率与门禁
+
+| 口径 | 命令 | 数值 | 用途 |
+|---|---|---|---|
+| 默认 | `go test ./... -coverprofile` | **55.0%** | CI 门禁按此，阈值 **54%** |
+| 跨包 | `go test ./... -coverpkg=./internal/...` | **61.0%** | 只用于找「整个包/path 零覆盖」，**不与门禁混用** |
+
+这两种口径差值近 6 个百分点，混用会得出完全不同的结论，已在 `ci.yml` 注释里写死。门禁阈值用 53.9 / 54 / 55.1 三个值验过（低于即 `exit 1`），并注明「要下调先写理由」。
+
+### 12.7 观测（未修，登记备查）
+
+- **节点列表不返回 `agent_id`**：面板用数字 `id` 与 `name` 标识节点，`agent_id` 只在库里与证书 CN 上。排障时无法把节点上的 `agent.json` 直接和面板某行对上，只能靠主机名猜。建议在 `GET /nodes` 增加 `agent_id`（只读、非敏感）。
+- **`is_migration_target` 无写路径**：字段可读、有默认值，但没有写入方也没有消费方（迁移判定只看 `maintenance_mode`），前端也不读。保持现状可以，但别在别处按它做判断。
+- **构建未注入版本号时 `agent_version` 是 `dev`**：r22 部署的 agent 就是这样（`k_cockpit-agent dev`）。本轮构建补了 `-X k_cockpit/internal/nodeagent.buildVersion=v0.1.0-r23`，节点列表现在显示真实版本。发布脚本应固定带 `-ldflags`。
+
+### 12.8 证据索引（r23）
+
+| 项 | 证据 |
+|---|---|
+| 实机版本 | `GET /api/v1/version` → `panel_version=v0.1.0-r23`、`revision=6c0add1a42c5b9859f4c07e023b66177e8968c0b`、`build_time=2026-11-11T04:15:46Z` |
+| U-32 | `go test ./internal/service/network/reconcile/ ./internal/handler/node/ ./internal/service/compute/vmtag/ ./internal/platform/authz/ ./internal/platform/audit/ -cover` |
+| U-33 | `~/.kc_test/r23/t_u33_settings_at_rest.py` → `u33-settings-at-rest.json`（20/20）；`internal/service/platform/settings/encryption_test.go`（7 例） |
+| U-34 | `.github/workflows/ci.yml`；`/tmp/kc-r23-cover.out`（`go tool cover -func` 末行 55.0%） |
+| U-35 | `~/.kc_test/r23/t_u35_agent_enroll.py` → `u35-agent-enroll.json`（28/28）；`internal/nodeagent/state_test.go`（6 例） |
+| U-36 | `internal/handler/platform/public_contract_test.go`（8 例） |
+| U-37 | `tests/delivery/smtptls/main.go`（新增交付资产）；`~/.kc_test/r23/t_u37_mail_tls.py` → `u37-mail-tls.json`（15/15） |
+| 缺陷 8 现场 | `journalctl -u k-cockpit`：`duplicate key value violates unique constraint "uniq_node_agent_id"`；修后 `psql` 查 `node` 表 id 17/19 两行状态 |
+
+### 12.9 残留
+
+- **U-35 的测试节点无法经 API 删除**：移除节点需要二次验证，本环境管理员未绑定任何验证方式（`methods: []`），因此 428 是**正确行为**，代价是每次跑 U-35 会留下 3-4 台 pending 节点。处置：用例全部使用每轮唯一的节点名（`u35*-<runid>`），避免残留把下一轮卡在 409；环境重置时人工清理。
+- **`mailer` 只实现 `AUTH PLAIN`**：要求 `CRAM-MD5` / `LOGIN` 的 SMTP 服务器暂不支持（多数主流服务商都支持 PLAIN，故未阻塞交付）。
+- **根密钥轮换流程未做**：换密钥后旧密文不可解，目前只能靠「重新填写敏感项」恢复；属于密钥管理范畴（U-30）。

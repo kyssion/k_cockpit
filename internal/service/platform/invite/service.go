@@ -295,7 +295,11 @@ type AcceptRequest struct {
 // Accept 接受邀请并创建账号。
 func (s *Service) Accept(ctx context.Context, req AcceptRequest) error {
 	if s.createUser == nil {
-		return api.Internal()
+		// 装配缺失 ≠ 内部错误。回 500 会输出「服务内部错误，请稍后重试」，
+		// 而这条路径**重试永远不会成功**——账号创建能力根本没接上。
+		// 与邮件未配置同一口径：503 + 一句可执行的说明，让人去找管理员，
+		// 而不是守在页面上反复点。
+		return api.Unavailable("邀请注册功能未启用，请联系管理员")
 	}
 	row, err := s.byToken(ctx, req.Token)
 	if err != nil {

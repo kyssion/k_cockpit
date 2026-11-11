@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -246,6 +247,99 @@ func TestRegisterRejectsExpiredToken(t *testing.T) {
 
 	_, err := svc.Register(ctx, issued.Token, "agent-a", "1.0")
 	assertAPIError(t, err, 403)
+}
+
+// TestRegisterReregistersSameAgentID 覆盖 f-6-01 R-012：agent_id 已存在时
+// 视为**同一节点重新注册**——保留节点 ID 与历史，而不是新建一行。
+//
+// r23 实机 U-35 抓出的实现：不看这一步，直接把 agent_id 写到令牌那一行，
+// 撞 uniq_node_agent_id 后只剩「服务内部错误」。保留状态目录、用新令牌
+// 重新 enroll 就能稳定复现。
+func TestRegisterReregistersSameAgentID(t *testing.T) {
+	svc, db := newTestService(t, &fakeRuntime{})
+	ctx := context.Background()
+
+	first, _ := svc.CreateEnrollToken(ctx, "node-1", 0, 1, "admin", "")
+	v1, err := svc.Register(ctx, first.Token, "agent-same", "1.0.0")
+	if err != nil {
+		t.Fatalf("首次注册失败: %v", err)
+	}
+
+	second, _ := svc.CreateEnrollToken(ctx, "node-1-reinstall", 0, 1, "admin", "")
+	v2, err := svc.Register(ctx, second.Token, "agent-same", "2.0.0")
+	if err != nil {
+		t.Fatalf("同身份重注册失败: %v", err)
+	}
+
+	// 身份沿用原节点：ID 不变，历史（审计、虚拟机归属）才不会断链。
+	if v2.ID != v1.ID {
+		t.Errorf("重注册返回的节点 ID = %d, 期望沿用 %d", v2.ID, v1.ID)
+	}
+	var kept model.Node
+	db.First(&kept, v1.ID)
+	if kept.AgentVersion == nil || *kept.AgentVersion != "2.0.0" {
+		t.Errorf("连接信息未更新: agent_version = %v", kept.AgentVersion)
+	}
+	if kept.Status != model.NodeStatusOnline || kept.EnrollState != model.NodeEnrollEnrolled {
+		t.Errorf("重注册后状态 = %q/%q, 期望 online/enrolled", kept.Status, kept.EnrollState)
+	}
+
+	// 令牌那一行是本次新签发的占位节点：必须被软删，否则列表里会永远挂着
+	// 一台 pending 的机器，而且它还握着可再次使用的令牌哈希。
+	var placeholder model.Node
+	if err := db.Unscoped().First(&placeholder, second.Node.ID).Error; err != nil {
+		t.Fatalf("占位节点不存在: %v", err)
+	}
+	if !placeholder.DeletedAt.Valid && placeholder.EnrollTokenHash != nil {
+		t.Error("占位节点未清理：仍为在用状态且令牌未销毁")
+	}
+	if placeholder.AgentID != nil {
+		t.Error("占位节点不该被写入 agent 身份")
+	}
+
+	// 审计要能区分「首次接入」与「同身份重注册」。
+	var logs []model.AuditLog
+	db.Where("action = ?", "node.register").Order("id").Find(&logs)
+	if len(logs) != 2 {
+		t.Fatalf("注册审计条数 = %d, 期望 2", len(logs))
+	}
+	if logs[1].AfterState == nil || !strings.Contains(*logs[1].AfterState, "reregistered") {
+		t.Errorf("重注册审计缺少 reregistered 标记: %v", logs[1].AfterState)
+	}
+}
+
+// TestRegisterAfterRemoveReusesAgentID 覆盖「移除节点后用同一个身份接入」：
+// agent 的 /var/lib 还在，uuid 不变，这是重装系统后的标准动作。
+//
+// 唯一索引若不是「当前存在的唯一」，这条路径会 500——与 0057/0058 同型。
+func TestRegisterAfterRemoveReusesAgentID(t *testing.T) {
+	svc, db := newTestService(t, &fakeRuntime{})
+	ctx := context.Background()
+
+	first, _ := svc.CreateEnrollToken(ctx, "node-1", 0, 1, "admin", "")
+	v1, err := svc.Register(ctx, first.Token, "agent-reuse", "1.0.0")
+	if err != nil {
+		t.Fatalf("首次注册失败: %v", err)
+	}
+	if err := svc.Remove(ctx, v1.ID, 1, "admin", ""); err != nil {
+		t.Fatalf("移除节点失败: %v", err)
+	}
+
+	again, _ := svc.CreateEnrollToken(ctx, "node-1", 0, 1, "admin", "")
+	v2, err := svc.Register(ctx, again.Token, "agent-reuse", "1.0.1")
+	if err != nil {
+		t.Fatalf("移除后同身份重新接入失败: %v", err)
+	}
+	if v2.ID == v1.ID {
+		t.Error("移除后的接入应是一台新节点，而不是复活已删记录")
+	}
+
+	// 同名也应能重建（uniq_node_name 已是部分唯一索引）。
+	var live int64
+	db.Model(&model.Node{}).Where("name = ?", "node-1").Count(&live)
+	if live != 1 {
+		t.Errorf("在用同名节点数 = %d, 期望 1", live)
+	}
 }
 
 // 运行态由心跳时间推导，而不是读 agent 上报的状态字符串。

@@ -253,6 +253,184 @@ func TestTagsAreSorted(t *testing.T) {
 	}
 }
 
+// TestTagsOfBatchesAcrossVMs 覆盖批量读取（TagsOf）。
+//
+// 这个路径存在的理由就是避免 N+1：列表一页 20 台，用单台的 Tags 循环调用
+// 会把一次列表请求变成 20 次数据库往返。它此前只有单台路径被测，批量路径
+// 在 `-coverpkg` 口径下是 0%。
+//
+// 断言的三个语义点：
+//  1. 每台机器的标签完整且按字典序（界面按返回值直接渲染）；
+//  2. **没有标签的机器不出现在 map 里**——调用方按缺失处理，而不是拿到
+//     一个空切片：空切片与「没查到」在 JSON 里都是 []，但语义不同；
+//  3. 不存在的 vm_id 不报错，也不出现在结果里。
+func TestTagsOfBatchesAcrossVMs(t *testing.T) {
+	svc, db := newTestEnv(t)
+	ctx := context.Background()
+
+	a := seedVM(t, db, "batch-a", alice)
+	b := seedVM(t, db, "batch-b", alice)
+	c := seedVM(t, db, "batch-empty", alice) // 刻意不打标签
+
+	if _, err := svc.SetTags(ctx, a.ID, []string{"prod", "db"}, tenant(), "alice", ""); err != nil {
+		t.Fatalf("保存失败: %v", err)
+	}
+	if _, err := svc.SetTags(ctx, b.ID, []string{"staging"}, tenant(), "alice", ""); err != nil {
+		t.Fatalf("保存失败: %v", err)
+	}
+
+	got, err := svc.TagsOf(ctx, []int64{a.ID, b.ID, c.ID, 999999})
+	if err != nil {
+		t.Fatalf("批量查询失败: %v", err)
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("结果应只含 2 台有标签的机器，实际 %d 台: %v", len(got), got)
+	}
+	// 字典序：db 在 prod 之前。
+	if want := []string{"db", "prod"}; !equalTags(got[a.ID], want) {
+		t.Errorf("vm a 标签 = %v, 期望 %v", got[a.ID], want)
+	}
+	if want := []string{"staging"}; !equalTags(got[b.ID], want) {
+		t.Errorf("vm b 标签 = %v, 期望 %v", got[b.ID], want)
+	}
+	if _, ok := got[c.ID]; ok {
+		t.Errorf("没标签的机器不该出现在结果里: %v", got[c.ID])
+	}
+	if _, ok := got[999999]; ok {
+		t.Error("不存在的 vm_id 不该出现在结果里")
+	}
+}
+
+// TestTagsOfWithEmptyInputSkipsQuery 覆盖空入参。
+//
+// 返回空 map（而不是 nil）：调用方直接做 `m[id]` 取值，nil map 读取虽然
+// 安全，但把它传回去再写入就会 panic。空入参不该产生一次 `IN ()` 查询
+// ——那在某些数据库上是语法错误。
+func TestTagsOfWithEmptyInputSkipsQuery(t *testing.T) {
+	svc, _ := newTestEnv(t)
+
+	got, err := svc.TagsOf(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("空入参不该出错: %v", err)
+	}
+	if got == nil {
+		t.Fatal("应返回空 map 而不是 nil")
+	}
+	if len(got) != 0 {
+		t.Errorf("空入参结果应为空，实际 %v", got)
+	}
+
+	// 空切片与 nil 等价。
+	if got, err := svc.TagsOf(context.Background(), []int64{}); err != nil || len(got) != 0 {
+		t.Errorf("空切片结果 = %v, err = %v", got, err)
+	}
+}
+
+// TestTagsOfHidesNothingAcrossOwners 记录批量路径**不做**可见性过滤这一事实。
+//
+// TagsOf 是内部批量读取，可见性由调用方在拿到机器列表时就已判定（列表本身
+// 只含调用者可见的机器）。这条用例固定住这个契约：如果将来有人在 TagsOf
+// 里加可见性过滤，它的签名就必须多一个 Viewer 参数——那时这条用例会编译
+// 失败，提醒改动者这是接口变更而不是内部优化。
+func TestTagsOfHidesNothingAcrossOwners(t *testing.T) {
+	svc, db := newTestEnv(t)
+	ctx := context.Background()
+
+	mine := seedVM(t, db, "mine", alice)
+	theirs := seedVM(t, db, "theirs", 20)
+	if _, err := svc.SetTags(ctx, theirs.ID, []string{"other"}, admin(), "root", ""); err != nil {
+		t.Fatalf("保存失败: %v", err)
+	}
+
+	got, err := svc.TagsOf(ctx, []int64{mine.ID, theirs.ID})
+	if err != nil {
+		t.Fatalf("批量查询失败: %v", err)
+	}
+	if want := []string{"other"}; !equalTags(got[theirs.ID], want) {
+		t.Errorf("批量路径按 id 直读，应能取到别人的标签（由调用方负责范围）: %v", got)
+	}
+}
+
+// TestStorageFailureNeverLeaksAsSuccess 覆盖数据层不可用时的降级。
+//
+// 每一条读写路径都必须把「查不到」与「查出错」分开：前者是 404，后者是
+// 500。若把错误吞掉返回空结果，界面会显示「这台机器没有标签」——一个
+// 看起来正常的错误答案，比一个明确的失败危险得多。
+//
+// 用关闭连接制造真实的存储故障（而不是打桩替换 repo），因为要验的正是
+// repository 返回错误之后服务层怎么处理。
+func TestStorageFailureNeverLeaksAsSuccess(t *testing.T) {
+	svc, db := newTestEnv(t)
+	ctx := context.Background()
+	vm := seedVM(t, db, "vm-broken", alice)
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("取连接失败: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("关闭连接失败: %v", err)
+	}
+
+	if _, err := svc.TagsOf(ctx, []int64{vm.ID}); err == nil {
+		t.Error("批量读在存储故障时应返回错误")
+	} else {
+		assertStatus(t, err, 500)
+	}
+	if _, err := svc.Tags(ctx, vm.ID, tenant()); err == nil {
+		t.Error("单台读在存储故障时应返回错误")
+	} else {
+		assertStatus(t, err, 500)
+	}
+	if _, err := svc.SetTags(ctx, vm.ID, []string{"x"}, tenant(), "alice", ""); err == nil {
+		t.Error("写在存储故障时应返回错误")
+	} else {
+		assertStatus(t, err, 500)
+	}
+	if _, err := svc.VMsByTag(ctx, "x", tenant()); err == nil {
+		t.Error("按标签查询在存储故障时应返回错误")
+	} else {
+		assertStatus(t, err, 500)
+	}
+	if _, err := svc.AllTags(ctx, tenant()); err == nil {
+		t.Error("标签汇总在存储故障时应返回错误")
+	} else {
+		assertStatus(t, err, 500)
+	}
+}
+
+// TestServiceWithoutAuditRecorder 覆盖未装配审计记录器的部署形态。
+//
+// audit 为 nil 时录审计必须是空操作而不是 panic：轻量部署与部分测试会
+// 这样装配，而「写标签」不该因为没接审计就崩掉。
+func TestServiceWithoutAuditRecorder(t *testing.T) {
+	_, db := newTestEnv(t)
+	svc := vmtag.NewService(vmtagrepo.NewRepo(db), nil)
+	ctx := context.Background()
+	vm := seedVM(t, db, "vm-noaudit", alice)
+
+	got, err := svc.SetTags(ctx, vm.ID, []string{"solo"}, tenant(), "alice", "")
+	if err != nil {
+		t.Fatalf("未接审计时保存失败: %v", err)
+	}
+	if want := []string{"solo"}; !equalTags(got, want) {
+		t.Errorf("标签 = %v, 期望 %v", got, want)
+	}
+}
+
+func equalTags(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func assertStatus(t *testing.T, err error, want int) {
 	t.Helper()
 	if err == nil {

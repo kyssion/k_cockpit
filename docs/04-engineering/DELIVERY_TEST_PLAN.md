@@ -272,12 +272,24 @@
 | 套件 | 新增证据 | 关闭的残留 | 状态影响 |
 |---|---|---|---|
 | TP-00 | `go test -cover ./internal/...`（并跑一次 `-coverpkg=./internal/...`）：**总覆盖 60.6%**、60 个测试包全 `ok`、`_test.go` 240 个；`go build ./cmd/migrate` 通过；`gofmt -l cmd internal` 无输出；前端 Vitest 按代码实数仍为 **34** 例 | 覆盖率数字、`migrate` 构建两项 | 已测试（不变）。**覆盖率仍未进门禁**（`ci.yml` 无阈值）→ 新增 U-34 |
-| TP-04 | 协议层 9/9 + 心跳 8/8：协议版本 0/2 → `FailedPrecondition` 且**不签发**；令牌重放 `PermissionDenied`；签发证书 **CN = agent_id** 且 EKU 仅 ClientAuth；无证书 / 陌生 CN / 非本 CA 逐条被拒；心跳间隔 10s、`SIGSTOP` 冻结后 34s 判离线、冻结 20s 时仍在线、恢复后 2s 回在线且能力 131 项仍在 | U-16 全部五项 | 部分验证（U-17、U-36 仍在） |
+| TP-04 | 协议层 9/9 + 心跳 8/8：协议版本 0/2 → `FailedPrecondition` 且**不签发**；令牌重放 `PermissionDenied`；签发证书 **CN = agent_id** 且 EKU 仅 ClientAuth；无证书 / 陌生 CN / 非本 CA 逐条被拒；心跳间隔 10s、`SIGSTOP` 冻结后 34s 判离线、冻结 20s 时仍在线、恢复后 2s 回在线且能力 131 项仍在 | U-16 全部五项 | 部分验证（U-17 仍在；U-36 已于 r23 关闭，公开端点字段级契约 8 例） |
 | TP-06 | 停机开控制台由 `503 无法建立控制台通道` 改为 **`409 虚拟机未运行`**，且改为「先让 agent 试、失败后才解释状态」；新增 3 条单测（含「状态写 stopped 但流能开 → 必须成功」）；r21 实机复验 | — | 已测试（不变） |
 | TP-14 | 诊断导出 21/21：只选 `config` 时包里只有 `config/*`；`secret` 项只回 `is_set`；哨兵口令全包（含审计日志）逐字节搜不到；首次设置后回滚被拒、有前值时回滚成功；未知分类 400；租户 403 | U-26 的「诊断导出」部分 | 已测试（不变） |
 | TP-15 | 20 个受保护动作逐个「428 → TOTP 换 grant → 重放成功 → 同一 grant 再用仍 428」（r20，20/20） | U-28 | 部分验证（U-06 的第 ②③ 项仍在） |
 | TP-19 | 45 条 SKIP 端点按当前代码重生成后逐条补测，127/127 断言；`authkey` / `mailer` / `passaudit` / `reqlog` 四个零测试子包 0% → 85.5 / 87.5 / 90.4 / 90.0（40+ 新用例） | U-12、U-11（r20） | 已测试（不变） |
-| TP-23 | §5.0 / §5.0a / §11 的状态回填与统计口径修正（r22） | 本节自身 | 部分验证（U-25、U-37 仍在） |
+| TP-23 | §5.0 / §5.0a / §11 的状态回填与统计口径修正（r22） | 本节自身 | 部分验证（U-25 仍在；U-37 已于 r23 关闭） |
+
+### 5.0b r23 增量证据（2026-11-11）
+
+> 只登记**改变了已有结论**的事实，逐条可在报告 §12 或对应脚本复现。本轮关闭 U-32 ~ U-37 六项。
+
+| 套件 | 新增证据 | 关闭的残留 | 状态影响 |
+|---|---|---|---|
+| TP-00 | 覆盖率门禁落 CI：默认口径 **55.0%**、阈值 **54%**；66 个测试包全 `ok`（原 60）。两种口径分开记：`-coverpkg` 为 **61.0%**，只用于找零覆盖 path | U-34 | 已测试（不变），门禁从「无」变成「不许更低」 |
+| TP-04 | agent 二进制自身 enroll **28/28**：目录 0700 / 私钥 0600 / `agent.json` 0600、证书 CN = `agent_id`、令牌一次性、失败不留半截身份、停启后从磁盘恢复、已存在的 0755 目录被收紧、未 enroll 时提示先 enroll | U-35；U-16 的最后一条残留 | 部分验证（U-17 仍在）。过程中修复「同 uuid 重注册 500」 |
+| TP-14 | 邮件真实 TLS **15/15**：STARTTLS / 隐式 TLS 均 `tls=true`、不受信证书 `x509` 拒、不降级明文、明文通道客户端拒发凭据、无认证明文中继可投递；敏感设置项静态加密 **20/20** | U-37、U-33 | 已测试（不变） |
+| TP-19 | `reconcile` 0→100%、`handler/node` 0→93.3%、`vmtag` 74.1→87.1%、`authz` 0→100%、`audit` 58.3→100%；公开端点字段级契约 8 例（含登录不回显 token、两种失败文案一致） | U-32、U-36 | 已测试（不变） |
+| TP-22 | 发布脚本把 `./migrate -dir migrations` 固化为步骤；发现 **0058 一直待应用**（r21 发了代码没跑迁移），本轮 0058 / 0059 一起落库 | — | 部分验证（不变），但「发布 = 二进制 + public + migrations + 执行迁移」已写进脚本与报告 §12.5 |
 
 ### TP-00 工程门禁与制品构建（P0） · 【已测试】
 
@@ -718,7 +730,7 @@
 
 ### 11.0 口径与索引
 
-本节逐项登记**到本次复核为止仍没有实测证据**的能力与用例。凡 §5.0 状态为「部分验证」「未测试」，或「已测试」但「仍未覆盖」列非空者，都必须在本节有对应 `U-xx` 编号；`U` 编号是两节之间的唯一索引，**共 37 项**（U-01 ~ U-31 为第 14 轮盘点，U-32 ~ U-37 为 r22 复核新增）。
+本节逐项登记**到本次复核为止仍没有实测证据**的能力与用例。凡 §5.0 状态为「部分验证」「未测试」，或「已测试」但「仍未覆盖」列非空者，都必须在本节有对应 `U-xx` 编号；`U` 编号是两节之间的唯一索引，**共 37 项**（U-01 ~ U-31 为第 14 轮盘点，U-32 ~ U-37 为 r22 复核新增）。**r23（2026-11-11）关闭 6 项**：U-32 / U-33 / U-34 / U-35 / U-36 / U-37 全部有实测证据并通过，见 §11.4；剩余待测 31 项。
 
 每个 U 项只有三种状态，**不允许含糊**：
 
@@ -774,16 +786,16 @@
 | U-27 | **登录 IP 限流 / 账号延迟 / 429**、多阶段 `verify` 全链路、`TC-02-8` API Key 不触发二次验证的显式取舍复核 | `TC-02-1/2/8` | 26 套件覆盖登录成功与错误密码，未造限流与已绑定 TOTP 的登录阶段 | 限流夹具 + 已绑定 TOTP 的账号 |
 | U-28 | **【部分完成】**~~160 条 `adminOnly` 动态逐条越权、20 个 risk action~~ → **主项全绿**：160 条管理端点租户逐条 403（Go 用例）；20 个受保护动作逐个「428 → TOTP 换 grant → 重放成功 → 同一 grant 再用仍 428」（实机 r20，20/20） | `TC-03-1/2/6`、`TC-15-1/2` | **已执行**（r20）；过程中**发现并修复**「重绑进入 pending 后守卫失效」 | 剩余：资源归属 404 的**跨租户**逐条（同租户 404 已由功能套件覆盖），以及进程归属校验 |
 
-**以下 6 项为 r22 复核新增（2026-11-11）**，全部由机械手段发现，不是凭印象补的：前三项来自 `go test -coverpkg=./internal/...` 逐函数比对，第四项来自直接读库，后两项来自对已执行脚本的反查。
+**以下 6 项为 r22 复核新增（2026-11-11）**，全部由机械手段发现，不是凭印象补的：前三项来自 `go test -coverpkg=./internal/...` 逐函数比对，第四项来自直接读库，后两项来自对已执行脚本的反查。**6 项均已在 r23 关闭，行的删除线只保留可追溯性，结论见 §11.4。**
 
 | # | 未测试内容 | 计划用例 | 为什么没测 | 解除前置 / 下一步 |
 |---|---|---|---|---|
-| U-32 | **Go 侧仍然零覆盖的三条真实代码路径**（`-coverpkg` 跨包统计后仍为 0.0%）：① `internal/service/network/reconcile` 整个循环（`withDefaults` / `NewLoop` / `Start` / `RunOnce`，网络自愈的后台对账）；② `internal/handler/node` 的 8 个处理器与 2 个辅助函数（`List` / `Get` / `Stats` / `SetMaintenance` / `SetConsoleHost` / `Remove` / `CreateEnrollToken` / `enrollAddr` / `hostOnly`）；③ `vmtag.TagsOfVMs` 与 `vmtag.Service.TagsOf`（VM 列表的**批量**标签读取） | `TC-19-7` | `TC-19-7` 列的六个零测试子包里 `reconcile` 一直没补（r21 补的是另外四个 + `search` 已有）。②③ 不在原清单内，是本次逐函数比对才发现的：`handler/node` 的 HTTP 行为由 R3 脚本覆盖，但**不在 CI、不在 60 个 Go 测试包内**；`vmtag` 只有单台路径被测，批量路径 0% | 补 `reconcile` 循环用例（tick 间隔、单次失败不 panic、幂等）+ `handler/node` 路由级用例 + `TagsOf` 批量读用例；可顺带把 `RequireRole`（58.3%）与 `toJSON`（58.3%）的未覆盖分支补上 |
-| U-33 | **敏感设置项的静态加密**：`system_setting.value` 是否以密文保存 | `TC-14-1`、`TC-15-5` | **r22 实测为明文，且轮换不清理旧值**：① 用哨兵 `KC-AtRest-Probe-9f3a` 经 `PATCH /settings` 写入 `notification.smtp_password` 后，`select value from system_setting` **原样取回**；② 再依次写入 `KC-Rotate-A-1111` → `KC-Rotate-B-2222`，库里是 `value=KC-Rotate-B-2222` / `previous_value=KC-Rotate-A-1111`——**改口令不会让旧口令离开数据库**。`cryptoutil`（AES-GCM）当前只用于 TOTP 密钥 / VNC 密码 / 来宾凭据，设置服务未接入。API 不回传明文（R-009）与审计不记明文（R-011）**已验**，缺口只在「拿到库或备份即拿到邮局口令 + 上一手口令」 | 先做决策：接入 `cryptoutil` 并迁移存量值（含清空 `previous_value`），或在文档明写「设置项不做静态加密」的边界。**未决策前不得写成已加密** |
-| U-34 | **覆盖率门禁缺失**：`ci.yml` 只跑 `go vet` / `go test`，**没有 `-cover` 阈值** | TP-00 残留项 | r22 才有数字：总覆盖 **60.6%**（`-coverpkg=./internal/...`），60 个测试包全 ok。数字有了、闸门没有，覆盖率只会在后续提交里缓慢下滑而无人发现 | 定一个不阻断的基线（建议先按 60%）进 CI，只做「不许更低」的守门 |
-| U-35 | **`k_cockpit-agent` 二进制自身的 enroll 全流程**：落盘 `/var/lib/kcockpit-node/{client.pem,client.key}`、systemd 单元、重复 enroll 行为、重启后自动重连 | `TC-04-1`、`TC-22-7` | r21 的 9/9 是**协议层**证据（`tests/delivery/agentgw_probe` 直连 `:8443`，走同一套网关逻辑），不是 agent 二进制自己的 enroll 子命令。两者共用的网关注解相同，但「凭据怎么落盘、权限多少、重复 enroll 怎么办」只有二进制能回答 | 在干净节点上跑一次 `k_cockpit-agent enroll --token …`，核对文件权限位、重启后自愈、二次 enroll 的提示 |
-| U-36 | **公开 15 条端点的字段级正面契约**：只验了「未登录可到达」，没验返回体字段与语义（`/setup/status` 的 `initialized`、`/invites/:token` 的 preview 字段、`/version` 的构建信息、`/health` 的 `database` 等） | `TC-19-4` 残留 | U-11 的动态用例断言的是**可达性**（15 公开 / 165 登录 / 160 管理全部 401）；正面契约归功能套件，而功能套件对这些公开端点覆盖不全（`/health` 根本不在 `/api/v1` 下，脚本与文档都曾按 `/api/v1/health` 去探） | 逐条补字段级断言，或在 `API.md` 明确「这些字段不属交付契约」 |
-| U-37 | **邮件通道的真实 TLS 投递**：STARTTLS（587）/ 隐式 TLS（465）的握手、证书校验与认证协商 | `TC-14-1` 的邮件部分 | mailer 单测用进程内假 SMTP 覆盖了「要求 STARTTLS 但服务端不支持时必须失败」（不得静默降级明文），但实机只用过 `security=none` 的本机汇聚端（`127.0.0.1:2525`），真 TLS 一次都没跑过 | 接一个真实 SMTP，或起一个带自签证书的 STARTTLS 汇聚端，跑一次 `POST /settings/mail/test` |
+| U-32 | ~~**Go 侧仍然零覆盖的三条真实代码路径**（`-coverpkg` 跨包统计后仍为 0.0%）：① `internal/service/network/reconcile` 整个循环；② `internal/handler/node` 的 8 个处理器与 2 个辅助函数；③ `vmtag.TagsOfVMs` 与 `vmtag.Service.TagsOf`~~ → **r23 已执行**：`reconcile 0%→100%`、`handler/node 0%→93.3%`、`vmtag 74.1%→87.1%`，另补 `authz 58.3%→100%`、`audit 58.3%→100%`；Go 测试包 60 → 66 个 | `TC-19-7` | **已执行**：`reconcile/loop_test.go`（7 例）、`handler/node/node_test.go`（20+ 例，走真实登录链路建会话）、`vmtag/service_test.go`（+5 例）、`authz/role_test.go`（3 例）、`audit/recorder_test.go`（4 例） | 剩余：`handler/node` 未覆盖的 6.7% 是 `Options` 为 nil 的装配分支，属防御性代码 |
+| U-33 | ~~**敏感设置项的静态加密**：`system_setting.value` 是否以密文保存~~ → **r23 已执行**：接入 `cryptoutil`（AES-GCM，`DeriveKey(root,"settings-secret")`），敏感项加密入库、轮换清空 `previous_value`、回滚对敏感项直接拒绝、启动时迁移存量明文 | `TC-14-1`、`TC-15-5` | **已执行**：`settings/encryption_test.go`（7 例）+ `~/.kc_test/r23/t_u33_settings_at_rest.py` **20/20**（哨兵不入库、轮换无前值、审计零命中、重启后遗留明文被迁移） | 剩余：根密钥轮换（换密钥后旧密文不可解的运维流程）未做，属密钥管理范畴 |
+| U-34 | ~~**覆盖率门禁缺失**：`ci.yml` 只跑 `go vet` / `go test`，**没有 `-cover` 阈值**~~ → **r23 已落闸**：默认口径阈值 54%（实测 55.0%），并写明两种口径的区别（默认 55.0% / `-coverpkg` 61.0%）与「要下调先写理由」 | TP-00 残留项 | **已执行**：`.github/workflows/ci.yml` 的 `total=$(go tool cover -func ...)` + `awk` 断言；阈值以 53.9 / 54 / 55.1 三个值验过（低于即 exit 1） | 剩余：阈值只在「不许更低」，不阻断单包下降；分模块阈值待覆盖稳定后再定 |
+| U-35 | ~~**`k_cockpit-agent` 二进制自身的 enroll 全流程**~~ → **r23 已执行**：`~/.kc_test/r23/t_u35_agent_enroll.py` **28/28**。注意实际状态目录是 **`/var/lib/k_cockpit-agent`**（不是原登记里的 `/var/lib/kcockpit-node`），文件为 `agent.json`(0600) / `ca.pem`(0644) / `client.pem`(0644) / `client.key`(0600) | `TC-04-1`、`TC-22-7` | **已执行**：版本注入 `v0.1.0-r23`、缺参/无效令牌均失败且**不留半截身份**、令牌一次性、证书 CN = `agent_id`、`run` 后上线并上报版本、停启后从磁盘恢复、已存在的 0755 状态目录被收紧为 0700、未 enroll 时 `run` 提示先 enroll | 剩余：`-name` 与二次 enroll 改名组合、证书到期续签（U-30 范畴） |
+| U-36 | ~~**公开 15 条端点的字段级正面契约**~~ → **r23 已执行**：`internal/handler/platform/public_contract_test.go` **8 例全绿**。过程中修正三处文档与实现不符：邀请预览是 `?token=` 不是 `:token`、`/version` **不是**公开端点、`/health` 不在 `/api/v1` 下 | `TC-19-4` 残留 | **已执行**：`/setup/status`、`/invites/preview`、`/invites/accept`、`/auth/login`（两种失败文案完全一致、响应体无 token）、13 条 POST + 2 条 GET 不得 500、`/health` | 剩余：公开端点的**速率与缓存头**不在本组断言内 |
+| U-37 | ~~**邮件通道的真实 TLS 投递**~~ → **r23 已执行**：`~/.kc_test/r23/t_u37_mail_tls.py` **15/15**，用 `tests/delivery/smtptls` 起真实 SMTP（STARTTLS 2587 / 隐式 2465 / 明文 2526 / 不受信 2588 / **无认证明文 2527**） | `TC-14-1` 的邮件部分 | **已执行**：两种 TLS 均投递成功且服务端日志 `tls=true`；不支持 STARTTLS → 明确失败不降级；不受信证书 → `x509: certificate signed by unknown authority`（证明没写 `InsecureSkipVerify`）；明文通道客户端拒发凭据、localhost 例外不静默成功、无认证中继可投递（对照） | 剩余：SMTP 服务器要求 `CRAM-MD5`/`LOGIN` 的兼容性（当前只实现 `PLAIN`） |
 
 ### 11.3 C 档：已知边界（不是漏测，列此以免被误认为已测）
 
@@ -795,7 +807,7 @@
 
 §2.6 另列有「外部身份源 F-1-13（L-03）、Kubernetes / 容器编排 / 分布式存储 / 计费 / 已移除能力、已废弃契约 API-014/015（L-13）」等**明确不在本次范围**的项，处理方式仍是「只验证无残留入口、文档口径一致、不产生 5xx」，不另占 U 编号；§2.6 的「多实例控制面」只验证 PostgreSQL 单实例锁，归入 U-01。本表与 §2.6、§9 合并阅读即构成完整的边界集合。
 
-### 11.4 已关闭清单（r20 / r21 收口，2026-11-11 复核）
+### 11.4 已关闭清单（r20 / r21 / r23 收口，2026-11-11 复核）
 
 > 关闭依据按 §11.5 纪律逐条写：**证据索引 + 复验结论 + 日期**。这些编号在 §11.2 里保留删除线，是为了不打断已有的下游引用（报告、报告附录、提交信息都按 U 编号索引）。
 
@@ -805,6 +817,12 @@
 | U-12 | 45 条 SKIP 端点 + 四个零测试子包 | r21（2026-11-10） | `~/.kc_test/r21/{t_auth_matrix,t_skip_streams,t_skip_global}.py` → `auth-matrix.json`(60) / `stream-matrix.json`(32) / `global-matrix.json`(35) | 127/127 断言通过；`authkey` 85.5% / `mailer` 87.5% / `passaudit` 90.4% / `reqlog` 90.0%。过程中修复 6 个真实缺陷（报告 §10.2），其中 `agent/hub` 连接注销是 P1 回归 |
 | U-16 | enroll 令牌 / mTLS CN / 协议版本 / 无证书 / 心跳阈值 | r21（2026-11-10） | `~/.kc_test/r21/t_u16_channel.py` → `u16-channel.json`(9)；`t_u16_heartbeat.py` → `u16-heartbeat.json`(8)；探针 `tests/delivery/agentgw_probe`（本轮加 `-out-cert`） | 9/9 + 8/8。版本 0/2 → `FailedPrecondition` 且不签发；令牌重放被拒；**CN 即 agent_id**、EKU 仅 ClientAuth；无证书 / 陌生 CN / 非本 CA 三种全拒；心跳 10s、`SIGSTOP` 后 34s 判离线、冻结 20s 仍在 线、恢复 2s 回在线且 131 能力仍在。**协议层证据，agent 二进制 enroll 另立 U-35** |
 | U-19 | 控制面 `kill -9` / 数据库短断 / agent 重启收敛 | r20（2026-11-10） | `~/.kc_test/r18/t_fault_injection.py` → `fault-injection.json`(4) | 4/4：`kill -9` 后 3.6s 由 systemd 拉起且会话仍有效；PG 停 2s 时接口 503、0.5s 恢复；agent 重启 1.0s 回在线。过程中**发现并修复**「数据库不可用被报成 401」 |
+| U-32 | 三条零覆盖的 Go 代码路径（`reconcile` 循环 / `handler/node` 8 个处理器 / `vmtag` 批量读） | r23（2026-11-11） | `reconcile/loop_test.go`(7)、`handler/node/node_test.go`(20+)、`vmtag/service_test.go`(+5)、`authz/role_test.go`(3)、`audit/recorder_test.go`(4)；`go test ./... -cover` | 66 个测试包全绿（原 60）。包自覆盖：`reconcile` **100%**、`handler/node` **93.3%**、`vmtag` **87.1%**、`authz` **100%**、`audit` **100%**。三条路径的关键契约都被固定：默认间隔零值不 panic、单轮失败继续后续目标、状态由心跳推导而非沿用库里的 `status`、批量标签不做跨属主过滤、存储故障不得吞成空结果 |
+| U-33 | 敏感设置项静态明文（`smtp_password` 明文入库 + 轮换留上一手明文） | r23（2026-11-11） | `settings/encryption_test.go`(7)；`~/.kc_test/r23/t_u33_settings_at_rest.py` → `u33-settings-at-rest.json`(**20/20**)；`settings.NewService(db, recorder, secret)` + `EncryptLegacySecrets` | 库里是 base64url 密文（`E2Sp85diS6s8…`）且不含明文片段；轮换后 `previous_value=<NULL>`；接口 `value=""` / `is_set=true` / `rollbackable=false`，回滚 **422**；审计零命中；重启后遗留明文行被就地加密且前值清空。空密钥直接 panic（拒绝静默退回明文） |
+| U-34 | 覆盖率门禁缺失 | r23（2026-11-11） | `.github/workflows/ci.yml`（`go tool cover -func` + `awk` 阈值）+ `/tmp/kc-r23-cover.out` | 门禁 **54%**，实测默认口径 **55.0%**（`-coverpkg=./internal/...` 口径 61.0%，两者不可混用，已在 workflow 注释写明）。阈值逻辑用 53.9 / 54 / 55.1 三值验过：低于即 `exit 1` |
+| U-35 | `k_cockpit-agent` 二进制自身的 enroll 全流程 | r23（2026-11-11） | `~/.kc_test/r23/t_u35_agent_enroll.py` → `u35-agent-enroll.json`(**28/28**)；实机 `k_cockpit-agent v0.1.0-r23 (protocol 1, linux/arm64)` | 状态目录实为 **`/var/lib/k_cockpit-agent`**（原登记写的是 `/var/lib/kcockpit-node`，已更正）：目录 0700、`client.key` 0600、`agent.json` 0600、`client.pem`/`ca.pem` 0644；无效令牌与重复令牌都失败且**不留 `agent.json`**、不破坏在跑身份；证书 **CN = agent_id**；`run` 后 online 且 `agent_version` 上报正确；停启后从磁盘恢复；**已存在的 0755 目录被收紧为 0700**（本轮发现的缺陷）；未 enroll 时 `run` 明确提示先 enroll。过程中**发现并修复**「同 uuid 重注册撞唯一索引报 500」（报告 §11 缺陷 8） |
+| U-36 | 公开端点的字段级正面契约 | r23（2026-11-11） | `internal/handler/platform/public_contract_test.go`（8 例，全绿） | `/setup/status` 的 `initialized` 为布尔；`/invites/preview?token=` 抹掉配额、不回显 token；`/invites/accept` 204 不下发 Cookie；`/auth/login` 两种失败文案逐字一致且响应体无 `token`/`session_id`（R-014）；13 条 POST + 2 条 GET + `/health` 均不 500。三处文档纠偏：`?token=` 不是 `:token`、`/version` 需登录、`/health` 不在 `/api/v1` 下。过程中**发现并修复**「邀请注册未装配时返 500」（报告 §11 缺陷 7） |
+| U-37 | 邮件通道的真实 TLS 投递 | r23（2026-11-11） | `tests/delivery/smtptls`（新交付资产，四模式 + 无认证实例）；`~/.kc_test/r23/t_u37_mail_tls.py` → `u37-mail-tls.json`(**15/15**) | STARTTLS 与隐式 TLS 均 200 + `sent:true`，服务端日志 `tls=true`；不支持 STARTTLS → `454 … TLS not available` 明确失败（不静默降级）；不受信自签证书 → `x509: certificate signed by unknown authority`（证明没写 `InsecureSkipVerify`）；明文通道在**非 localhost** 主机名下客户端拒发凭据（`unencrypted connection`），localhost 例外由服务端 `538` 挡住、不得静默成功；无认证明文中继可正常投递（对照组，服务端 `tls=false`）；端口不通 → `connection refused` |
 
 ### 11.5 复核纪律与关闭顺序
 
@@ -812,4 +830,4 @@
 - 每次重跑前按 §6.8 重新生成 orphan 清单；新增能力或端点先更新 §2 与 §6，再回填 §5.0 与本节，避免状态表与实现漂移。
 - 本节与 §9 豁免单的区别：§9 记「已确认可接受的限制」，本节记「还没有证据的待测项」；B 档补测完成或 C 档复验完成后，把结论移入 §9 并在本节标注「已关闭 → L-xx」。
 - 建议关闭顺序：**U-01 → U-04 → U-05 → U-02 → U-03**（出口门槛），并行推进 U-06 / U-07 / U-09 / U-10，再收 U-13 ~ U-37 的 B 档补测，最后做 U-25 文档回填。与报告 §8 的下一步顺序一致。
-- **本节的数字必须能重跑**：U-32 的覆盖率、U-34 的 60.6%、U-33 的明文结论都给了命令或可直接照做的步骤；下一轮复核若数字变了，先改数字再改结论。
+- **本节的数字必须能重跑**：U-32 的包自覆盖率（`go test <pkg> -cover`）、U-34 的两种口径（`go test ./... -coverprofile` → 55.0%；`-coverpkg=./internal/...` → 61.0%，CI 门禁按前者 54%）、U-33 的密文结论都给了命令或可直接照做的步骤；下一轮复核若数字变了，先改数字再改结论。

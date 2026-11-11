@@ -128,6 +128,16 @@ func (s *Service) Send(ctx context.Context, to, subject, body string) error {
 	}()
 
 	if cfg.Username != "" {
+		// net/smtp 有一个刻意的例外要知道：PlainAuth 在连接未加密时，只在
+		// 主机名**不是** localhost / 127.0.0.1 / ::1 的情况下拒绝发包
+		// （返回 "unencrypted connection"）。所以 security=none 配了口令、
+		// 而主机名恰好是 localhost 时，口令会以 base64 走本机回环。
+		//
+		// 这个例外不外泄到网络外，且 security=none 是用户显式选择，因此
+		// 这里不改写用户意图；真正挡住明文凭据的是**非 localhost 主机名**
+		// 下的客户端拒绝，以及服务端策略（不宣告 AUTH / 538）。U-37 的三条
+		// 实机用例分别覆盖了这两层，改动时别把 localhost 那条读成
+		// 「客户端会拒发」。
 		auth := smtp.PlainAuth("", cfg.Username, cfg.Password, cfg.Host)
 		if err := client.Auth(auth); err != nil {
 			return fmt.Errorf("邮件服务器认证失败: %w", err)

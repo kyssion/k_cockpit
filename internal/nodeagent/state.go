@@ -64,6 +64,14 @@ func (s StateDir) SaveEnrollment(st *State, caPEM, certPEM, keyPEM []byte) error
 	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 		return err
 	}
+	// MkdirAll 只在**新建**时套用 0700，已存在的目录原样保留。实机复核时
+	// /var/lib/k_cockpit-agent 就是老安装脚本建出来的 0755：代码声明 0700，
+	// 实际却是 0755，且升级永远不会纠正。这里显式收紧，让声明的权限在
+	// 升级路径上也成立（私钥本身是 0600，目录可列虽不泄密，但不该取决于
+	// 部署历史）。
+	if err := os.Chmod(s.Dir, 0o700); err != nil {
+		return err
+	}
 	if err := os.WriteFile(s.caFile(), caPEM, 0o644); err != nil {
 		return err
 	}

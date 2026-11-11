@@ -15,6 +15,7 @@ import (
 	"k_cockpit/internal/model"
 	"k_cockpit/internal/platform/api"
 	"k_cockpit/internal/platform/audit"
+	"k_cockpit/internal/platform/cryptoutil"
 	"k_cockpit/internal/service/platform/mailer"
 )
 
@@ -90,15 +91,32 @@ type Service struct {
 	env func(string) (string, bool)
 	// appliers 是按 key 注册的应用钩子，可为空。
 	appliers map[string]Applier
+	// encKey 是敏感项（Spec.Secret）的存储密钥，由根密钥按用途派生。
+	//
+	// 为什么设置项也要加密：`system_setting.value` 是**明文列**，能读到库
+	// （备份、只读副本、误配的监控账号）就等于拿到了 SMTP 口令。而这条
+	// 口令通常与运维的邮箱是同一个，泄漏的后果会溢出到本项目之外。
+	//
+	// TOTP 密钥、VNC 密码、来宾凭据走的是同一套 cryptoutil——设置服务此前
+	// 是唯一漏网的一处。
+	encKey []byte
 }
 
 // NewService 构造设置服务。
-func NewService(db *gorm.DB, recorder *audit.Recorder) *Service {
+//
+// secret 是根密钥（与令牌签名同源，按标签派生出独立子密钥）。**不允许为空**：
+// 空密钥会让敏感项退回明文存储，而这是静默发生的——没有任何一处会报错，
+// 直到有人翻库。宁可启动失败。
+func NewService(db *gorm.DB, recorder *audit.Recorder, secret []byte) *Service {
+	if len(secret) == 0 {
+		panic("settings: 缺少加密根密钥，无法保证敏感设置项的静态加密")
+	}
 	return &Service{
 		db:       db,
 		audit:    recorder,
 		env:      os.LookupEnv,
 		appliers: map[string]Applier{},
+		encKey:   cryptoutil.DeriveKey(secret, "settings-secret"),
 	}
 }
 
@@ -258,6 +276,13 @@ func (s *Service) Rollback(
 	if !spec.Rollbackable {
 		return nil, api.ValidationFailed("该设置项不支持回滚")
 	}
+	// 敏感项一律不支持回滚，即便 spec 声明写错了也拦得住。
+	//
+	// 回滚点存在 previous_value 里，而我们**不再为敏感项保留前值**：
+	// 保留它等于把上一手口令永久留在库里，一次泄漏变成两次。
+	if spec.Secret {
+		return nil, api.ValidationFailed("敏感设置项不支持回滚，请重新填写")
+	}
 	if _, locked := s.env(spec.EnvVar); locked {
 		return nil, api.ValidationFailed("该项由环境变量 " + spec.EnvVar + " 指定，无法在面板中回滚")
 	}
@@ -278,7 +303,10 @@ func (s *Service) Rollback(
 	// 回滚本身也是一次变更：它同样把当前值写入 previous_value，
 	// 因此「回滚错了」还能再回滚回来。不这么做的话，一次误回滚会让原值
 	// 永久消失——而它本可以被简单地恢复。
-	restore := *row.PreviousValue
+	//
+	// 走 plainValue 是防御性的：上方已拒绝敏感项，这里拿到的一定是明文，
+	// 但万一将来有敏感项被允许回滚，它也不会把密文当成新值写回去。
+	restore := s.plainValue(spec, *row.PreviousValue)
 	before, err := s.writeValue(ctx, spec, restore, operatorID)
 	if err != nil {
 		return nil, err
@@ -311,7 +339,7 @@ func (s *Service) MailConfig(ctx context.Context) (mailer.Config, error) {
 			return v
 		}
 		if row, ok := stored[key]; ok && row.Value != nil {
-			return *row.Value
+			return s.plainValue(spec, *row.Value)
 		}
 		return spec.Default
 	}
@@ -342,11 +370,15 @@ func (s *Service) resolve(spec Spec, stored *model.SystemSetting) Item {
 		item.Value = raw
 	} else if stored != nil && stored.Value != nil {
 		item.Source = SourceSetting
-		item.Value = *stored.Value
+		item.Value = s.plainValue(spec, *stored.Value)
 		item.UpdatedAt = &stored.UpdatedAt
 	}
 
-	if stored != nil && stored.PreviousValue != nil {
+	// 可回滚 = 声明支持 **且** 库里确实有前值。
+	//
+	// 只判断「有前值」会让一个声明为不可回滚的项（如敏感项）在库里有残留
+	// 时也显示回滚按钮，而点了必然报错——界面不该画出做不到的动作。
+	if spec.Rollbackable && stored != nil && stored.PreviousValue != nil {
 		item.CanRollback = true
 	}
 
@@ -373,19 +405,27 @@ func (s *Service) loadStored(ctx context.Context) (map[string]*model.SystemSetti
 	return out, nil
 }
 
-// writeValue 写入新值，并把旧值存入 previous_value，返回旧值。
+// writeValue 写入新值，并把旧值存入 previous_value，返回旧值（明文）。
 func (s *Service) writeValue(
 	ctx context.Context, spec Spec, value string, operatorID int64,
 ) (*string, error) {
 	now := time.Now()
 
+	stored, err := s.sealedValue(spec, value)
+	if err != nil {
+		// 加密失败就**不写**：退回明文会把这个缺陷变成一次静默的数据降级，
+		// 而它发生在一次看起来成功的保存之后。
+		log.Printf("[settings] 加密设置失败 key=%s: %v", spec.Key, err)
+		return nil, api.Internal()
+	}
+
 	var existing model.SystemSetting
-	err := s.db.WithContext(ctx).Where("key = ?", spec.Key).First(&existing).Error
+	err = s.db.WithContext(ctx).Where("key = ?", spec.Key).First(&existing).Error
 	switch {
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		row := model.SystemSetting{
 			Key:       spec.Key,
-			Value:     &value,
+			Value:     &stored,
 			UpdatedBy: &operatorID,
 			UpdatedAt: now,
 			CreatedAt: now,
@@ -401,16 +441,33 @@ func (s *Service) writeValue(
 		return nil, api.Internal()
 	}
 
-	before := existing.Value
+	// 返回给调用方的是**明文**：它要拿去写审计与执行回滚，而这两处都需要
+	// 可读的值（审计对敏感项另有脱敏，见 record）。库里存的始终是密文。
+	var before *string
+	if existing.Value != nil {
+		plain := s.plainValue(spec, *existing.Value)
+		before = &plain
+	}
+
 	updates := map[string]any{
-		"value":      value,
+		"value":      stored,
 		"updated_by": operatorID,
 		"updated_at": now,
 	}
-	// 只有**值真的变了**才刷新 previous_value：不改值地重复提交（例如
-	// 前端把整张表单回传）会把回滚点推进到一个没有意义的位置，
-	// 让「回滚」看起来什么都没做。
-	if before == nil || *before != value {
+	switch {
+	case spec.Secret:
+		// 敏感项**不留前值**（U-33）。
+		//
+		// previous_value 的用途是「回滚错改」，而回滚一个已经失效的口令
+		// 没有意义——口令轮换通常正是因为泄漏或过期，回滚等于倒退。代价却
+		// 很实在：上一手明文会一直躺在库里，把一次泄漏变成两次。
+		//
+		// 顺手写 nil 也清掉了升级前遗留的明文前值。
+		updates["previous_value"] = nil
+	case before == nil || *before != value:
+		// 只有**值真的变了**才刷新 previous_value：不改值地重复提交
+		// （例如前端把整张表单回传）会把回滚点推进到一个没有意义的位置，
+		// 让「回滚」看起来什么都没做。
 		updates["previous_value"] = before
 	}
 
@@ -423,6 +480,8 @@ func (s *Service) writeValue(
 }
 
 // restoreValue 把值恢复到指定内容（用于应用失败后的回滚）。
+//
+// before 是**明文**（writeValue 的返回值）；落库前同样要加密。
 func (s *Service) restoreValue(ctx context.Context, spec Spec, before *string, operatorID int64) error {
 	if before == nil {
 		// 此前没有记录：删除这行即可回到默认值。
@@ -434,13 +493,83 @@ func (s *Service) restoreValue(ctx context.Context, spec Spec, before *string, o
 		return nil
 	}
 
+	stored, err := s.sealedValue(spec, *before)
+	if err != nil {
+		return err
+	}
 	return s.db.WithContext(ctx).Model(&model.SystemSetting{}).
 		Where("key = ?", spec.Key).
 		Updates(map[string]any{
-			"value":      *before,
+			"value":      stored,
 			"updated_by": operatorID,
 			"updated_at": time.Now(),
 		}).Error
+}
+
+// plainValue 返回敏感项在库里的**明文**。
+//
+// 解不开时按原文返回，这是升级兼容的支点：加密上线前写入的行是明文，直接
+// 判为损坏会让升级当天的邮件发不出去。启动时的 EncryptLegacySecrets 会把
+// 它们换成密文，之后这个分支只在密钥被轮换过时才会走到——那时值确实已经
+// 不可用，按原文返回至少能让错误出现在「认证失败」而不是「密码为空」。
+func (s *Service) plainValue(spec Spec, stored string) string {
+	if !spec.Secret || stored == "" {
+		return stored
+	}
+	plain, err := cryptoutil.Open(s.encKey, stored)
+	if err != nil {
+		return stored
+	}
+	return plain
+}
+
+// sealedValue 加密敏感项；非敏感项与空值原样返回。
+func (s *Service) sealedValue(spec Spec, plain string) (string, error) {
+	if !spec.Secret || plain == "" {
+		return plain, nil
+	}
+	return cryptoutil.Seal(s.encKey, plain)
+}
+
+// EncryptLegacySecrets 把存量明文的敏感项就地加密，返回迁移条数。
+//
+// 要在服务启动时调用一次：它保证「升级完成后库里就没有明文口令了」，而不是
+// 等到管理员某天下次修改时才顺带换掉——那中间的窗口可能长达几个月。
+//
+// 可重复执行：已经是密文（能被 Open 解开）的行会被跳过。
+func (s *Service) EncryptLegacySecrets(ctx context.Context) (int, error) {
+	var rows []model.SystemSetting
+	if err := s.db.WithContext(ctx).Find(&rows).Error; err != nil {
+		return 0, err
+	}
+
+	migrated := 0
+	for i := range rows {
+		row := &rows[i]
+		spec, ok := SpecOf(row.Key)
+		if !ok || !spec.Secret || row.Value == nil || *row.Value == "" {
+			continue
+		}
+		if _, err := cryptoutil.Open(s.encKey, *row.Value); err == nil {
+			continue // 已是密文
+		}
+
+		sealed, err := cryptoutil.Seal(s.encKey, *row.Value)
+		if err != nil {
+			return migrated, err
+		}
+		// 一并清掉可能残留明文的前值（正是 U-33 实测到的那一处）。
+		if err := s.db.WithContext(ctx).Model(&model.SystemSetting{}).
+			Where("key = ?", row.Key).
+			Updates(map[string]any{
+				"value":          sealed,
+				"previous_value": nil,
+			}).Error; err != nil {
+			return migrated, err
+		}
+		migrated++
+	}
+	return migrated, nil
 }
 
 // record 写审计（R-010）。
@@ -573,9 +702,11 @@ func (s *Service) currentValue(spec Spec) string {
 	}
 
 	var row model.SystemSetting
+	// 这里不用 WithContext：Provider 的 Int/Bool/String 签名不带 ctx（它们
+	// 在应用钩子里被同步调用），GORM 会用 context.Background()。
 	err := s.db.Where("key = ?", spec.Key).First(&row).Error
 	if err == nil && row.Value != nil {
-		return *row.Value
+		return s.plainValue(spec, *row.Value)
 	}
 	return spec.Default
 }

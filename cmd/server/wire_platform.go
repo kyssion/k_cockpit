@@ -116,7 +116,16 @@ func (a *app) setupAuth() {
 func (a *app) setupPlatformServices() {
 	db, agentClient := a.db, a.agentClient
 
-	a.platform.settings = settings.NewService(db, a.recorder)
+	a.platform.settings = settings.NewService(db, a.recorder, []byte(a.cfg.Session.Secret))
+	// 升级兼容：把加密上线前写入的明文敏感项就地换成密文。
+	//
+	// 放在启动路径上而不是「等管理员下次改口令」：那中间的窗口可能有好几个
+	// 月，而这段时间里每一次库备份都带着一个可用的 SMTP 口令。
+	if n, err := a.platform.settings.EncryptLegacySecrets(context.Background()); err != nil {
+		log.Printf("[settings] 迁移存量明文敏感项失败: %v", err)
+	} else if n > 0 {
+		log.Printf("[settings] 已加密 %d 项存量的敏感设置", n)
+	}
 	// 请求日志的开关来自设置项：每次写入前读取，因此改了设置立即生效，
 	// 不需要重启（重启才能生效会让人以为开关坏了）。
 	a.platform.reqLog = reqlog.NewService(db, func(ctx context.Context) bool {
