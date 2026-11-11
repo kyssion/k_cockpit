@@ -18,6 +18,7 @@
 ## [Unreleased]
 
 ### Added
+- **未测试项复核与状态回填（2026-11-11，r22）**：`DELIVERY_TEST_PLAN.md` 新增 §5.0a 增量证据表与 §11.4 已关闭清单，§11 条目 31 → **37**（新增 U-32 ~ U-37），并给每个 U 项定「未开始 / 部分完成 / 已关闭」三态。关闭 U-11 / U-12 / U-16 / U-19（各带证据路径与日期）；U-06 / U-09 / U-26 / U-28 标为部分完成并写明剩哪几项。新增的 6 项全部由机械手段发现，不是凭印象补的：三条仍在零覆盖的真实代码路径（`network/reconcile` 整个循环、`handler/node` 的 9 个函数、`vmtag` 批量读取）、覆盖率门禁缺失（实测总覆盖 **60.6%**，`ci.yml` 无阈值）、`k_cockpit-agent` 二进制 enroll 未跑、公开端点字段级契约、邮件真实 TLS 投递。`DELIVERY_TEST_REPORT.md` 新增 §11 记录方法与结论。
 - **U-12 全量收口（2026-11-10，r21）**：按当前代码重生成 SKIP 清单后逐条补测 45 条端点，实机 **127/127 断言通过**（认证 60 / 流式·导出·控制台 32 / 全局写入 35）；`authkey`、`mailer`、`passaudit`、`reqlog` 四个零测试子包覆盖率 0% → 85.5% / 87.5% / 90.4% / 90.0%。另有 **U-16 节点通道 9/9 + 心跳 8/8**（协议版本 0/2 拒绝、证书 CN == agent_id、令牌一次性、无证书/陌生 CN/非本 CA 均被拒、心跳 10s 与离线 40s）与 **U-26 诊断导出 21/21**（secret 项只回 `is_set`、哨兵口令全包扫描不可见、租户 403）。`DELIVERY_TEST_PLAN.md` 的 TP-19 升为已测试、U-12/U-16/U-26 标记收口，`DELIVERY_TEST_REPORT.md` 新增 §10。
 - **交付测试计划与执行报告（2026-11-10）**：新增 [`DELIVERY_TEST_PLAN.md`](docs/04-engineering/DELIVERY_TEST_PLAN.md)（能力基线、TP-00 ~ TP-23 共 24 套件、六视角追溯矩阵、五道阶段门与出口准则）与执行报告；`docs/README.md` 索引同步登记。
 - **交付测试计划的执行状态标记（2026-11-10）**：`DELIVERY_TEST_PLAN.md` 新增 §5.0 逐套件状态总表（13 已测试 / 7 部分验证 / 4 未测试）与 §11 未测试项清单（U-01 ~ U-31，A/B/C 三档）；§7.1 补五道门实绩与出口准则逐条状态。明确区分「跑过」与「测完」，避免把 26/26 全绿误读为可交付。
@@ -33,6 +34,7 @@
 - **`agent/hub` 连接注销被吞掉（P1）**：为「新连接顶替旧连接」加的读协程里，`recvCh <- err` 与 `<-stream.Context().Done()` 在 `select` 中竞争，客户端断开时约有一半概率选中 Done 分支，**断开事件被丢弃**，节点在控制面上永久「在线」，指令被投进没人读的 outbox 直到超时。改用 `close(recvDone)` 传结束信号，并保证已到达消息不丢。
 
 ### Security
+- **登记未修：敏感设置项在库内明文（U-33，r22 实测）**：`notification.smtp_password` 经 `PATCH /settings` 写入后，`system_setting.value` 保存的是**明文**；再改一次口令，`previous_value` 会留着上一手明文——即**轮换不会让旧口令离开数据库**。对照：`cryptoutil`（AES-GCM）已用于 TOTP 密钥 / VNC 密码 / 来宾凭据，`settings` 服务未接入。API 不回传明文（R-009）与审计不记明文（R-011）**均已验通过**，缺口只在静态存储。定级 P2（需库读权限，非远程可利用）。**未修**：接入加密要动设置服务读写两侧并迁移存量值，属设计决策，先登记在 `DELIVERY_TEST_PLAN.md` U-33。
 - **密码下限两套标准（可降级的绕过路径）**：`POST /auth/login/password` 要求 12 位，而 `PUT /auth/password` 只要求 8 位且仅挡「与用户名完全相同」——先用 12 位设好，再在账号设置里降回 8 位即可。现新建 `internal/platform/policy`（`MinPasswordLength = 12`）单点定义，登录改密、账号设置、管理员建号、应急口令、邀请注册五个入口全部引用；账号设置同时改为「不得**包含**用户名」并按 `[]rune` 计长。
 - **实机走查 spec 的硬编码凭据**：`web/e2e-live/live.spec.ts` 不再把测试管理员口令写死在源码里，改为 `E2E_ADMIN_USER` / `E2E_ADMIN_PASSWORD` 环境变量注入，缺少口令时明确报错退出。
 

@@ -425,3 +425,91 @@ U-12 收口后按计划继续推进环境具备的 B 档项，两项闭环：
 | 诊断导出敏感分类 | `~/.kc_test/r21/u26-diagnostics.json`（21 条） |
 | 部署制品 | `/opt/kcockpit/releases/v0.1.0-r21`（`current` 已指向） |
 | 服务端日志 | `journalctl -u k-cockpit`（控制台升级/释放有 `[console]` 行） |
+
+---
+
+## 11. 第 16 轮（r22）：未测试项复核与状态回填
+
+> 执行日期：2026-11-11
+> 被测对象：`v0.1.0-r21` 工作区（未改代码，只做审计与文档回填）
+> 范围：把「已经测过的」回填为已测试、「还没测的」补齐到 `DELIVERY_TEST_PLAN.md` §11
+> 判定口径：**只按可复跑的证据勾选**，没有证据的一律不勾
+
+### 11.1 这轮做了什么
+
+不做新功能测试，做三件机械的事：
+
+1. **覆盖率逐函数比对**：`go test -cover ./internal/...` 找「无直接测试」的包，再用 `go test -coverpkg=./internal/... -coverprofile` 跑一次，把「**因为没写直接测试**」和「**因为真的没被执行过**」分开。前者不是缺口（例如 `cryptoutil` 由 `authkey` 的用例间接跑到 81%），后者才是。
+2. **对已执行脚本反查**：把 r20 / r21 关闭的项与其原始证据一一对上，写进 §11.4「已关闭清单」（编号、轮次、证据路径、复验结论、日期），而不是把删除线一划了事。
+3. **把「文档说测过、实际没测」的地方找出来**：`k_cockpit-agent` 二进制的 enroll、公开端点的字段级契约、邮件的真实 TLS 投递——这三处此前只写在 TP-04 / TP-19 / TP-14 的「仍未覆盖」列里，没有 U 编号，重跑时不会被当成待办。本轮给它们编号（U-35 / U-36 / U-37）。
+
+### 11.2 结果
+
+| 项 | 结果 |
+|---|---|
+| Go 单测 | 60 个测试包全 `ok`，`_test.go` **240** 个（计划里记的 225 已滞后），`gofmt -l cmd internal` 无输出 |
+| Go 覆盖率 | **总 60.6%**（`-coverpkg=./internal/...` 口径） |
+| 前端单测 | Vitest **34** 例，与计划记载一致（按 `it(`/`test(` 实数） |
+| 制品构建 | `go build ./cmd/migrate` 通过（此前只验过 server / agent） |
+| §11 条目 | 31 → **37**（新增 U-32 ~ U-37） |
+| 状态变化 | 4 项**已关闭**（U-11 / U-12 / U-16 / U-19），4 项**部分完成**（U-06 / U-09 / U-26 / U-28，各自写明已覆盖哪几项、剩哪几项） |
+| 套件级统计 | **不变**（已测试 14 / 部分验证 6 / 未测试 4）——关闭的是套件内残留用例，没有任何一个套件补齐了「全部主用例组」 |
+
+### 11.3 本轮新发现（1 条真实问题 + 3 条覆盖缺口）
+
+**1）敏感设置项在库内是明文，且轮换不清理旧值（U-33，安全加固项）**
+
+`notification.smtp_password` 走 `PATCH /settings` 写入后，`system_setting.value` 原样保存明文：
+
+```
+# 写哨兵
+PATCH /settings {"values":{"notification.smtp_password":"KC-AtRest-Probe-9f3a"}}
+# 读库
+select value from system_setting where key='notification.smtp_password';
+→ KC-AtRest-Probe-9f3a
+```
+
+再验证轮换：
+
+```
+PATCH ... "KC-Rotate-A-1111"  →  value=KC-Rotate-A-1111
+PATCH ... "KC-Rotate-B-2222"  →  value=KC-Rotate-B-2222, previous_value=KC-Rotate-A-1111
+```
+
+即**改口令不会让旧口令离开数据库**。对照：`cryptoutil`（AES-GCM + HMAC 派生）已用于 TOTP 密钥、VNC 密码、来宾凭据，`settings` 服务没有接入。
+
+已验的相邻结论（不要与此混淆）：API 不回传明文（R-009）通过——`GET /settings` 的 `value` 恒为空；审计不记明文（R-011）通过——诊断包里 `secret` 项只回 `is_set`，哨兵口令全包搜不到（§10.6）。**缺口只在静态存储**。
+
+影响面：拿到数据库或备份的人可得到邮局账号口令（可用于伪造发信）与上一手口令。定级 P2（需要库读权限，非远程可利用）。**未修**：接入加密要动设置服务的读写两侧并迁移存量值，属设计决策，先登记 U-33 由 owner 定。
+
+验证后已把哨兵行从库里删掉，`is_set` 回到未设置，环境复位。
+
+**2）三条真实代码路径仍然零覆盖（U-32）**
+
+`-coverpkg` 跨包统计后仍为 0.0% 的，只有这几处：
+
+| 路径 | 函数 | 说明 |
+|---|---|---|
+| `service/network/reconcile` | `withDefaults` / `NewLoop` / `Start` / `RunOnce` | 网络自愈的后台对账循环，整个包 0% |
+| `handler/node` | `List` / `Get` / `Stats` / `SetMaintenance` / `SetConsoleHost` / `Remove` / `CreateEnrollToken` / `enrollAddr` / `hostOnly` | HTTP 行为由 R3 脚本覆盖，但**不在 CI、不在 60 个 Go 测试包内** |
+| `repository/vmtag` + `service/compute/vmtag` | `TagsOfVMs` / `TagsOf` | VM 列表的**批量**标签读取；单台路径已被测，批量路径 0% |
+
+反例（**不是**缺口，别误记）：`platform/audit` 100%、`platform/authz` 的 `Admin`/`ViewerOf` 100%、`cryptoutil` 的 `DeriveKey` 100% / `Seal` 81.8% / `Open` 81.2%、`repository/node` 80~100% —— 这些都是被别的包的用例间接跑到的，缺的只是「直接测试」而不是「执行过」。
+
+**3）覆盖率没有门禁（U-34）**
+
+`.github/workflows/ci.yml` 只有 `go vet ./...` 与 `go test ./...`，没有 `-cover`，也没有阈值。数字（60.6%）是这轮才第一次量出来的，此前计划里只写了「`go test -cover` 门禁数字」这一句待办。
+
+**4）三处「写在残留列里、没有 U 编号」的待办（U-35 / U-36 / U-37）**
+
+无编号的待办在重跑时不会被当成待办——这是本轮做编号的直接原因：
+
+- U-35：`k_cockpit-agent` 二进制自身的 enroll（r21 的 9/9 是协议层，用探针走同一套网关注解）；
+- U-36：公开 15 条端点的**字段级**契约（U-11 只断言可达性）；
+- U-37：邮件真实 TLS 投递（实机只用过 `security=none` 的本机汇聚端）。
+
+### 11.4 没做的事（以及为什么）
+
+- **没改任何产品代码**：本轮只做审计与回填。U-33 是设计决策（加密 or 明写边界），应由 owner 定，不该由测试顺手改掉一个存储契约。
+- **没把「部分验证」升成「已测试」**：口径写在 §5.0a 开头——升格要求该套件的**主用例组齐备**，而 r20/r21 关的是其中几条。为了好看而升格，正是这套计划一直在防的事。
+- **没复跑 R3 的 26 套件**：它们不打 `/api/v1` 之外的入口，也不产出覆盖率，与本轮的三个问题无关。
